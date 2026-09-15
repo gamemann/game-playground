@@ -72,6 +72,39 @@ func _initialize() -> void:
 ## Angles per map, because a 200 m sandbox with two courses in opposite corners has
 ## nothing useful to say from one camera.
 func _shots_for(id: String) -> Array[Dictionary]:
+	if id == "pg_bhop_intro":
+		# Two routes, and the frames have to show they ARE two: the main run down x = 0
+		# and the narrows six metres up at x = 28. An overview from straight above shows
+		# neither the height between them nor the narrowing, so both of these are shot
+		# from off to one side and low.
+		return [
+			# Both routes at once, from beside and above the start. The one angle that
+			# shows the narrows to be a separate course rather than a wider shoulder of
+			# the main one.
+			{
+				"name": "pg_bhop_intro_overview",
+				"from": Vector3(108.0, 54.0, 52.0),
+				"at": Vector3(14.0, -2.0, -62.0),
+			},
+			# Down the narrows from behind its start pad, at a player's height. This is
+			# the frame that says whether the narrowing reads: ten blocks going away
+			# from the camera, each one a little less wide than the last.
+			{
+				"name": "pg_bhop_intro_narrows",
+				"from": Vector3(28.0, 9.5, 26.0),
+				"at": Vector3(28.0, 5.0, -46.0),
+			},
+			# Square across both routes, from just above the narrows' height. Nearly
+			# perpendicular on purpose: from any angle down the length the two courses
+			# overlap in the frame and the higher one reads as the far side of the
+			# lower. This is the frame that shows there are six metres between them.
+			{
+				"name": "pg_bhop_intro_both",
+				"from": Vector3(86.0, 11.0, -34.0),
+				"at": Vector3(0.0, 3.0, -38.0),
+			},
+		]
+
 	if id != "pg_lobby":
 		return [
 			{"name": "%s_overview" % id, "from": Vector3(-90, 70, 90), "at": Vector3(0, 8, 0)},

@@ -10,6 +10,7 @@ const PlaygroundPlayer := preload("../game/playground_player.gd")
 const PlaygroundProp := preload("../game/playground_prop.gd")
 const PlaygroundSpawnMenu := preload("../game/playground_spawn_menu.gd")
 const PlaygroundSpawnables := preload("../game/playground_spawnables.gd")
+const PgBhopIntro := preload("../maps/pg_bhop_intro.gd")
 const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
 const PlaygroundWeaponDef := preload("../game/weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("../game/playground_weapons.gd")
@@ -52,7 +53,7 @@ const TOWER_TAKE_OFF := 2.6
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 276
+const CHECKS := 292
 
 var _passed := 0
 var _failed := 0
@@ -104,6 +105,7 @@ func _run() -> void:
 	await _test_spawn_menu()
 	await _test_the_sandbox_and_its_course()
 	await _test_vehicles()
+	await _test_the_narrows()
 	await _test_the_client_boots()
 
 	print("")
@@ -2032,6 +2034,193 @@ func _walk_the_tower(player: PlaygroundPlayer) -> void:
 		"and a bot running off the pad reaches the first platform",
 		"never got over it; the spawn faces it and the gap is supposed to be jumpable"
 	)
+
+
+# --- The narrows -----------------------------------------------------------
+
+## `pg_bhop_intro`'s bonus route, driven start to finish.
+##
+## [b]This is the first bonus track in this family that anything has ever run.[/b]
+## Every other bonus here is checked by switching onto it, looking at the spawn and
+## switching back — which is why they went for as long as they did with no respawn
+## zone on them at all. A route nothing has completed is a route nobody knows is
+## completable.
+##
+## [b]The driver is the interesting part, and it is not "hold forward and jump".[/b]
+## That is what the rest of this suite does and it produces a player travelling at
+## **one** metre a second: with `auto_hop` on and jump held, the player leaves the
+## ground on the tick it lands, so `accelerate` (7 m/s on the ground) never gets a
+## tick to work in, and air acceleration cannot make up the difference because
+## `max_air_wish_speed` is 1.0 — that cap is the whole reason air-strafing is a skill
+## rather than a button. A real player gains speed by turning into the strafe; a bot
+## that holds one direction cannot, and it bleeds back to the cap.
+##
+## So this bot jumps **at the gaps** instead of continuously, which keeps it on the
+## ground long enough to hold 7 m/s and is why the narrows has a constant
+## [constant PgBhopIntro.BONUS_GAP]: 3.5 m is 0.5 s of flight at that speed against
+## the 0.68 s a 1.15 m jump buys, so the route is clearable without ever gaining any.
+## The main run deliberately is not — its last gap is 7 m and only a player who has
+## been strafing can cross it, which is what that route is for.
+func _test_the_narrows() -> void:
+	print("")
+	print("the narrows — pg_bhop_intro's bonus route")
+
+	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
+	_check(loaded.ok, "the bhop map loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var zones := PgBhopIntro.build_zones()
+
+	_check(zones.problems().is_empty(), "its zones are well formed",
+		", ".join(zones.problems()))
+	_check(
+		zones.playable_tracks() == PackedInt32Array(
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST]
+		),
+		"and both of its routes can be run",
+		str(zones.playable_tracks())
+	)
+
+	# The splits, on both routes. A map with one start and one finish exercises none
+	# of dot-timer's per-stage machinery, which is the reason these were added.
+	_check(
+		zones.of_kind(DotTimerZone.Kind.STAGE, DotTimerTrack.MAIN).size() == 3,
+		"the main run has three splits"
+	)
+
+	var track := DotTimerTrack.BONUS_FIRST
+
+	_check(
+		zones.of_kind(DotTimerZone.Kind.START, track).size() == 1
+			and zones.of_kind(DotTimerZone.Kind.END, track).size() == 1,
+		"the narrows has one start and one finish"
+	)
+	_check(
+		zones.of_kind(DotTimerZone.Kind.STAGE, track).size() == 3,
+		"and three splits"
+	)
+	_check(
+		zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size() == 1,
+		"and a respawn volume, which no bonus track in this family had until one was run"
+	)
+
+	# The course narrows, which is the whole difficulty. Asserted against the map's own
+	# arithmetic rather than against numbers copied here: a second description of where
+	# a block is and how wide it is, is a second thing that can disagree with the
+	# geometry — and on a timer map that is a leaderboard nobody can compare.
+	_check(
+		is_equal_approx(PgBhopIntro.bonus_width_at(0), PgBhopIntro.BONUS_FIRST_WIDTH)
+			and is_equal_approx(
+				PgBhopIntro.bonus_width_at(PgBhopIntro.BONUS_BLOCKS - 1),
+				PgBhopIntro.BONUS_LAST_WIDTH
+			),
+		"its blocks run from the full width down to the last one"
+	)
+
+	var thin := zones.thin_zones(12.0, playground.tick_rate)
+	_check(thin.is_empty(),
+		"and no zone is thin enough for a hopping player to pass through",
+		"%d thin" % thin.size())
+
+	var player := playground.add_player(&"bot", "Bot")
+	_check(player.timer.set_track(track), "the track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the player on the narrows' start pad, six metres above the main run",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	# Arrays rather than counters: a GDScript lambda captures locals by value, so an
+	# int incremented in a handler reads zero outside it and the test reports a
+	# failure for a signal that fired perfectly.
+	var started: Array[bool] = [false]
+	var finished: Array[bool] = [false]
+	var splits: Array[int] = []
+
+	var on_start := func(_run: DotTimerRun) -> void: started[0] = true
+	var on_stage := func(number: int, _split: float) -> void: splits.append(number)
+	var on_finish := func(_run: DotTimerRun) -> void: finished[0] = true
+
+	player.timer.run_started.connect(on_start)
+	player.timer.stage_reached.connect(on_stage)
+	player.timer.run_finished.connect(on_finish)
+
+	var command := DotFpsCommand.new()
+	command.move = Vector2(0.0, 1.0)
+
+	var ticks := 0
+
+	# Capped well above the ~1890 ticks the route takes, and broken out of on the
+	# finish rather than run to the end: a drive that keeps going past the finish pad
+	# walks the bot off the far side of it.
+	for i in range(2400):
+		command.set_button(
+			DotFpsCommand.BUTTON_JUMP,
+			_jumping_at(player.global_position.z)
+		)
+		player.controller.apply_command(command.duplicate_command())
+		await get_tree().physics_frame
+		ticks = i
+
+		if finished[0]:
+			break
+
+	player.timer.run_started.disconnect(on_start)
+	player.timer.stage_reached.disconnect(on_stage)
+	player.timer.run_finished.disconnect(on_finish)
+
+	_check(started[0], "leaving the start pad starts a run on the narrows")
+
+	var speed := Vector2(
+		player.controller.state.velocity.x, player.controller.state.velocity.z
+	).length()
+	_check(
+		speed > 6.0,
+		"the bot holds its ground speed the whole way rather than bleeding to the air cap",
+		"%.2f m/s" % speed
+	)
+
+	_check(
+		splits == [1, 2, 3],
+		"it crosses all three splits, in order",
+		str(splits)
+	)
+
+	# The check this whole section exists for.
+	_check(
+		finished[0],
+		"and reaches the finish: a bonus route completed end to end, which nothing "
+		+ "in this family had ever done",
+		"gave up at tick %d, z = %.1f" % [ticks, player.global_position.z]
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+
+
+## Whether the bot should be holding jump at [param z] on the narrows.
+##
+## The gaps are where a jump is needed and nowhere else — see the note on
+## [method _test_the_narrows] for why holding it continuously is the thing that does
+## not work. Read off the map's own block arithmetic so that moving a block moves the
+## jump with it.
+static func _jumping_at(z: float) -> bool:
+	for i in range(PgBhopIntro.BONUS_BLOCKS):
+		var edge: float = (
+			PgBhopIntro.bonus_block_near_z(i) - PgBhopIntro.BONUS_BLOCK_LENGTH
+		)
+
+		if z <= edge + 0.8 and z > edge - 0.2:
+			return true
+
+	return false
 
 
 # --- The client -------------------------------------------------------------
