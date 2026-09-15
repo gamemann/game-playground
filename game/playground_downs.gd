@@ -216,33 +216,25 @@ func _on_damaged(entity: int, amount: float, _type: StringName, _source: int) ->
 	var _took := health.heal(-amount)
 
 
-## A stable entity id for a player name.
+## A player's entity id. One answer, whatever else is switched on.
 ##
-## [b]The arena's id when there is one, and a hash otherwise.[/b] The arena mints entity
-## ids for dot-combat and the waves mode can be on without it — so this has to answer in
-## both, and answering differently in the two is how a player who is down in one system
-## is up in the other.
+## [b]This used to have two answers and knew it.[/b] The arena layer minted the ids,
+## the waves mode can be on without it, so the fallback here was
+## `abs(String(player_id).hash())` — and the comment that stood in this spot said
+## exactly what that costs: "answering differently in the two is how a player who is
+## down in one system is up in the other." It was worse than a second spelling, because
+## a hash is not an allocation: two names can collide, and the number it produces is
+## stable, plausible, and not the one the health and the kill feed use.
+##
+## [member Playground.entities] opens a player's entity when they JOIN, before any
+## layer exists to want one, so there is nothing left to fall back to.
 func _entity_of(player_id: StringName) -> int:
-	if player_id == &"":
-		return 0
-	if arena != null:
-		var entity := arena.entity_id_of(player_id)
-		if entity != 0:
-			return entity
-	return abs(String(player_id).hash())
+	return game.entity_table.id_for_key(player_id) if game != null else 0
 
 
+## The other direction, and it used to be a scan that re-hashed every player.
 func _player_of(entity: int) -> StringName:
-	if entity == 0:
-		return &""
-	if arena != null:
-		var id := arena.player_for_entity(entity)
-		if id != &"":
-			return id
-	for candidate: Variant in game.players.keys():
-		if abs(String(candidate).hash()) == entity:
-			return StringName(candidate)
-	return &""
+	return game.entity_table.key_for_id(entity) if game != null else &""
 
 
 func on_player_removed(player_id: StringName) -> void:

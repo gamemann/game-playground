@@ -861,7 +861,7 @@ godot --headless --path . res://examples/headless_playground.tscn   # 276 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  80 checks
 godot --headless --path . res://examples/headless_net.tscn          # 115 checks
-godot --headless --path . res://examples/dedicated.tscn             # 158 checks
+godot --headless --path . res://examples/dedicated.tscn             # 170 checks
 ```
 
 **Run the check-only pass first.** A script that fails to parse makes the scene fail
@@ -1055,6 +1055,12 @@ who should have bled out standing back up. `begin_revive` now refuses unless bot
 players. It is this family's usual shape: a guard that is correct for one argument and
 wrong for two.
 
+**And one player had two entity ids, depending on which modes an operator had switched on.** `PlaygroundArena` minted them for dot-combat out of a counter of its own, and that layer only runs when the waves mode is on — so `PlaygroundDowns`, which is a *separate* switch, fell back to `abs(String(player_id).hash())` whenever the arena was off. The comment above that fallback said what it cost, in words, and shipped anyway: *"answering differently in the two is how a player who is down in one system is up in the other."* A hash is worse than a second spelling of an id, because it is not an allocation — two names can collide, and the number it produces is stable, plausible and not the one the health and the kill feed use.
+
+The fix is not a better fallback. `Playground.entity_table` is a `DotEntityTable` and the **game** opens a player's entity on join, before any layer exists to want one: a handle whose existence depends on a mode is not a handle. Both layers ask the table now and neither can answer differently. `admit` still opens one for an id the game itself never saw — an operator putting somebody in the waves mode who is not a `PlaygroundPlayer`, which the dedicated suite does by hand — and closes that one on release; whose entity it is is decided by whose **node** it holds, before `_forget` frees anything, because it cannot be decided afterwards.
+
+It is called `entity_table` and not `entities` only because `Playground.entities` is already the sandbox's own list of spawned `PlaygroundEntity`s. The other three games call theirs `entities`. The day those two concepts merge — a sandbox entity *is* a world object with an id — is the day this one takes the name.
+
 ## The eight addons this game gained at once
 
 This is the only project in the family holding **all eight** of the new ones, and the three
@@ -1242,6 +1248,14 @@ when the camera is inside the character's head.
 **dot-server's `chat_received` is connected here and its LINES are ignored**, which reads like the bug this game's own comment warns about and is the opposite of it. This game routes every line through its own wire on purpose, and connecting both would draw one line twice — so the handler takes the one payload that is *not* a line, the `{kind: "state"}` notice saying what is carrying chat, and drops everything else. There is nowhere else for that notice to arrive.
 
 `swallows_input()` covers the box as well as the console, and `DotFpsSampler.suspended` is set beside it: movement is polled, so without it typing "sw" walks the player backwards through whatever they were building, firing whatever tool they are holding.
+
+## The server browser had no server half
+
+This game has shipped `PlaygroundBrowser` — a real dot-browser list with sources, filters, favourites and a join — against a server that answered nothing at all. `examples/dedicated.gd` set `config.query_enabled = false`, no `DotQueryHost` was ever attached, and `PlaygroundModule` contributed no query provider, so the only half being exercised was the half that already worked. dot-browser's own suite queries a server dot-browser built, which is why neither end had noticed.
+
+`PlaygroundQueryProvider` is the game's half. **The interesting part of a sandbox's listing row is not the map** — it is which of `pg_arena`, `pg_waves` and `pg_shop` are on, because each of those turns this into a different server and all three default to off *precisely* because that is an operator's decision. A person reading a list of playground servers is choosing between servers that share a name and not a game, which is exactly what a query section is for. The map, the occupancy, the prop count and the tick rate go in beside them.
+
+The prop count is the spawner's own `world_count()` and the player count is the module's own `_joined`, asserted as such: a listing row built from a second tally is a second number that can disagree, and the one that is wrong is always the one nobody is looking at.
 
 ## Things deliberately not here
 

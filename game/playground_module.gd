@@ -320,12 +320,73 @@ func _module_load() -> DotResult:
 	if server.chat != null:
 		server.chat.announce_joins = false
 
+	_build_query_provider()
+
 	log_info("playground loaded", {
 		"map": String(game.maps.current.id) if game.maps.current != null else "-",
 		"tick_rate": game.tick_rate,
 	})
 
 	return DotResult.success(null)
+
+
+## What a server browser is told about this sandbox.
+##
+## [b]This game ships `PlaygroundBrowser` and answered no query at all.[/b] The list half
+## was written, the screen was drawn and the address bar worked; there was nothing at the
+## other end. dot-server answers A2S and DQP once a query host is plugged in, and what a
+## query says about the GAME comes from a provider like this one — without it a listing
+## row says only that the game is called Playground.
+##
+## **The three cvars are the point of the row.** `pg_arena`, `pg_waves` and `pg_shop` each
+## turn this into a different server, and all three default to off precisely because that
+## is an operator's decision — so a person reading a list is choosing between servers that
+## share a name and not a game. That is exactly what a query section is for.
+func _build_query_provider() -> void:
+	var provider := PlaygroundQueryProvider.new()
+	provider.module = self
+
+	# DEBUG, not ERROR: a server with neither query protocol enabled is a legitimate
+	# deployment and this game's own suite runs one.
+	DotLog.result(
+		CHANNEL, "the query provider", add_query_provider(provider), DotLog.Level.DEBUG
+	)
+
+
+## A [DotQueryProvider] over this module. An inner class because it is one method and a
+## reference, which is game-arena's pattern for the same thing.
+class PlaygroundQueryProvider extends DotQueryProvider:
+	## Held as an [Object]: this script has no [code]class_name[/code] and an inner class
+	## cannot name the outer script it lives in.
+	var module: Object = null
+
+	func _provider_name() -> String:
+		return "playground"
+
+	func _contribute(snapshot: DotQuerySnapshot) -> void:
+		if module == null or module.game == null:
+			return
+
+		var game: Playground = module.game
+		var values := {
+			"map": String(game.maps.current.id) if game.maps != null
+				and game.maps.current != null else "",
+			"map_name": game.maps.current.display_name if game.maps != null
+				and game.maps.current != null else "",
+			"players": module._joined.size(),
+			"props": game.props.world_count() if game.props != null else 0,
+			"tick_rate": game.tick_rate,
+			# The three that decide what kind of server this is.
+			"arena": module.arena != null and module.arena.enabled,
+			"waves": module.waves != null and module.waves.is_enabled(),
+			"shop": module.shop != null and module.shop.enabled,
+		}
+
+		if module.waves != null and module.waves.is_enabled():
+			values["npcs"] = module.waves.count()
+
+		for key: String in values:
+			snapshot.game[key] = values[key]
 
 
 func _module_unload() -> void:

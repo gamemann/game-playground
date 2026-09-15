@@ -38,6 +38,12 @@ var server: DotServer = null
 var game: Playground = null
 var platform: PlaygroundPlatform = null
 
+## The app's URL segment on the website, which is this game's code name.
+##
+## Display only — a listing prints it to say which game this is, and nothing treats it as
+## proof.
+const APP_URL := "playground"
+
 
 ## The loaded module, looked up rather than kept.
 ##
@@ -78,6 +84,7 @@ func _run() -> void:
 		_test_spectating()
 		await _test_downed()
 		await _test_progress()
+		_test_query()
 		_test_vote()
 		_test_identity()
 		_test_disconnect_is_handled()
@@ -90,6 +97,58 @@ func _run() -> void:
 		print("  FAIL  %s" % line)
 
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+## The server half of this game's own server browser.
+##
+## [b]`PlaygroundBrowser` has existed for as long as this client has, and nothing in this
+## repository could answer it.[/b] The interesting part of a sandbox's listing row is not
+## the map: it is which of `pg_arena`, `pg_waves` and `pg_shop` are on, because each turns
+## this into a different server and all three default to off.
+func _test_query() -> void:
+	print("")
+	print("[a server browser's half]")
+
+	_check(server.query_source != null, "the server has a query source to contribute to")
+
+	var module := _module()
+
+	if module == null:
+		_check(false, "the module is loaded")
+		return
+
+	var snapshot := DotQuerySnapshot.new()
+
+	for provider in module._query_providers:
+		provider.call("_contribute", snapshot)
+
+	# Through `get()`, because this module has no `class_name` — the shape a module
+	# delivered in a dot-cloud pack must have. Same reason `_module()` is typed DotModule.
+	var joined: Dictionary = module.get("_joined")
+	var arena: Object = module.get("arena")
+
+	_check(snapshot.game.has("map"), "the query says what map is loaded")
+	_check(
+		int(snapshot.game.get("players", -1)) == joined.size(),
+		"and how many people are on it",
+		str(snapshot.game.get("players", -1))
+	)
+	_check(
+		snapshot.game.has("arena") and snapshot.game.has("waves")
+			and snapshot.game.has("shop"),
+		"and which of the three cvars that change the game are on"
+	)
+	# Not "is true": the point is that the row follows the cvar rather than restating a
+	# default, so it is asserted against the subsystem's own answer.
+	_check(
+		bool(snapshot.game.get("arena", not arena.enabled)) == arena.enabled,
+		"and the arena flag is the arena's own state"
+	)
+	_check(
+		int(snapshot.game.get("props", -1)) == game.props.world_count(),
+		"the prop count is the spawner's own rather than a second tally",
+		str(snapshot.game.get("props", -1))
+	)
 
 
 func _check(ok: bool, what: String, detail: String = "") -> void:
@@ -174,17 +233,28 @@ func _boot() -> void:
 	config.max_players = 16
 	config.hibernate_when_empty = false
 	config.rcon_password = ""
-	config.query_enabled = false
+	# On, and it used to be off. This game ships `PlaygroundBrowser` -- a real server
+	# list with sources, filters and favourites -- against a server that answered
+	# nothing, so the half being exercised here was the half that already worked.
+	config.query_enabled = true
 
-	# A port nothing else on a developer's machine is likely to be holding. The
-	# server still opens a listener even with queries off, and a boot that failed on
-	# a busy 27015 would look like the module being broken.
+	# A port nothing else on a developer's machine is likely to be holding, and a boot
+	# that failed on a busy 27015 would look like the module being broken.
 	config.port = 28765
+	config.query_port = 28766
 
 	server = DotServer.new()
 	server.name = "Server"
 	server.config = config
 	add_child(server)
+
+	# Answering a query is its own addon, and a server only answers if a host is plugged
+	# in. Added before the server finishes booting so the listener opens with it.
+	var query_host := DotQueryHost.new()
+	query_host.name = "QueryHost"
+	query_host.app_url = APP_URL
+	query_host.server_ref = DotNodeRef.of_path(NodePath("../Server"))
+	add_child(query_host)
 
 	# `auto_boot` makes `_ready` await `boot()`, which opens a listener and reads the
 	# config's environment and command-line layers — so this takes several frames and
@@ -239,12 +309,14 @@ func _boot() -> void:
 	var identity: DotResult = await platform.setup()
 	_check(identity.ok, "profiles and avatars are up", str(identity.error))
 
-	var platform_module := server.modules.load_module(
+	var platform_module: DotResult = await server.modules.load_module(
 		"res://addons/dot_platform/dot_platform_module.gd"
 	)
 	_check(platform_module.ok, "the platform module loads", str(platform_module.error))
 
-	var loaded := server.modules.load_module("res://game/playground_module.gd")
+	var loaded: DotResult = await server.modules.load_module(
+		"res://game/playground_module.gd"
+	)
 
 	_check(loaded.ok, "the playground module loads into the server",
 		loaded.error.message if not loaded.ok else "")
@@ -1294,7 +1366,9 @@ func _test_module_unloads_cleanly() -> void:
 		"%d left" % game.players.size()
 	)
 
-	var reloaded := server.modules.load_module("res://game/playground_module.gd")
+	var reloaded: DotResult = await server.modules.load_module(
+		"res://game/playground_module.gd"
+	)
 	_check(reloaded.ok, "and it can be loaded again")
 
 	await get_tree().process_frame

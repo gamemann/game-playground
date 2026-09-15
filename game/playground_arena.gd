@@ -81,11 +81,14 @@ var enabled: bool = false
 ## player id -> [DotHealth].
 var _health: Dictionary = {}
 
-## A monotonic id per player, because dot-combat keys entities by int and this game keys
-## players by [StringName]. Two id spaces meeting is exactly where this family loses things.
-var _entity_of_player: Dictionary = {}
-var _player_of_entity: Dictionary = {}
-var _next_entity_id: int = 1
+## dot-combat keys entities by int and this game keys players by [StringName]. Two id
+## spaces meeting is exactly where this family loses things.
+##
+## [b]Both directions live on [member Playground.entities] now, and the counter and the
+## two dictionaries that used to be here are gone.[/b] They were correct and they were
+## this layer's, which was the problem: this layer only exists when the waves mode is
+## on, so [PlaygroundDowns] minted its own ids from a name hash whenever it was off.
+## One table on the game answers for every layer whatever is switched on.
 
 var _tick: int = 0
 
@@ -261,8 +264,8 @@ func _adjust_damage(damage: DotDamage) -> void:
 		return
 
 	if game.player_stack.blocks_damage(
-		str(_player_of_entity.get(damage.attacker, &"")),
-		str(_player_of_entity.get(damage.victim, &"")),
+		str(game.entity_table.key_for_id(damage.attacker)),
+		str(game.entity_table.key_for_id(damage.victim)),
 		damage.tick,
 		damage.is_world_damage()
 	):
@@ -372,8 +375,6 @@ func set_enabled(on: bool) -> void:
 		_forget(id)
 
 	_health.clear()
-	_entity_of_player.clear()
-	_player_of_entity.clear()
 
 
 # --- Players ---------------------------------------------------------------
@@ -382,9 +383,6 @@ func set_enabled(on: bool) -> void:
 func admit(id: StringName, display_name: String) -> void:
 	if not enabled or _health.has(id):
 		return
-
-	var entity_id := _next_entity_id
-	_next_entity_id += 1
 
 	var health := DotHealth.new()
 	health.name = "Health_%s" % String(id)
@@ -400,8 +398,35 @@ func admit(id: StringName, display_name: String) -> void:
 	health.reset(_tick)
 
 	_health[id] = health
-	_entity_of_player[id] = entity_id
-	_player_of_entity[entity_id] = id
+
+	# [b]Asked for, and opened only if nobody has.[/b] A player who joined the game has
+	# an entity already -- [member Playground.entity_table] opens one on join so every
+	# layer sees the same id whether or not the others are switched on -- and this must
+	# use theirs rather than mint a second. But `admit` is also called for ids the game
+	# itself never saw: the dedicated suite admits two by hand, and an operator can put
+	# somebody in the waves mode who is not a `PlaygroundPlayer`. Those get one here,
+	# against their health node, which is the node that exists for exactly as long as
+	# the thing does.
+	#
+	# One allocator with two callers is not the bug this replaced. That bug was two
+	# ALLOCATORS -- a counter here and a name hash in the downs layer -- answering
+	# differently for one player depending on which modes were on.
+	var entity_id := game.entity_table.id_for_key(id)
+
+	if entity_id == 0:
+		var opened := game.entity_table.open(
+			DotEntity.KIND_PLAYER, health, &"", id, float(_tick) / float(maxi(game.tick_rate, 1))
+		)
+
+		if not opened.ok:
+			DotLog.error(CHANNEL, "could not open an entity for an admitted player", {
+				"player": String(id), "why": opened.error.message,
+			})
+			health.queue_free()
+			_health.erase(id)
+			return
+
+		entity_id = (opened.value as DotEntityHandle).id
 
 	combat.register_health(entity_id, health)
 	match_node.add_player(String(id), display_name, _tick)
@@ -411,18 +436,34 @@ func release(id: StringName) -> void:
 	if not _health.has(id):
 		return
 
+	# [b]Decided BEFORE anything is torn down.[/b] Whose entity this is can only be
+	# answered while the health node still exists to compare against, and `_forget`
+	# frees it -- so the question is asked first and acted on after.
+	#
+	# A real player's entity is NOT this layer's. It belongs to the game, which opened
+	# it on join and closes it on leave; this layer can be switched off mid-map and a
+	# player whose handle went with it would lose their downed state and their effects.
+	# One opened by `admit` for an id the game never saw IS this layer's. The test is
+	# whose node it is: the game opens against the player, `admit` opens against the
+	# health node.
+	var handle := game.entity_table.handle_for_key(id)
+	# `_health.get` is a Variant, so the comparison is written against a typed local:
+	# `var x := <Dictionary index>` is a parse error under these projects' settings,
+	# and a parse error in a suite scene is a HANG rather than a failure.
+	var health_node: Variant = _health.get(id)
+	var ours: bool = handle != null and handle.node == health_node
+
 	_forget(id)
 	_health.erase(id)
 
-	var entity_id := int(_entity_of_player.get(id, 0))
-	_entity_of_player.erase(id)
-	_player_of_entity.erase(entity_id)
+	if ours:
+		game.entity_table.close(handle.id, DotEntityTable.REASON_DESPAWN)
 
 	match_node.remove_player(String(id))
 
 
 func _forget(id: StringName) -> void:
-	var entity_id := int(_entity_of_player.get(id, 0))
+	var entity_id := game.entity_table.id_for_key(id)
 
 	if entity_id != 0 and combat != null:
 		combat.forget(entity_id)
@@ -439,16 +480,17 @@ func health_of(id: StringName) -> DotHealth:
 
 
 func entity_id_of(id: StringName) -> int:
-	return int(_entity_of_player.get(id, 0))
+	return game.entity_table.id_for_key(id) if game != null else 0
 
 
-## The other direction, which was missing.
+## The other direction, which used to be the one that was missing.
 ##
-## [PlaygroundDowns] needs it and would otherwise hash the player's name — a number that
-## is stable, plausible and **not** the one the health, the hitboxes and the kill feed
-## use, so a player who is down in one system is up in the other.
+## [PlaygroundDowns] needs it and hashed the player's name when this layer was off — a
+## number that is stable, plausible and **not** the one the health, the hitboxes and the
+## kill feed use, so a player who is down in one system was up in the other. Both
+## directions are the game's table now and neither layer can answer differently.
 func player_for_entity(entity_id: int) -> StringName:
-	return _player_of_entity.get(entity_id, &"") as StringName
+	return game.entity_table.key_for_id(entity_id) if game != null else &""
 
 
 # --- The tick --------------------------------------------------------------
@@ -552,7 +594,7 @@ func hurt(
 
 
 func _on_damage(damage: DotDamage) -> void:
-	var victim := _player_of_entity.get(damage.victim, &"") as StringName
+	var victim := game.entity_table.key_for_id(damage.victim) as StringName
 
 	if victim == &"":
 		return
@@ -566,19 +608,19 @@ func _on_damage(damage: DotDamage) -> void:
 		victim,
 		health.health,
 		health.armour,
-		_player_of_entity.get(damage.attacker, &"") as StringName
+		game.entity_table.key_for_id(damage.attacker) as StringName
 	)
 
 	match_node.report_damage(
-		String(_player_of_entity.get(damage.attacker, &"")),
+		String(game.entity_table.key_for_id(damage.attacker)),
 		String(victim),
 		damage.health_lost
 	)
 
 
 func _on_killed(entity_id: int, damage: DotDamage) -> void:
-	var victim := _player_of_entity.get(entity_id, &"") as StringName
-	var killer := _player_of_entity.get(damage.attacker, &"") as StringName
+	var victim := game.entity_table.key_for_id(entity_id) as StringName
+	var killer := game.entity_table.key_for_id(damage.attacker) as StringName
 
 	if victim == &"":
 		return

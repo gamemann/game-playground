@@ -6,6 +6,7 @@
 #   ln -s ../../dot-core/addons/dot_core addons/dot_core
 # A shipped build copies them in instead.
 /addons/dot_core
+/addons/dot_entity
 /addons/dot_timer
 /addons/dot_map
 /addons/dot_props
@@ -66,3 +67,4 @@ Thumbs.db
 /addons/dot_player_char
 /addons/dot_player_class
 /addons/dot_team
+/addons/dot_server_query

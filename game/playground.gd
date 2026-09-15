@@ -167,6 +167,26 @@ var world: Node3D = null
 var player_stack: PlaygroundPlayerStack = null
 
 ## The players in this instance, by id.
+## Every world object this game has an id for. See [DotEntityTable].
+##
+## [b]Owned by the game and opened on join, NOT by the layer that happens to need an
+## id first.[/b] That distinction is the bug this replaced. `PlaygroundArena` kept a
+## counter and two dictionaries and only ran when the waves mode was on, so
+## `PlaygroundDowns` — which is a separate switch — fell back to
+## `abs(String(player_id).hash())` when the arena was off. A player therefore had TWO
+## entity ids depending on which layers an operator had enabled, and the file said so
+## in a comment: "answering differently in the two is how a player who is down in one
+## system is up in the other." A handle whose existence depends on a mode is not a
+## handle.
+##
+## [b]Named `entity_table` and not `entities` because this project got there first[/b]:
+## [member Playground.entities] is the sandbox's own list of spawned
+## `PlaygroundEntity`s and has been since before dot-entity existed. The other three
+## games call theirs `entities`. Renaming the sandbox's list is a much larger change
+## than living with two names, and the day those two concepts merge -- a sandbox entity
+## IS a world object with an id -- is the day this one takes the name.
+var entity_table := DotEntityTable.new()
+
 var players: Dictionary = {}
 
 ## The movement half of each style, by id. The ranking half lives on the manager.
@@ -1085,6 +1105,24 @@ func add_player(id: StringName, display_name: String) -> PlaygroundPlayer:
 
 	spawn_player(id)
 
+	# Their entity id, before anything that might want one. Opened here rather than in
+	# a layer so every layer sees the same id whether or not the others are switched
+	# on; `PlaygroundDowns` and `PlaygroundArena` both used to mint their own.
+	var opened := entity_table.open(
+		DotEntity.KIND_PLAYER,
+		player,
+		&"",
+		id,
+		float(_tick) / float(maxi(tick_rate, 1))
+	)
+
+	if not opened.ok:
+		# Guarded above by the `players.has(id)` early return, so a refusal means this
+		# id is already an entity and something removed a player without closing them.
+		DotLog.error(CHANNEL, "could not open an entity for a player", {
+			"player": String(id), "why": opened.error.message,
+		})
+
 	# After the player is fully built and in the dictionary: a listener answers this
 	# by replicating them, and an entity built over a half-constructed player would
 	# replicate a controller that has no style and no timer.
@@ -1099,6 +1137,11 @@ func remove_player(id: StringName) -> void:
 
 	# Before anything is torn down, so a listener can still read what they were.
 	player_removed.emit(id)
+
+	# Closed after the signal and before the node goes: a listener asking the table
+	# who this was must still get an answer, and anything holding the id afterwards
+	# gets nothing rather than getting whoever joins next -- serials are not reused.
+	entity_table.close(entity_table.id_for_key(id), DotEntityTable.REASON_OWNER_LEFT)
 
 	# Their rock-the-vote goes with them. Without it a server whose players trickle
 	# away keeps their votes while the threshold falls with the player count, so a
