@@ -21,7 +21,7 @@ const PlaygroundWorldGen := preload("../game/playground_worldgen.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 80
+const CHECKS := 84
 
 var _passed := 0
 var _failed := 0
@@ -51,6 +51,8 @@ func _run() -> void:
 	_test_party_does_not_migrate()
 	await _test_escape_menu()
 	_test_chat_box()
+
+	_test_every_sound_has_a_voice()
 
 	print("")
 	_check(
@@ -587,6 +589,52 @@ func _test_escape_menu() -> void:
 	stack.clear()
 	stack.queue_free()
 	p.queue_free()
+	_done()
+
+
+func _test_every_sound_has_a_voice() -> void:
+	# This game shipped a complete catalogue pointing at files nobody has produced, and
+	# was therefore silent while every check about its audio passed. The two directions
+	# below are the ones that go wrong without erroring: an id with no recipe is one sound
+	# that stays silent for ever, and a recipe naming an id the catalogue does not have is
+	# a decision that reaches nothing. Neither is visible from any assertion about the
+	# catalogue on its own -- and a headless run cannot hear the result, so this is as
+	# close as an assertion gets. game-arena/tools/audio_probe.sh is the other half.
+	_section("Every sound this game declares has a noise to make")
+
+	var cat := PlaygroundPresentation.sound_catalogue()
+	var recipes := PlaygroundPresentation.sound_recipes()
+
+	var uncovered: Array[String] = []
+	for id in cat.ids():
+		if not recipes.has(id):
+			uncovered.append(String(id))
+	_check(
+		uncovered.is_empty(),
+		"every id in the catalogue has a stand-in voice",
+		"silent for ever: %s" % str(uncovered)
+	)
+
+	var stray: Array[String] = []
+	for id in recipes.keys():
+		if cat.find(StringName(id)) == null:
+			stray.append(String(id))
+	_check(stray.is_empty(), "and no recipe names an id that is not there", str(stray))
+
+	var bank := DotAudioSynth.bank(cat, recipes)
+	_check(
+		bank.has(&"buy") and bank.has("res://audio/buy.ogg"),
+		"the bank answers under both the id and the path the def names"
+	)
+	_check(
+		(
+			(bank[&"buy"] as AudioStreamWAV).data
+			!= (bank[&"refused"] as AudioStreamWAV).data
+		),
+		"and buy does not sound like refused",
+		"a buy that went through and a buy that was refused are indistinguishable without it, which is the whole reason `refused` has a sound at all"
+	)
+
 	_done()
 
 

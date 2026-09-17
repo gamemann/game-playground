@@ -266,6 +266,28 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	return c
 
 
+## Which synthesised voice stands in for each id until real audio is dropped into
+## [constant SOUND_DIR].
+##
+## [b]A sandbox makes noise for a different reason than a shooter does.[/b] Almost nothing
+## here is information a player has to act on — it is confirmation that the thing they just
+## did happened, which is why `refused` gets a voice of its own rather than silence: a buy
+## that does nothing and a buy that was refused are indistinguishable without it.
+##
+## `wave_incoming` is the exception and is the only ominous sound in the table, because it
+## is the one thing in this game that arrives whether the player asked for it or not.
+static func sound_recipes() -> Dictionary:
+	return {
+		&"prop_spawn": DotAudioSynth.Voice.SPAWN,
+		&"prop_land": DotAudioSynth.Voice.IMPACT,
+		&"tool_grab": DotAudioSynth.Voice.CLICK,
+		&"tool_punt": DotAudioSynth.Voice.SHOT,
+		&"buy": DotAudioSynth.Voice.PICKUP,
+		&"refused": DotAudioSynth.Voice.DENY,
+		&"wave_incoming": DotAudioSynth.Voice.BOOM,
+	}
+
+
 func _build_audio() -> DotResult:
 	audio = DotAudioManager.new()
 	audio.name = "Audio"
@@ -282,6 +304,20 @@ func _build_audio() -> DotResult:
 	var res := audio.setup()
 	if not res.ok:
 		return res.wrap("the playground's audio")
+
+	# Only on a real sink, and only after setup: the manager decides whether there is a
+	# device, and on a headless server there is nothing to bake for. Building the bank
+	# anyway would be arithmetic per dedicated-server startup for streams no process on
+	# that machine can play.
+	var godot_sink := audio.sink as DotAudioSinkGodot
+	if godot_sink != null:
+		godot_sink.bank = DotAudioSynth.bank(audio.catalogue, sound_recipes())
+		DotLog.info(
+			CHANNEL,
+			"no audio files; synthesised stand-ins are in use",
+			{"ids": sound_recipes().size(), "dir": SOUND_DIR}
+		)
+
 	return DotResult.success(null)
 
 
