@@ -58,7 +58,7 @@ game/
   prop.tscn / entity.tscn  one scene for every prop, one for every entity
 maps/
   pg_lobby.gd            the sandbox, and a jump course on bonus 1
-  pg_surf_intro.gd       two ramps and a valley
+  pg_surf_intro.gd       two ramps and a valley, and the plunge on bonus 1
   pg_bhop_intro.gd       blocks with widening gaps
   *.zones.json           generated from the maps, and checked against them
 tools/
@@ -811,6 +811,56 @@ a copy.
 There is deliberately **no `pg_tickrate` cvar**. A second cvar for the same number is a
 second number that can disagree with the first.
 
+## `pg_surf_intro` has a second route, because its first one is not what it says
+
+**The main run's ramps are level along their length.** They fall toward a valley, and
+every metre of *descent* comes from the stepped floor between them — so a player rides
+the whole map without the ramps ever having given them any speed, and the route never
+asks the question surf is about: hold a line on a face you cannot stand on while
+gravity does the work.
+
+Nothing said so, because the checks over it cannot tell the difference. `_test_surf_run`
+asserts "most of the descent is spent not grounded" and "the player reaches surf speed",
+and **both are satisfied by a player falling off the start platform**: not grounded
+because it is in mid-air, 12 m/s because that is what 1.2 seconds of gravity is worth.
+Instrumenting it printed the number nobody had: **10.7 m of a 220 m route, 5%, zero
+splits crossed.** The suite then finishes the run by teleporting the player into the
+finish zone, which it says it is doing and which is honest — but it means the map's own
+name for that section, "a surf run, start to finish", has never once described what
+happened.
+
+Two things came out of that, and the measurement is the more useful of them.
+
+**The distance is PRINTED, not just asserted.** This is game-arena's rule from
+`[bot-drive-1]` — a check's detail line shows only when it fails, so a figure that is
+merely asserted is one nobody reads again the moment it starts passing, and every
+question about how a map should be shaped is really a question about this number.
+
+**And the map gained `the plunge` on bonus 1**: one face pitched 52° (past the 46° a
+player can stand on) descending 61 m along its own run, so gravity accelerates the
+player ALONG the route rather than straight down. Same start height as the main run,
+which is what makes the two times worth comparing at all.
+
+It is **straight**, and that is the same design decision `the narrows` and
+`game-g2gfast`'s `the needle` were built on rather than a lack of ambition: a scripted
+bot cannot air-strafe, so a route that needs turning is a route no suite ever runs end
+to end, and an unrun route is one nobody finds the holes in. The bot holds forward and
+nothing else — no jump pattern at all, because on a face nobody can stand on there is
+no ground to leave — and reaches the finish through both splits at **33 m/s**, against
+the main run's 12.
+
+Its zone set is complete **for its own track**, and asked about as such. A `DotTimerZone`
+carries a track, so a set that is complete for track 0 and partial for track 1 passes
+`DotTimerZoneSet.problems()` — which is a per-zone check — while being an unfinishable
+route, and this family has already shipped that exact hole twice. The check here walks
+START, END, SPAWN and RESPAWN on the bonus track by name.
+
+**One number that is easy to get wrong and silent when you do.** The slab is dropped by
+half its thickness measured *vertically*, not perpendicular; the two differ by
+1/cos(pitch), which at 52° is 1.6. Getting it wrong leaves a 0.8 m lip where the pad
+meets the face, which is over the controller's step height — so a player runs at the
+slide and stops dead, with nothing in any count to say why.
+
 ## Maps are content, not projects
 
 Three maps, one game. See [dot-map's CLAUDE.md](../dot-map/CLAUDE.md) for why a
@@ -857,7 +907,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 276 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 309 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  80 checks
 godot --headless --path . res://examples/headless_net.tscn          # 115 checks

@@ -2,15 +2,22 @@ extends "../game/playground_map.gd"
 
 const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 
-## `pg_surf_intro` — two ramps meeting in a valley, a start platform and a finish.
+## `pg_surf_intro` — two routes. A valley between two ramps, and a face you fall down.
 ##
-## [b]The shape every surf map is made of, reduced to its minimum.[/b] The player
-## drops off the start platform onto a ramp too steep to stand on, slides along it
-## under gravity, air-strafes to keep and gain speed, and crosses the finish at the
-## bottom. Everything the movement needs to get right is in it: a face steeper than
-## `max_slope_angle` so the player is never grounded, a seam between two ramps that a
-## naive collide-and-slide would stop them dead in, and enough length that a strafing
-## player measurably beats one who does not.
+## [b]The main run is the shape every surf map is made of, reduced to its
+## minimum[/b]: two slabs tilted past `max_slope_angle` so a player on one is never
+## grounded, meeting along a centre line that is exactly the seam a naive
+## collide-and-slide stops a player dead in.
+##
+## [b]What it is NOT is a route whose speed comes from those ramps.[/b] They are
+## level along their length — every metre of descent on the main run comes from the
+## stepped floor between them — so a player can ride the whole map without the ramps
+## having given them anything. Measured on 2026-09-18 by instrumenting the suite's
+## own bot: a scripted strafer covers 10.7 m of the 220 m route and crosses none of
+## its splits, while the two checks over it ("most of the descent is spent not
+## grounded", "the player reaches surf speed") both pass — of a player who is
+## falling. That is the whole reason [b]the plunge[/b] below exists, and the reason
+## the two checks now have a printed distance beside them.
 ##
 ## Laid out along -Z, descending. Every number here is also read by
 ## [method timer_zones], which is why the geometry and the zones cannot drift apart.
@@ -34,6 +41,60 @@ const RAMP_ANGLE := 58.0
 
 ## The start platform's extent, and the finish pad's.
 const PAD_SIZE := Vector3(18.0, 1.0, 18.0)
+
+
+# --- Bonus 1: the plunge ---------------------------------------------------
+#
+# The map's second route, and the one where the speed comes from the RAMP rather
+# than from the fall. The main run's two ramps are level along their length — they
+# are walls that fall toward a valley, and every metre of descent on that route
+# comes from the stepped floor between them. So a player can ride the whole map
+# without the ramps ever having given them anything, and the route never asks the
+# question surf is actually about: hold a line on a face you cannot stand on while
+# gravity does the work.
+#
+# The plunge asks it. One face, pitched past `max_slope_angle` so the player is
+# never grounded on it, descending along the run so that gravity accelerates them
+# ALONG the route instead of straight down. The difficulty is staying on a
+# fourteen-metre-wide face while going faster every tick, and falling off it is
+# what the track's own respawn volume is for.
+#
+# It is deliberately STRAIGHT, and that is a design decision rather than a lack of
+# ambition — the same one `game-g2gfast`'s `the needle` was built on. A scripted
+# bot cannot air-strafe, so a route that needs turning is a route no suite can run
+# end to end, and an unrun route is one nobody finds the holes in. See
+# `[bonus-run-2]` in the nightly to-do list: this family has driven exactly two
+# bonus routes start to finish, and both were straight for this reason.
+
+## Where the plunge sits, well clear of the main run. The main map's ramps reach
+## out to x = 17, so sixty is a route beside it rather than through it.
+const CHUTE_X := 60.0
+
+## The top of the slide, level with the main start platform: the two routes begin
+## at the same height, which is what makes their times worth comparing at all.
+const CHUTE_TOP_Y := START_Y
+
+## How wide the face is. Wide enough to land on, narrow enough that drifting is a
+## real way to lose the run.
+const CHUTE_WIDTH := 14.0
+
+## Pitch of the face, from horizontal. Past `DotFpsConfig.max_slope_angle` (46°),
+## so a player on it is sliding rather than standing — which is the whole point.
+const CHUTE_PITCH := 52.0
+
+## How many metres of Z the slide covers. Its drop follows from the pitch.
+const CHUTE_RUN := 48.0
+
+## Flat metres after the slide, before the finish pad. A player arrives at the
+## bottom fast and needs somewhere to arrive: a finish line AT the foot of a 52°
+## face is one crossed while still airborne, at whatever the fall made of them.
+const CHUTE_RUNOUT := 30.0
+
+## The plunge's start and finish pads, along Z.
+const CHUTE_PAD_LENGTH := 20.0
+
+## Where the splits go, as a fraction of the slide.
+const CHUTE_SPLITS := [0.34, 0.68]
 
 
 func _build() -> void:
@@ -112,6 +173,106 @@ func _build() -> void:
 		PlaygroundGeometry.COLOUR_END
 	)
 
+	_build_the_plunge()
+
+
+## Bonus 1. Built from its own constants, like the main run, and from the same
+## helpers — so the zones below and the geometry here cannot drift apart.
+func _build_the_plunge() -> void:
+	# The start pad, and the same backstop the main platform has.
+	PlaygroundGeometry.box(
+		self,
+		Vector3(CHUTE_X, CHUTE_TOP_Y - 0.5, START_Z + CHUTE_PAD_LENGTH * 0.5),
+		Vector3(CHUTE_WIDTH, 1.0, CHUTE_PAD_LENGTH),
+		PlaygroundGeometry.COLOUR_START
+	)
+	PlaygroundGeometry.box(
+		self,
+		Vector3(CHUTE_X, CHUTE_TOP_Y + 1.0, START_Z + CHUTE_PAD_LENGTH + 0.5),
+		Vector3(CHUTE_WIDTH, 4.0, 1.0),
+		PlaygroundGeometry.COLOUR_PLATFORM
+	)
+
+	# The face itself. ONE rotation, about X, so the slab stays a plane a player
+	# can hold a line on — the main run's ramps are built the same way and for the
+	# same reason. Negative, because a positive rotation about +X lifts the local
+	# +Z end, and this route runs toward -Z.
+	#
+	# The slab is then dropped by half its thickness measured VERTICALLY rather
+	# than perpendicular: the two differ by a factor of 1/cos(pitch), which at 52°
+	# is 1.6, and getting it wrong leaves a 0.8 m lip at the seam where the pad
+	# meets the face. That is over the controller's step height, so a player would
+	# run at the slide and stop dead — with nothing in any count to say why.
+	var surface_drop := 0.5 / cos(deg_to_rad(CHUTE_PITCH))
+
+	PlaygroundGeometry.ramp(
+		self,
+		Vector3(
+			CHUTE_X,
+			(CHUTE_TOP_Y + chute_bottom_y()) * 0.5 - surface_drop,
+			START_Z - CHUTE_RUN * 0.5
+		),
+		Vector3(CHUTE_WIDTH, 1.0, chute_slope_length()),
+		-CHUTE_PITCH,
+		Vector3.RIGHT
+	)
+
+	# The run-out, flush with the foot of the face, and the finish pad after it.
+	PlaygroundGeometry.box(
+		self,
+		Vector3(
+			CHUTE_X,
+			chute_bottom_y() - 0.5,
+			chute_slide_end_z() - CHUTE_RUNOUT * 0.5
+		),
+		Vector3(CHUTE_WIDTH, 1.0, CHUTE_RUNOUT),
+		PlaygroundGeometry.COLOUR_FLOOR
+	)
+	PlaygroundGeometry.box(
+		self,
+		Vector3(
+			CHUTE_X,
+			chute_bottom_y() - 0.5,
+			chute_end_z() - CHUTE_PAD_LENGTH * 0.5
+		),
+		Vector3(CHUTE_WIDTH, 1.0, CHUTE_PAD_LENGTH),
+		PlaygroundGeometry.COLOUR_END
+	)
+
+
+## How far the plunge falls, in metres. Follows from the pitch and the run, so
+## changing either moves the geometry and the zones together.
+static func chute_drop() -> float:
+	return CHUTE_RUN * tan(deg_to_rad(CHUTE_PITCH))
+
+
+## The height of the foot of the slide.
+static func chute_bottom_y() -> float:
+	return CHUTE_TOP_Y - chute_drop()
+
+
+## The length of the face along its own surface, which is what the slab measures.
+static func chute_slope_length() -> float:
+	return CHUTE_RUN / cos(deg_to_rad(CHUTE_PITCH))
+
+
+## Where the face meets the run-out, in Z.
+static func chute_slide_end_z() -> float:
+	return START_Z - CHUTE_RUN
+
+
+## Where the run-out ends and the finish pad begins, in Z.
+static func chute_end_z() -> float:
+	return chute_slide_end_z() - CHUTE_RUNOUT
+
+
+## The height of the face at [param z], for anything that needs to place something
+## against it — the splits below, and a check that wants to know where the surface
+## is without rediscovering the trigonometry.
+static func chute_surface_y(z: float) -> float:
+	var t := clampf((START_Z - z) / CHUTE_RUN, 0.0, 1.0)
+	return CHUTE_TOP_Y - t * chute_drop()
+
 
 ## The map's zones, built from the same constants as the geometry.
 func timer_zones() -> DotTimerZoneSet:
@@ -173,4 +334,74 @@ static func build_zones() -> DotTimerZoneSet:
 	spawn.destination_yaw = 0.0
 	zones.add(spawn)
 
+	_add_plunge_zones(zones)
+
 	return zones
+
+
+## Bonus 1's zones. A track carries its own, and every kind the main route has —
+## see `[track-zone-1]`: a RESPAWN on track 0 catches nobody running track 1, and
+## `DotTimerZoneSet.problems()` is a per-zone check that says nothing about a track
+## being COMPLETE. A route with a start and a finish and no reset is one a player
+## falls out of the world on, which is what this family found by running one.
+static func _add_plunge_zones(zones: DotTimerZoneSet) -> void:
+	var track := DotTimerTrack.BONUS_FIRST
+	var half := CHUTE_WIDTH * 0.5
+
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(
+		CHUTE_X, CHUTE_TOP_Y + 1.0, START_Z + CHUTE_PAD_LENGTH - 3.0
+	)
+	# Zero is -Z, which is the way this route runs — written rather than defaulted,
+	# for the reason `pg_bhop_intro` writes it: a player who arrives facing the
+	# backstop has to find the course before they can start it.
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	# On the pad. The run begins when the player LEAVES it, which is the moment they
+	# commit to the face — timing from arrival would time their run-up.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(CHUTE_X - half, CHUTE_TOP_Y - 0.5, START_Z + 0.5),
+		Vector3(CHUTE_X + half, CHUTE_TOP_Y + 6.0, START_Z + CHUTE_PAD_LENGTH - 0.5)
+	)
+	zones.add(start)
+
+	# Splits across the face, each placed at the height the face actually is there
+	# rather than at a height written down twice. Generous in Y because a player who
+	# has left the surface is still on the route until the reset volume says
+	# otherwise, and a split they jump over is a split that never fires.
+	for number in range(CHUTE_SPLITS.size()):
+		var t: float = CHUTE_SPLITS[number]
+		var z: float = START_Z - CHUTE_RUN * t
+		var y := chute_surface_y(z)
+
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(number + 1)
+		stage.set_box(
+			Vector3(CHUTE_X - half, y - 10.0, z - 1.5),
+			Vector3(CHUTE_X + half, y + 10.0, z + 1.5)
+		)
+		zones.add(stage)
+
+	# Deep, and for a sharper version of the usual reason: this route exists to make
+	# the player fast, so it is the one place on the map where a thin line is certain
+	# to be passed through rather than merely likely.
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(CHUTE_X - half, chute_bottom_y() - 0.5, chute_end_z() - 14.0),
+		Vector3(CHUTE_X + half, chute_bottom_y() + 7.0, chute_end_z() - 1.0)
+	)
+	zones.add(finish)
+
+	# Under the whole route, twelve metres below its lowest floor and twenty-eight
+	# thick: a player who drifts off the side of the face is doing 30 m/s downward
+	# by the time they reach it, which is 23 cm a tick, so the depth is what stops
+	# it being tunnelled. Wider than the face by ten metres either side, because
+	# leaving the face sideways is the ordinary way to lose this run.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(CHUTE_X - half - 10.0, chute_bottom_y() - 40.0, chute_end_z() - 40.0),
+		Vector3(CHUTE_X + half + 10.0, chute_bottom_y() - 12.0, START_Z + 40.0)
+	)
+	zones.add(reset)

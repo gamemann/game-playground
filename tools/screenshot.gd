@@ -105,6 +105,39 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			},
 		]
 
+	if id == "pg_surf_intro":
+		# Two routes, and they are at right angles to each other in what they ask for:
+		# the main valley runs 220 m down x = 0 with its descent in the floor between
+		# the ramps, and the plunge is one 48 m face at x = 60 that drops 61 m. An
+		# overview from above shows the valley and makes the plunge read as a wall, so
+		# two of these three are shot from beside it and low.
+		return [
+			# Both routes at once, from beside and above the start pads.
+			{
+				"name": "pg_surf_intro_overview",
+				"from": Vector3(148.0, 78.0, 84.0),
+				"at": Vector3(20.0, -6.0, -78.0),
+			},
+			# Square across the plunge, from the height of its middle. The frame that
+			# says whether a 52° face reads as something you fall DOWN rather than
+			# something you fall OFF — from any angle along the run it is a line.
+			{
+				"name": "pg_surf_intro_plunge",
+				"from": Vector3(138.0, 44.0, -20.0),
+				"at": Vector3(60.0, 2.0, -30.0),
+			},
+			# Over the shoulder of somebody on the pad, looking down the route. NOT
+			# from eye height ON the pad: a face that falls away in front of you is
+			# invisible from standing on the lip, so that frame is a green rectangle
+			# and says nothing about the map. Raised and set back instead, which is
+			# the angle that shows the pad, the lip and the whole descent at once.
+			{
+				"name": "pg_surf_intro_plunge_eye",
+				"from": Vector3(96.0, 50.0, 30.0),
+				"at": Vector3(60.0, 9.0, -30.0),
+			},
+		]
+
 	if id != "pg_lobby":
 		return [
 			{"name": "%s_overview" % id, "from": Vector3(-90, 70, 90), "at": Vector3(0, 8, 0)},

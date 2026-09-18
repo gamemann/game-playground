@@ -11,6 +11,7 @@ const PlaygroundProp := preload("../game/playground_prop.gd")
 const PlaygroundSpawnMenu := preload("../game/playground_spawn_menu.gd")
 const PlaygroundSpawnables := preload("../game/playground_spawnables.gd")
 const PgBhopIntro := preload("../maps/pg_bhop_intro.gd")
+const PgSurfIntro := preload("../maps/pg_surf_intro.gd")
 const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
 const PlaygroundWeaponDef := preload("../game/weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("../game/playground_weapons.gd")
@@ -53,7 +54,7 @@ const TOWER_TAKE_OFF := 2.6
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 292
+const CHECKS := 309
 
 var _passed := 0
 var _failed := 0
@@ -106,6 +107,7 @@ func _run() -> void:
 	await _test_the_sandbox_and_its_course()
 	await _test_vehicles()
 	await _test_the_narrows()
+	await _test_the_plunge()
 	await _test_the_client_boots()
 
 	print("")
@@ -214,8 +216,11 @@ func _test_boots() -> void:
 	_check(zones.problems().is_empty(), "the map's zones are well formed",
 		", ".join(zones.problems()))
 	_check(
-		zones.playable_tracks() == PackedInt32Array([DotTimerTrack.MAIN]),
-		"and its main track can be run"
+		zones.playable_tracks() == PackedInt32Array(
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST]
+		),
+		"and both of its tracks can be run",
+		str(zones.playable_tracks())
 	)
 
 	# The thin-zone check, at the speed a surfer actually reaches on this map.
@@ -344,6 +349,10 @@ func _test_surf_run() -> void:
 	# can stand on — which is the whole of surf.
 	var airborne := 0
 	var top_speed := 0.0
+	var entry_z := player.controller.state.position.z
+	var deepest_z := entry_z
+	var deepest_y := player.controller.state.position.y
+	var deepest_x := player.controller.state.position.x
 
 	for i in range(1400):
 		var command := DotFpsCommand.new()
@@ -364,6 +373,11 @@ func _test_surf_run() -> void:
 
 		top_speed = maxf(top_speed, player.speed())
 
+		if player.controller.state.position.z < deepest_z:
+			deepest_z = player.controller.state.position.z
+			deepest_y = player.controller.state.position.y
+			deepest_x = player.controller.state.position.x
+
 		if finished.size() > 0:
 			break
 
@@ -374,6 +388,23 @@ func _test_surf_run() -> void:
 	)
 	_check(top_speed > 12.0, "and the player reaches surf speed",
 		"%.1f m/s" % top_speed)
+
+	# What the scripted strafe pattern actually achieves, PRINTED rather than only
+	# asserted — see game-arena's "what a bot actually travels at" group and
+	# `[bot-drive-1]`. A check's detail line shows only when it fails, so a figure
+	# that is merely asserted is a figure nobody reads again once it passes, and
+	# every question about how a map should be shaped is a question about this
+	# number. The route is %.0f m long; anything short of that is where a bot
+	# stops being evidence about the map.
+	var travelled := entry_z - deepest_z
+	var route := absf(PgSurfIntro.END_Z - PgSurfIntro.START_Z)
+
+	print(
+		"        the scripted surfer covered %.1f m of %.1f m (%.0f%%), "
+		% [travelled, route, 100.0 * travelled / route]
+		+ "ending at x %.1f y %.1f, %d splits crossed"
+		% [deepest_x, deepest_y, player.timer.run.splits.size()]
+	)
 
 	# Whether the bot happened to reach the finish is not the point — a scripted
 	# strafe pattern is not a player. What has to be true is that the run was timed,
@@ -2221,6 +2252,168 @@ static func _jumping_at(z: float) -> bool:
 			return true
 
 	return false
+
+
+## The plunge — `pg_surf_intro`'s bonus route, driven from its pad to its finish.
+##
+## [b]The reason this route exists is the measurement in [method _test_surf_run].[/b]
+## The main run's two ramps are level along their length, so the whole descent comes
+## from the stepped floor between them and the ramps never give the player anything;
+## a scripted strafer covers 5% of that route and crosses none of its splits. The
+## plunge is one face pitched past [code]max_slope_angle[/code] and descending along
+## the run, so gravity accelerates the player ALONG it — which is the thing the map
+## was supposed to be about and was not.
+##
+## It is straight, and that is deliberate for the reason
+## [method _test_the_narrows] gives about a constant gap: a scripted bot cannot
+## air-strafe, so a route that needs turning is a route no suite runs end to end.
+## Here the bot holds forward and nothing else. No jump pattern is needed at all —
+## on a face nobody can stand on there is no ground to leave.
+func _test_the_plunge() -> void:
+	print("")
+	print("the plunge — pg_surf_intro's bonus route")
+
+	var loaded: DotResult = await playground.change_map(&"pg_surf_intro")
+	_check(loaded.ok, "the surf map loads again",
+		loaded.error.message if not loaded.ok else "")
+
+	var zones := PgSurfIntro.build_zones()
+	var track := DotTimerTrack.BONUS_FIRST
+
+	_check(zones.problems().is_empty(), "its zones are well formed",
+		", ".join(zones.problems()))
+	_check(
+		zones.playable_tracks() == PackedInt32Array(
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST]
+		),
+		"and the surf map has two routes now rather than one",
+		str(zones.playable_tracks())
+	)
+
+	# Asked of THIS track rather than of whichever one happened to be current — see
+	# `[track-zone-1]`. A zone carries a track, so a set that is complete for track 0
+	# and partial for track 1 passes `problems()` while being an unfinishable route,
+	# and this family has already shipped that exact hole twice.
+	for kind in [
+		DotTimerZone.Kind.START,
+		DotTimerZone.Kind.END,
+		DotTimerZone.Kind.SPAWN,
+		DotTimerZone.Kind.RESPAWN,
+	]:
+		_check(
+			zones.of_kind(kind, track).size() == 1,
+			"the plunge has its own %s zone" % DotTimerZone.Kind.keys()[kind].to_lower(),
+			"%d" % zones.of_kind(kind, track).size()
+		)
+
+	_check(
+		zones.of_kind(DotTimerZone.Kind.STAGE, track).size()
+			== PgSurfIntro.CHUTE_SPLITS.size(),
+		"and a split for each fraction the map names"
+	)
+
+	# A player on this route is the fastest thing on the map, so it is the one where
+	# a thin line is certain to be passed through rather than merely likely.
+	var thin := zones.thin_zones(30.0, playground.tick_rate)
+	_check(thin.is_empty(),
+		"and no zone is thin enough for a player at 30 m/s to cross without entering",
+		"%d thin" % thin.size())
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	# The face has to be unstandable or none of this is surf. Asked of the tunables
+	# this game actually runs a player with, rather than of a number written down a
+	# second time here — the angle is the one thing about this route that cannot be
+	# changed without changing what the route IS.
+	var max_slope: float = player.controller.tunables.max_slope_angle
+	_check(
+		PgSurfIntro.CHUTE_PITCH > max_slope,
+		"the face is steeper than a player can stand on",
+		"%.0f° against %.0f°" % [PgSurfIntro.CHUTE_PITCH, max_slope]
+	)
+
+	_check(player.timer.set_track(track), "the track switches to the plunge")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the player on the plunge's pad, beside the main run rather than on it",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	# Arrays, because a GDScript lambda captures locals by value.
+	var started: Array[bool] = [false]
+	var finished: Array[bool] = [false]
+	var splits: Array[int] = []
+
+	var on_start := func(_run: DotTimerRun) -> void: started[0] = true
+	var on_stage := func(number: int, _split: float) -> void: splits.append(number)
+	var on_finish := func(_run: DotTimerRun) -> void: finished[0] = true
+
+	player.timer.run_started.connect(on_start)
+	player.timer.stage_reached.connect(on_stage)
+	player.timer.run_finished.connect(on_finish)
+
+	var command := DotFpsCommand.new()
+	command.move = Vector2(0.0, 1.0)
+	command.yaw = 0.0
+
+	var ticks := 0
+	var airborne := 0
+	var top_speed := 0.0
+
+	for i in range(2000):
+		player.controller.apply_command(command.duplicate_command())
+		await get_tree().physics_frame
+		ticks = i
+
+		if not player.controller.state.is_grounded():
+			airborne += 1
+
+		top_speed = maxf(top_speed, player.speed())
+
+		if finished[0]:
+			break
+
+	player.timer.run_started.disconnect(on_start)
+	player.timer.stage_reached.disconnect(on_stage)
+	player.timer.run_finished.disconnect(on_finish)
+
+	_check(started[0], "leaving the start pad starts a run on the plunge")
+
+	# The whole difference between the two routes, stated as a number. PRINTED as
+	# well as asserted, because a detail line shows only on failure and this is the
+	# figure every future question about this map is really about.
+	print(
+		"        the plunge: %.1f m/s top speed, %d airborne ticks of %d, "
+		% [top_speed, airborne, ticks + 1]
+		+ "finished %s" % ("yes" if finished[0] else "no")
+	)
+
+	_check(
+		top_speed > 20.0,
+		"the face makes the player fast, which the main run's ramps never do",
+		"%.1f m/s" % top_speed
+	)
+	_check(
+		splits == [1, 2],
+		"it crosses both splits, in order",
+		str(splits)
+	)
+	_check(
+		finished[0],
+		"and reaches the finish holding nothing but forward",
+		"gave up at tick %d, z = %.1f, y = %.1f"
+			% [ticks, player.global_position.z, player.global_position.y]
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
 
 
 # --- The client -------------------------------------------------------------
