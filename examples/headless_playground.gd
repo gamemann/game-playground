@@ -54,7 +54,7 @@ const TOWER_TAKE_OFF := 2.6
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 309
+const CHECKS := 317
 
 var _passed := 0
 var _failed := 0
@@ -108,6 +108,7 @@ func _run() -> void:
 	await _test_vehicles()
 	await _test_the_narrows()
 	await _test_the_plunge()
+	await _test_the_jump_course()
 	await _test_the_client_boots()
 
 	print("")
@@ -1892,7 +1893,28 @@ func _test_the_sandbox_and_its_course() -> void:
 	player.timer.run_started.connect(on_start)
 	playground.timers.effect_requested.connect(on_effect)
 
-	await _drive(&"bot", forward, 400)
+	# [b]Driven until the respawn happens rather than for a fixed 400 ticks, and the
+	# difference is the whole reason this comment is here.[/b] A bot holding forward
+	# off a start pad falls, is put back on the pad, walks off it again and starts a
+	# SECOND run — so "is a run active at tick 400" is a question about how many times
+	# that cycle fitted into 400 ticks, which is a function of where the first gap is.
+	# Widening or narrowing one gap on a course fifty metres away changed the answer,
+	# and the check failed while reporting nothing about what it was written to prove.
+	#
+	# Stopping at the respawn and then standing still is deterministic: a player who is
+	# not walking cannot leave the pad, so a run that is still active after this is a
+	# run the respawn did not abandon, which is the thing being asked.
+	for _tick in range(400):
+		player.controller.apply_command(forward.duplicate_command())
+		await get_tree().physics_frame
+
+		if not respawns.is_empty():
+			break
+
+	var still := DotFpsCommand.new()
+	for _tick in range(8):
+		player.controller.apply_command(still.duplicate_command())
+		await get_tree().physics_frame
 
 	player.timer.run_started.disconnect(on_start)
 	playground.timers.effect_requested.disconnect(on_effect)
@@ -2659,6 +2681,173 @@ func _test_vehicles() -> void:
 	)
 
 	playground.remove_player(&"rider")
+
+
+
+# --- The jump course -------------------------------------------------------
+
+## `pg_lobby`'s bonus 1, driven from its start pad to its finish.
+##
+## [b]Nothing had ever run this course.[/b] Every check over it until now switched onto
+## the track, looked at the spawn and switched back — which proves a player can be put
+## at the bottom of it and nothing at all about whether they can get to the top. That is
+## the whole of `[bonus-run-2]`, and the reason it is worth doing on this course in
+## particular is that bonus 1 is the one route in this map a bot genuinely can run: it
+## is a straight line, so the skill in it is timing rather than turning, and a bot
+## holding forward that jumps at each leading edge is doing what a player does.
+##
+## The gaps are read off [PgLobby]'s own arithmetic rather than copied here, for the
+## reason every map in this family says: a second description of where a platform is, is
+## a second thing that can disagree with the geometry.
+func _test_the_jump_course() -> void:
+	print("")
+	print("the jump course — pg_lobby's bonus 1, run end to end")
+
+	var loaded: DotResult = await playground.change_map(&"pg_lobby")
+	_check(loaded.ok, "the lobby loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := DotTimerTrack.BONUS_FIRST
+	var zones := PgLobby.build_zones()
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	# [b]The map's copy of the movement is the movement.[/b] `PgLobby` sizes its gaps
+	# against three numbers it declares itself, because a map is content and cannot
+	# reach into the game's player class — so the copy is deliberate and this is the
+	# other half of that bargain. A course tuned against a jump height the server no
+	# longer uses is a course that quietly stops being finishable, which is the exact
+	# failure this section was written to find.
+	var tunables := player.controller.tunables
+	_check(
+		is_equal_approx(tunables.max_speed, PgLobby.MOVE_SPEED)
+			and is_equal_approx(tunables.jump_height, PgLobby.JUMP_HEIGHT)
+			and is_equal_approx(tunables.gravity, PgLobby.MOVE_GRAVITY),
+		"the map's movement constants are the ones the server applies",
+		"map %.2f/%.2f/%.2f against %.2f/%.2f/%.2f"
+			% [PgLobby.MOVE_SPEED, PgLobby.JUMP_HEIGHT, PgLobby.MOVE_GRAVITY,
+				tunables.max_speed, tunables.jump_height, tunables.gravity]
+	)
+
+	# [b]And the rule the course lives under, which is the honest fix.[/b] Every gap
+	# here has to be inside what the movement can actually cross while climbing
+	# COURSE_RISE — measured off the map's own arithmetic, so re-tuning the ramp cannot
+	# move the geometry past the rule. Before this course was driven the widest gap was
+	# 5.65 m against a 3.68 m reach, and nothing anywhere said so: a zone set does not
+	# know how far a player can jump, and every count over the course passed.
+	var reach := PgLobby.jump_reach(PgLobby.COURSE_RISE)
+	_check(
+		PgLobby.widest_gap() <= reach,
+		"no gap on the course is wider than a jump crosses while climbing a step",
+		"widest %.2f m against a reach of %.2f m"
+			% [PgLobby.widest_gap(), reach]
+	)
+
+	_check(player.timer.set_track(track), "the course's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on the start pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	var started: Array[bool] = [false]
+	var finished: Array[bool] = [false]
+	var splits: Array[int] = []
+
+	var on_start := func(_run: DotTimerRun) -> void: started[0] = true
+	var on_stage := func(number: int, _split: float) -> void: splits.append(number)
+	var on_finish := func(_run: DotTimerRun) -> void: finished[0] = true
+
+	player.timer.run_started.connect(on_start)
+	player.timer.stage_reached.connect(on_stage)
+	player.timer.run_finished.connect(on_finish)
+
+	var command := DotFpsCommand.new()
+	command.move = Vector2(0.0, 1.0)
+	command.yaw = spawn.destination_yaw
+
+	# How far along it got, in platforms. Reported whether it finishes or not, because
+	# "it fell off" is worth nothing as a result and "it fell off at the sixth gap"
+	# names the gap.
+	var reached := -1
+	var ticks := 0
+
+	# Capped above the ~1700 ticks the course takes at walking pace. It was 1200 while
+	# the course was nine platforms and unfinishable, which is a cap that reports the
+	# same failure as a bot stuck at a gap: at twelve platforms a bot on the last third
+	# ran out of ticks rather than out of route.
+	for i in range(2400):
+		command.set_button(
+			DotFpsCommand.BUTTON_JUMP, _jumping_on_the_course(player.global_position.z)
+		)
+		player.controller.apply_command(command.duplicate_command())
+		await get_tree().physics_frame
+		ticks = i
+
+		for step in range(PgLobby.COURSE_STEPS):
+			var at := PgLobby.platform_centre(step)
+			var over := (
+				absf(player.global_position.x - at.x) < PgLobby.PLATFORM.x * 0.5
+				and absf(player.global_position.z - at.z) < PgLobby.PLATFORM.z * 0.5
+				and player.global_position.y >= at.y
+			)
+			if over and step > reached:
+				reached = step
+
+		if finished[0]:
+			break
+
+	player.timer.run_started.disconnect(on_start)
+	player.timer.stage_reached.disconnect(on_stage)
+	player.timer.run_finished.disconnect(on_finish)
+
+	_check(started[0], "leaving the start pad starts a run on the course")
+	_check(
+		reached >= 0,
+		"the bot makes the first platform",
+		"never got onto one"
+	)
+	_check(
+		splits == [1, 2],
+		"it crosses both splits, in order",
+		str(splits)
+	)
+	_check(
+		finished[0],
+		"and reaches the finish pad: bonus 1 run end to end",
+		"gave up at tick %d on platform %d of %d, z = %.1f, y = %.1f"
+			% [ticks, reached, PgLobby.COURSE_STEPS - 1,
+				player.global_position.z, player.global_position.y]
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+
+
+## Whether the bot should be holding jump at [param z] on the jump course.
+##
+## Pressed just before each leading edge and nowhere else. The course runs toward -Z, so
+## the edge a player leaves from is the platform's near side in that direction, and the
+## pad is eight metres deep where a platform is three — both are read off the map rather
+## than written down again.
+static func _jumping_on_the_course(z: float) -> bool:
+	var edges: Array[float] = [PgLobby.COURSE_START_Z - PgLobby.PAD.z * 0.5]
+
+	for i in range(PgLobby.COURSE_STEPS):
+		edges.append(PgLobby.platform_centre(i).z - PgLobby.PLATFORM.z * 0.5)
+
+	for edge in edges:
+		if z <= edge + 0.7 and z > edge - 0.3:
+			return true
+
+	return false
 
 
 func _test_the_client_boots() -> void:

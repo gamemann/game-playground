@@ -144,7 +144,11 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "%s_eye" % id, "from": Vector3(-20, 4, 30), "at": Vector3(0, 6, 0)},
 		]
 
-	var course := Vector3(60.0, 6.0, 20.0)
+	# The middle of the jump course, which moved when the course grew from nine
+	# platforms to twelve: it now runs from z = 56 to z = -20 and climbs to 16 m, so a
+	# camera aimed at the old midpoint looked at the first third of it and cut the
+	# climb off at the top of the frame.
+	var course := Vector3(60.0, 11.0, 14.0)
 	var tower := Vector3(-60.0, 7.0, 60.0)
 
 	return [
@@ -154,7 +158,7 @@ func _shots_for(id: String) -> Array[Dictionary]:
 		# Eye level in the middle, which is where a player actually stands.
 		{"name": "pg_lobby_eye", "from": Vector3(-10, 2.0, 20), "at": Vector3(20, 6, -10)},
 		# Bonus 1: the jump course, along its length.
-		{"name": "pg_lobby_course", "from": Vector3(78, 14, 66), "at": course},
+		{"name": "pg_lobby_course", "from": Vector3(86, 26, 72), "at": course},
 		# Bonus 2: the tower, from above its top and well out from it.
 		#
 		# [b]Both parts matter and the first attempt got both wrong.[/b] From below, the

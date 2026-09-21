@@ -52,24 +52,104 @@ const COURSE_START_Z := 60.0
 ## Height of the start pad's top surface.
 const COURSE_BASE_Y := 6.0
 
-## Platforms after the start pad.
-const COURSE_STEPS := 9
+## Platforms after the start pad. Twelve since the course was first RUN — see
+## [method jump_reach].
+const COURSE_STEPS := 12
 
 const PLATFORM := Vector3(3.0, 0.5, 3.0)
 
 ## The first gap, and how much longer each one is than the last.
 ##
-## [b]Both sized against the movement, not chosen to look right.[/b] With
-## `jump_height` 1.15 m and `gravity` 20 m/s² a jump lasts about 0.68 s, so a player
-## at the 7 m/s ground speed covers 4.8 m — and the last gap here is 4.95 m, which is
-## just past that. The course is therefore walkable to the second-to-last platform and
-## needs a hop's worth of carried speed for the last one, which is the shape a
-## minigame wants: finishable by anybody, faster for somebody who can move.
-const COURSE_GAP := 2.5
-const COURSE_GAP_GROWTH := 0.35
+## [b]Both sized against the movement, and the first version of this arithmetic was
+## wrong in the one way nothing reports.[/b] It read: a jump lasts about 0.68 s, so a
+## player at 7 m/s covers 4.8 m, so a last gap of 4.95 m needs a hop's worth of carried
+## speed. Two things were wrong with it and the course was unfinishable because of both.
+##
+## The 0.68 s is the time to fall back to the height you left at, and **every platform
+## here is 0.8 m higher than the one before it**: landing 0.8 m up happens at 0.53 s, so
+## the real reach is 3.7 m and not 4.8. And the last gap was not 4.95 either — the gaps
+## grow by [constant COURSE_GAP_GROWTH] per step and there are nine of them plus the
+## finish, so they ran to 5.65 m. The course was walkable to platform 3 of 9 and no
+## further, which is exactly what a bot found the first time one was asked to run it: it
+## stood on the fourth platform for eight hundred ticks trying the 3.9 m gap.
+##
+## So they are derived now. [method jump_reach] is the arithmetic, [method gap_at] is
+## the ramp, and `headless_playground` asserts that the widest gap on the course is
+## inside the reach — which is the check that would have caught this, and the same shape
+## as the rule every other map in this family grew after somebody drove it.
+##
+## [b]The course is still faster for somebody who can move, and now for a better
+## reason.[/b] Every gap being walkable does not make it a walk: a player carrying
+## bhop speed clears two platforms at once, and the back half is where that starts to
+## pay. "Finishable by anybody, faster for somebody who can move" is what it says, and
+## it is true of this version.
+const COURSE_GAP := 2.2
+
+## Sized so the LAST gap — the one onto the finish pad, index [constant COURSE_STEPS] —
+## lands at about 92% of [method jump_reach]. Tight enough that the back half is a
+## course rather than a corridor, inside the reach at every step.
+const COURSE_GAP_GROWTH := 0.1
 
 ## How much each platform rises. Under `jump_height`, so a gap is never also a wall.
 const COURSE_RISE := 0.8
+
+# --- What the movement can do ----------------------------------------------
+#
+# [b]The three numbers the course is sized against, copied from
+# `PlaygroundPlayer._tunables` deliberately.[/b] A map is content: it is loaded by
+# `DotMapDef` from a catalogue, it has no player in front of it when `build_zones` is
+# called from a tool, and reaching into the game's player class from here would make a
+# map depend on the game rather than the other way round. The family's answer to a
+# deliberate copy is a check that the copies agree, and `headless_playground` asserts
+# these three against the tunables the server actually applies.
+
+## Ground speed, m/s. `DotFpsTunables.max_speed`.
+const MOVE_SPEED := 7.0
+
+## Metres. `DotFpsTunables.jump_height`.
+const JUMP_HEIGHT := 1.15
+
+## m/s². `DotFpsTunables.gravity`. Not Godot's project default, which is 9.8.
+const MOVE_GRAVITY := 20.0
+
+
+## The clear air a player running at [constant MOVE_SPEED] crosses in one jump, landing
+## [param rise] metres higher than they left.
+##
+## [b]The landing height is the whole point of this function.[/b] Time to fall back to
+## the height you jumped from is the number everybody writes down, and it is the wrong
+## one for any course that climbs: at 1.15 m of jump height a player is airborne for
+## 0.68 s flat and 0.53 s onto a step 0.8 m up, which is 4.8 m against 3.7. A course
+## sized with the first number is 30% longer than the movement can do, and every check
+## over it passes, because nothing in a zone set knows how far a player can jump.
+##
+## Returns 0.0 for a rise the jump cannot reach at all.
+static func jump_reach(rise: float) -> float:
+	var launch := sqrt(2.0 * MOVE_GRAVITY * JUMP_HEIGHT)
+	var inside := launch * launch - 2.0 * MOVE_GRAVITY * rise
+
+	if inside < 0.0:
+		return 0.0
+
+	# The LATER root: the way back down through that height, not the way up.
+	var airborne := (launch + sqrt(inside)) / MOVE_GRAVITY
+
+	return MOVE_SPEED * airborne
+
+
+## The clear air before platform [param index], counted from 0. [constant COURSE_STEPS]
+## is the gap onto the finish pad.
+##
+## One description: [method platform_centre], [method finish_centre] and the check that
+## no gap is wider than [method jump_reach] all read it, so a course somebody re-tunes
+## cannot have its geometry and its rule disagree.
+static func gap_at(index: int) -> float:
+	return COURSE_GAP + COURSE_GAP_GROWTH * float(index)
+
+
+## The widest gap anywhere on the course, in metres.
+static func widest_gap() -> float:
+	return gap_at(COURSE_STEPS)
 
 ## The pads at each end.
 const PAD := Vector3(8.0, 1.0, 8.0)
@@ -289,7 +369,7 @@ func _build_movement_corner() -> void:
 	)
 
 
-## The minigame: a start pad, nine platforms with widening gaps, and a finish pad.
+## The minigame: a start pad, twelve platforms with widening gaps, and a finish pad.
 func _build_course() -> void:
 	_pad(
 		Vector3(COURSE_X, COURSE_BASE_Y - PAD.y * 0.5, COURSE_START_Z),
@@ -344,7 +424,7 @@ static func platform_centre(index: int) -> Vector3:
 	var edge := COURSE_START_Z - PAD.z * 0.5
 
 	for i in range(index + 1):
-		edge -= COURSE_GAP + COURSE_GAP_GROWTH * float(i)
+		edge -= gap_at(i)
 		edge -= PLATFORM.z
 
 	return Vector3(
@@ -359,7 +439,7 @@ static func finish_centre() -> Vector3:
 	var last := platform_centre(COURSE_STEPS - 1)
 
 	var edge := last.z - PLATFORM.z * 0.5
-	edge -= COURSE_GAP + COURSE_GAP_GROWTH * float(COURSE_STEPS)
+	edge -= gap_at(COURSE_STEPS)
 
 	return Vector3(
 		COURSE_X,
@@ -514,17 +594,24 @@ static func build_zones() -> DotTimerZoneSet:
 	)
 	zones.add(end)
 
-	# One split, halfway along, so the course has something to compare against
-	# itself. Spanning the whole width of the course rather than sitting on one
-	# platform: a player who jumps past the platform still passed the line.
-	var middle := platform_centre(COURSE_STEPS / 2)
-	var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
-	stage.number = 1.0
-	stage.set_box(
-		Vector3(middle.x - 12.0, middle.y - 6.0, middle.z - 1.0),
-		Vector3(middle.x + 12.0, middle.y + 12.0, middle.z + 1.0)
-	)
-	zones.add(stage)
+	# Two splits, at a third and two thirds, so the course has something to compare
+	# against itself on each half. Spanning the whole width of the course rather than
+	# sitting on one platform: a player who jumps past the platform still passed the
+	# line — and on twelve platforms with every gap inside the jump reach, a player
+	# carrying speed skips platforms routinely.
+	#
+	# There was one split here while there were nine platforms. A second is what makes
+	# the back half of the course comparable on its own, which is the half a player
+	# carrying bhop speed is actually racing.
+	for split in range(2):
+		var at := platform_centre(COURSE_STEPS * (split + 1) / 3)
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(split + 1)
+		stage.set_box(
+			Vector3(at.x - 12.0, at.y - 6.0, at.z - 1.0),
+			Vector3(at.x + 12.0, at.y + 12.0, at.z + 1.0)
+		)
+		zones.add(stage)
 
 	# Falling off. The course is six metres above a floor that goes on for another
 	# ninety, so there is nothing to fall INTO — the reset volume is the air just
