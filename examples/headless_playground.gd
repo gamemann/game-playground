@@ -54,7 +54,7 @@ const TOWER_TAKE_OFF := 2.6
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 317
+const CHECKS := 319
 
 var _passed := 0
 var _failed := 0
@@ -1950,7 +1950,6 @@ func _test_the_sandbox_and_its_course() -> void:
 	var under := Vector3(PgLobby.COURSE_X, 1.0, PgLobby.COURSE_START_Z)
 	player.teleport(under, 0.0)
 
-	var still := DotFpsCommand.new()
 	await _drive(&"bot", still, 60)
 
 	_check(

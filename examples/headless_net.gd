@@ -39,7 +39,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 115
+const CHECKS := 116
 
 var _passed := 0
 var _failed := 0
@@ -383,12 +383,42 @@ func _build() -> bool:
 	var server_side := Node.new()
 	server_side.name = "ServerSide"
 	add_child(server_side)
+
+	# [b]The client gets its own physics space, and a prop is what proves it must.[/b]
+	# One process is one World3D unless somebody asks for a second, so without this the
+	# server's real bodies and the client's frozen mirrors of them are in the SAME
+	# cubic metres -- and a mirror is written to the exact position of the thing it
+	# mirrors, so the two boxes overlap perfectly, every frame, by construction. There
+	# is no spawn point that avoids it.
+	#
+	# What that looks like is not a collision, which is why it went unread for so long:
+	# Godot resolves the overlap with positional recovery, which moves a body WITHOUT
+	# touching its velocity. So the server's crate slides a metre sideways with
+	# linear_velocity.x still reading 0.0, and the prop assertions fail claiming gravity
+	# did not reach the client. How far it slides, and whether the last shove is up or
+	# down, depends on how many physics substeps fall between two net ticks -- so it
+	# passes on an idle machine and fails on a loaded one, which is the shape of a bug
+	# that reaches CI and nowhere else.
+	#
+	# Two processes have two spaces for free. This is the one line that makes one
+	# process honest about that.
+	var client_view := SubViewport.new()
+	client_view.name = "ClientView"
+	client_view.own_world_3d = true
+	client_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(client_view)
+
 	var client_side := Node.new()
 	client_side.name = "ClientSide"
-	add_child(client_side)
+	client_view.add_child(client_side)
 
 	_server_game = _make_game(true, &"server", server_side)
 	_client_game = _make_game(false, &"client", client_side)
+
+	_check(
+		_server_game.get_world_3d() != _client_game.get_world_3d(),
+		"the two halves are in separate physics worlds, as two processes would be"
+	)
 
 	for _i in range(240):
 		await get_tree().process_frame
