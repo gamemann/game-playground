@@ -1024,7 +1024,7 @@ godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  84 checks
 godot --headless --path . res://examples/headless_net.tscn          # 117 checks
-godot --headless --path . res://examples/dedicated.tscn             # 170 checks
+godot --headless --path . res://examples/dedicated.tscn             # 172 checks
 ```
 
 **Run the check-only pass first.** A script that fails to parse makes the scene fail
@@ -1423,6 +1423,14 @@ This game has shipped `PlaygroundBrowser` — a real dot-browser list with sourc
 `PlaygroundQueryProvider` is the game's half. **The interesting part of a sandbox's listing row is not the map** — it is which of `pg_arena`, `pg_waves` and `pg_shop` are on, because each of those turns this into a different server and all three default to off *precisely* because that is an operator's decision. A person reading a list of playground servers is choosing between servers that share a name and not a game, which is exactly what a query section is for. The map, the occupancy, the prop count and the tick rate go in beside them.
 
 The prop count is the spawner's own `world_count()` and the player count is the module's own `_joined`, asserted as such: a listing row built from a second tally is a second number that can disagree, and the one that is wrong is always the one nobody is looking at.
+
+## No message preloads itself
+
+`playground_event.gd` and `playground_request.gd` each began by preloading themselves, for a typed `of()` factory. mg-buses-from-hell measured that line (8ed866c) as enough to leak the whole script graph at exit on Godot 4.7.2: a script that `extends DotNetMessage` and preloads ITSELF, first loaded by a module inside a running `DotServer` — which is how every deployed server loads a game. Both are built with `new(kind, body)` now, an `_init` whose arguments default because dot-net's registry decodes with a bare `new()`.
+
+`dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
+
+**Here it was not the cause, and the leak is still open.** `dedicated` exits with 351 ObjectDB instances, 268 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else.
 
 ## Things deliberately not here
 

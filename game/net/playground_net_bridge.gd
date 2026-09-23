@@ -854,7 +854,7 @@ func ask_style(style_id: StringName) -> void:
 
 func _ask(kind: int, body: PackedByteArray) -> void:
 	if net != null and not net.is_server:
-		net.send(PlaygroundRequest.of(kind, body), 1)
+		net.send(PlaygroundRequest.new(kind, body), 1)
 
 
 # --- Server: answering -----------------------------------------------------
@@ -1357,7 +1357,7 @@ func _apply_timer(reader: DotNetReader) -> void:
 func _broadcast(kind: int, body: PackedByteArray) -> void:
 	if net == null or not net.is_server or body.is_empty():
 		return
-	net.send(PlaygroundEvent.of(kind, body), 0)
+	net.send(PlaygroundEvent.new(kind, body), 0)
 
 
 ## To one peer, and never to peer 0.
@@ -1369,7 +1369,7 @@ func _broadcast(kind: int, body: PackedByteArray) -> void:
 func _tell(peer_id: int, kind: int, body: PackedByteArray) -> void:
 	if net == null or not net.is_server or peer_id <= 0 or body.is_empty():
 		return
-	net.send(PlaygroundEvent.of(kind, body), peer_id)
+	net.send(PlaygroundEvent.new(kind, body), peer_id)
 
 
 ## One chat line to one peer. Server side, and what [member DotChatRouter.send_fn] points
