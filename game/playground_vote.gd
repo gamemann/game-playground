@@ -18,6 +18,35 @@ const Playground := preload("playground.gd")
 
 const CHANNEL := "playground.vote"
 
+## Where a server owner configures this game's map vote. Empty skips the file.
+##
+## [b][method vote_rules] is this game's DEFAULTS, not its configuration.[/b] They layer
+## the way every [DotConfig] in the family does, so an owner changes a number without
+## touching code:
+##
+## [codeblock]
+## vote_rules()  <  game.yml metadata: map_vote:  <  this file  <  DOT_VOTE_*  <  --vote-*
+## [/codeblock]
+##
+## The file is JSON, keyed exactly as [DotVoteRules] is, enums by name. The end-of-map
+## vote and its extend option, which is what an owner usually wants to change:
+##
+## [codeblock]
+## {
+##     "end_vote": true,          "vote_lead_sec": 120,
+##     "include_extend": true,    "extend_seconds": 900,    "max_extends": 4
+## }
+## [/codeblock]
+##
+## [code]DOT_VOTE_EXTEND_SECONDS=1200[/code] or [code]--vote-include-extend=false[/code]
+## do the same for one run. A result that does not validate is refused whole and the
+## defaults stand, with the reason in the log.
+const CONFIG_PATH := "user://cfg/playground_vote.json"
+
+## The key in the running game's descriptor metadata an operator's overrides are read
+## from — [code]metadata: map_vote:[/code] in a delivered game's [code]game.yml[/code].
+const METADATA_KEY := "map_vote"
+
 
 ## The vote picked something. The game is what changes to it.
 signal change_due(map_id: StringName)
@@ -32,6 +61,9 @@ var game: Playground = null
 ## How many people are playing. Every threshold in a vote needs it.
 var player_count_fn: Callable = Callable()
 var is_admin_fn: Callable = Callable()
+
+## The file [method setup] layers over the defaults. A test sets it empty.
+var config_path: String = CONFIG_PATH
 
 
 ## The vote's policy. Fifty-five settings, and these are the ones a sandbox changes.
@@ -93,6 +125,21 @@ func setup(p_game: Playground) -> DotResult:
 	if not problem.ok:
 		return problem.wrap("The vote rules are not usable")
 
+	# The owner's layers over the defaults that just validated. A layered result that
+	# does not validate is refused whole and the defaults stand — loud, not fatal,
+	# because a server that would not start over its vote file is one nobody can fix
+	# from a chat window.
+	var layered := rules.layer_over_defaults(
+		config_path, DotVoteGameSource.running_game_metadata(METADATA_KEY)
+	)
+
+	if not layered.ok:
+		DotLog.error(CHANNEL, "the map vote configuration is not usable; using the defaults", {
+			"path": config_path,
+			"why": layered.error.message,
+			"detail": layered.error.detail,
+		})
+
 	director = DotVoteDirector.new()
 	director.name = "Vote"
 	director.rules = rules
@@ -147,8 +194,13 @@ func submit(voter: StringName, token: String) -> DotResult:
 		"rtv":
 			return director.rock_the_vote(voter)
 		"unrtv":
-			director.withdraw_nomination(voter, &"")
-			return DotResult.success(null)
+			# The clock holds rock-the-votes. This used to call withdraw_nomination with
+			# an empty id, which matched nothing, so taking back a rock-the-vote said
+			# "done" and left the vote counted.
+			return (
+				DotResult.success(null) if director.clock.unrock(voter)
+				else DotResult.fail(DotError.CODE_STATE, "You had not rocked the vote.")
+			)
 		"nominate":
 			if parts.size() > 1:
 				return director.nominate(voter, StringName(parts[1]))
@@ -156,6 +208,13 @@ func submit(voter: StringName, token: String) -> DotResult:
 			if parts.size() > 1:
 				return director.cast_one(voter, StringName(parts[1]))
 		"extend":
+			# An admin's, not a player's: extending without a vote is what the ballot's
+			# "extend" option exists to make a decision of the players.
+			if not _is_admin(voter):
+				return DotResult.fail(
+					DotError.CODE_FORBIDDEN, "Only an admin can extend without a vote."
+				)
+
 			return director.extend()
 
 	return DotResult.fail(DotError.CODE_INVALID, "That is not something to vote.")
