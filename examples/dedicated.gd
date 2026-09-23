@@ -87,6 +87,7 @@ func _run() -> void:
 		_test_query()
 		_test_vote()
 		_test_identity()
+		await _test_live_tools()
 		_test_disconnect_is_handled()
 		await _test_module_unloads_cleanly()
 		_test_no_message_preloads_itself()
@@ -1317,6 +1318,81 @@ func _test_identity() -> void:
 	)
 
 
+## dot-moderation's live tools, as an operator types them.
+##
+## The course is timed, so the timer's rule is the one asserted first: noclip abandons a
+## run and taints any run begun under it. Then the arena's half — god and slay mean
+## something only while `pg_arena` is on, and say so when it is off.
+func _test_live_tools() -> void:
+	print("")
+	print("the moderator's live tools")
+
+	_check(
+		server.console.find_command("noclip") != null and server.console.find_command("slay") != null,
+		"the live tools' commands are on the console"
+	)
+
+	var player := game.add_player(&"u77", "Pat")
+	var session := DotClientSession.new()
+	session.peer_id = 7707
+	session.userid = 77
+	session.display_name = "Pat"
+	var _adopted := server.adopt_session(session)
+
+	var stopped: Array[StringName] = []
+	var on_stop := func(_r: DotTimerRun, why: StringName) -> void: stopped.append(why)
+	player.timer.run_stopped.connect(on_stop)
+	player.timer.run.begin(0.0)
+
+	var _on := await _run_command_later("noclip Pat")
+	_check(DotFpsAdminModifiers.is_noclipped(player.controller), "`noclip Pat` puts them in noclip")
+	_check(stopped.has(&"noclip") and not player.timer.run.is_active(),
+		"and abandons the course run they were on", str(stopped))
+
+	player.timer.run.begin(0.0)
+	player._on_simulated(0, player.controller.state)
+	_check(player.timer.run.tainted, "a run begun while noclipped is marked assisted")
+	var _off := await _run_command_later("noclip Pat off")
+	player.timer.run_stopped.disconnect(on_stop)
+	player.timer.stop()
+
+	var arena: PlaygroundArena = _module().get("arena")
+	var was_on := arena.enabled
+	_run_command("pg_arena off")
+	var no_arena := await _run_command_later("god Pat")
+	_check(_said(no_arena, "arena is off"), "`god` with the arena off says why it means nothing",
+		" | ".join(no_arena))
+
+	_run_command("pg_arena on")
+	arena.admit(&"u77", "Pat")
+	var health := arena.health_of(&"u77")
+	var _god := await _run_command_later("god Pat")
+	_check(health != null and health.invulnerable, "with it on, `god Pat` makes them invulnerable")
+	var slain := await _run_command_later("slay Pat")
+	_check(health != null and not health.alive, "and `slay Pat` kills them through it",
+		" | ".join(slain))
+
+	var given := await _run_command_later("give Pat rifle")
+	_check(_said(given, "physics gun"), "`give` says what a player holds here instead",
+		" | ".join(given))
+
+	_run_command("pg_arena %s" % ("on" if was_on else "off"))
+	var _released := server.release_session(session.peer_id)
+	game.remove_player(&"u77")
+
+
+## [method _run_command] for a coroutine handler: the live tools record each action on a
+## punishment store, which may be remote, so the reply can land a frame late.
+func _run_command_later(line: String) -> PackedStringArray:
+	var captured: Array[String] = []
+	var template := DotCmdContext.console("", PackedStringArray())
+	template.reply_sink = func(text: String) -> void: captured.append(text)
+	server.console.execute(line, template)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	return PackedStringArray(captured)
+
+
 func _test_disconnect_is_handled() -> void:
 	print("a client disconnecting reaches the module")
 
@@ -1353,6 +1429,10 @@ func _test_module_unloads_cleanly() -> void:
 	_check(
 		server.console.find_command("pg_status") == null,
 		"and takes its commands with it"
+	)
+	_check(
+		server.console.find_command("noclip") == null,
+		"the live tools' included"
 	)
 	_check(
 		server.console.find_cvar("pg_map_seconds") == null,

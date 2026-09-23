@@ -112,6 +112,9 @@ func _ready() -> void:
 	# to be rearranged when one arrives.
 	controller.drive = DotFpsController.Drive.EXTERNAL
 	controller.tunables = _tunables()
+	# Every player, both ends: an admin's noclip is a modifier whose index travels on the
+	# wire. See dot-player-controller's DotFpsAdminModifiers.
+	controller.admin_abilities = true
 
 	# body_ref left unset, so it defaults to the parent — this node, which is the
 	# Node3D the movement drives. `DotNodeRef.of_self()` looks equivalent and is not:
@@ -452,6 +455,18 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 
 	if timer == null:
 		return
+
+	# An admin's help makes a run assisted, every tick it is on — noclip, or a speed or
+	# gravity step. `taint` is dot-timer's own mark and `can_record` refuses it, so the run
+	# finishes and shows and is never filed. Every tick, because a run begun while the
+	# help is on must carry it too. game-g2gfast's player does the same, for the same
+	# reason; see PlaygroundModTools.
+	if (
+		DotFpsAdminModifiers.is_noclipped(controller)
+		or not is_equal_approx(DotFpsAdminModifiers.speed_of(controller), 1.0)
+		or not is_equal_approx(DotFpsAdminModifiers.gravity_of(controller), 1.0)
+	):
+		timer.taint()
 
 	# The prespeed limit runs INSIDE the simulation: clamping a player's speed
 	# changes where they end up, so it has to happen on the tick, every tick, rather

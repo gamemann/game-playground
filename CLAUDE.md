@@ -32,6 +32,13 @@ a screenshot, which no assertion could have.
 It is also playable: `game/playground.tscn` is a first-person client with a spawn
 menu, a crosshair and a HUD.
 
+
+## The moderator's live tools in a sandbox with a clock in the corner
+
+dot-moderation's live tools are built in the module (`PlaygroundModTools`), because health belongs to the arena layer, which is the module's. Noclip, freeze, speed and gravity are predicted modifiers; god, buddha, hp and slay act on the arena's `DotHealth` and say "the arena is off" when `pg_arena` is — whether they mean anything is a cvar, not a build; slap shoves with or without it; respawn is the course start; teleports end the course run.
+
+The course is timed, so the timer server's rule holds here too: **an admin's help can never make a time.** Noclip abandons the run it interrupts and `PlaygroundPlayer` taints every run while a noclip, a speed step or a gravity step is on. Give and strip are refused: what a player holds here is the physics gun, the gravity gun and a loadout they chose.
+
 ## Layout
 
 ```
@@ -1024,7 +1031,7 @@ godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  84 checks
 godot --headless --path . res://examples/headless_net.tscn          # 117 checks
-godot --headless --path . res://examples/dedicated.tscn             # 172 checks
+godot --headless --path . res://examples/dedicated.tscn             # 181 checks
 ```
 
 **Run the check-only pass first.** A script that fails to parse makes the scene fail

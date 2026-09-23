@@ -1,0 +1,161 @@
+extends RefCounted
+
+const Playground := preload("playground.gd")
+const PlaygroundArena := preload("playground_arena.gd")
+const PlaygroundPlayer := preload("playground_player.gd")
+
+## What dot-moderation's live tools mean in a sandbox with a timed course in the corner.
+##
+## Movement is `DotFpsAdminModifiers`, so the owning client predicts it. Health belongs to
+## the arena layer and exists only while `pg_arena` is on, so god, buddha, hp and slay say
+## "not on this server" when it is off rather than being absent — whether they mean
+## anything is a cvar, not a build. The course is the timer's, and the timer's rule is the
+## one the timer server has: an admin's help can never make a time. Noclip abandons the run
+## in progress, `PlaygroundPlayer` taints any run made while noclipped or on a speed or
+## gravity step, and a teleport by an admin ends the run.
+
+## Ids are the session userid as a string; this game's player key is `u<userid>`.
+static func key_of(id: StringName) -> StringName:
+	return StringName("u%s" % String(id))
+
+
+static func handlers(game: Playground, arena: PlaygroundArena) -> Dictionary:
+	return {
+		DotModTools.ACTION_NOCLIP: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			if p == null:
+				return _absent(id)
+			var on := bool(args["on"])
+			if on and p.timer != null:
+				p.timer.stop(&"noclip")
+			return DotFpsAdminModifiers.set_noclip(p.controller, on),
+
+		DotModTools.ACTION_FREEZE: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			return _absent(id) if p == null else DotFpsAdminModifiers.set_frozen(p.controller, bool(args["on"])),
+
+		DotModTools.ACTION_SPEED: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			return _absent(id) if p == null else DotFpsAdminModifiers.set_speed(p.controller, float(args["scale"])),
+
+		DotModTools.ACTION_GRAVITY: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			return _absent(id) if p == null else DotFpsAdminModifiers.set_gravity(p.controller, float(args["scale"])),
+
+		DotModTools.ACTION_RESPAWN: func(id: StringName, _args: Dictionary) -> DotResult:
+			if _player(game, id) == null:
+				return _absent(id)
+			game.spawn_player(key_of(id))
+			return DotResult.success(null),
+
+		DotModTools.ACTION_RENAME: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			if p == null:
+				return _absent(id)
+			p.display_name = str(args["name"]).strip_edges().substr(0, 32)
+			return DotResult.success(p.display_name),
+
+		DotModTools.ACTION_GOD: func(id: StringName, args: Dictionary) -> DotResult:
+			var health := _health(arena, id)
+			if health == null:
+				return _no_health()
+			health.invulnerable = bool(args["on"])
+			return DotResult.success(health.invulnerable),
+
+		DotModTools.ACTION_BUDDHA: func(id: StringName, args: Dictionary) -> DotResult:
+			var health := _health(arena, id)
+			if health == null:
+				return _no_health()
+			health.cannot_die = bool(args["on"])
+			return DotResult.success(health.cannot_die),
+
+		DotModTools.ACTION_HEALTH: func(id: StringName, args: Dictionary) -> DotResult:
+			var health := _health(arena, id)
+			if health == null:
+				return _no_health()
+			if not health.alive:
+				return DotResult.fail(DotError.CODE_STATE, "They are dead.")
+			health.health = minf(float(args["value"]), 250.0)
+			return DotResult.success(health.health),
+
+		DotModTools.ACTION_SLAY: func(id: StringName, _args: Dictionary) -> DotResult:
+			var health := _health(arena, id)
+			if health == null:
+				return _no_health()
+			if not health.alive:
+				return DotResult.fail(DotError.CODE_STATE, "They are already dead.")
+			var was_god := health.invulnerable
+			var was_buddha := health.cannot_die
+			health.invulnerable = false
+			health.cannot_die = false
+			health.invulnerable_until_tick = -1
+			var damage := arena.hurt(&"", key_of(id), health.health + 1000.0, 0.0)
+			health.invulnerable = was_god
+			health.cannot_die = was_buddha
+			if damage == null or not damage.lethal:
+				return DotResult.fail(DotError.CODE_STATE, "The slay was refused.",
+					damage.refusal if damage != null else "")
+			return DotResult.success(null),
+
+		DotModTools.ACTION_SLAP: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			if p == null:
+				return _absent(id)
+			# A shove is movement, which every server here has; the damage is the arena's.
+			p.controller.state.velocity += Vector3(3.0, 5.0, 3.0)
+			p.controller.state.mode = DotFpsState.Mode.AIR
+			var amount := float(args.get("damage", 0.0))
+			if amount > 0.0 and _health(arena, id) != null:
+				var _hurt := arena.hurt(&"", key_of(id), amount, 0.0)
+			return DotResult.success(null),
+	}
+
+
+static func unsupported() -> Dictionary:
+	return {
+		DotModTools.ACTION_GIVE: "what a player holds here is the physics gun, the gravity gun and a loadout they choose",
+		DotModTools.ACTION_STRIP: "a sandbox player without the physics gun has no game",
+		DotModTools.ACTION_BURN: "nothing here burns a player",
+		DotModTools.ACTION_BLIND: "the client draws no overlay a server could turn on",
+		DotModTools.ACTION_BEACON: "the client draws no marker a server could turn on",
+	}
+
+
+static func position_of(game: Playground, id: StringName) -> Variant:
+	var p := _player(game, id)
+	return p.controller.state.position if p != null and not p.riding else null
+
+
+## An admin moving somebody is a player leaving the course, so the run ends.
+static func teleport(game: Playground, id: StringName, to: Variant) -> void:
+	var p := _player(game, id)
+
+	if p == null or p.riding or not (to is Vector3):
+		return
+
+	p.teleport(to as Vector3, p.controller.state.yaw)
+
+	if p.timer != null:
+		p.timer.stop(DotTimer.REASON_TELEPORT)
+
+
+static func _player(game: Playground, id: StringName) -> PlaygroundPlayer:
+	return game.players.get(key_of(id)) if game != null else null
+
+
+static func _health(arena: PlaygroundArena, id: StringName) -> DotHealth:
+	if arena == null or not arena.enabled:
+		return null
+	return arena.health_of(key_of(id))
+
+
+static func _absent(id: StringName) -> DotResult:
+	return DotResult.fail(DotError.CODE_STATE, "Player %s is not in the world." % String(id))
+
+
+static func _no_health() -> DotResult:
+	return DotResult.fail(
+		DotError.CODE_UNSUPPORTED,
+		"The arena is off, so nobody has health.",
+		"pg_arena on"
+	)

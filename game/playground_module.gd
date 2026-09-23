@@ -5,6 +5,7 @@ const PlaygroundPaths := preload("playground_paths.gd")
 const Playground := preload("playground.gd")
 const PlaygroundArena := preload("playground_arena.gd")
 const PlaygroundDowns := preload("playground_downs.gd")
+const PlaygroundModTools := preload("playground_mod_tools.gd")
 const PlaygroundNetBridge := preload("net/playground_net_bridge.gd")
 const PlaygroundPlatform := preload("playground_platform.gd")
 const PlaygroundPlayer := preload("playground_player.gd")
@@ -53,6 +54,12 @@ var services: PlaygroundServices = null
 
 ## Health, weapons that hurt, and a round. Off unless an operator turns it on.
 var arena: PlaygroundArena = null
+
+## dot-moderation's live tools, with this game's verbs (`PlaygroundModTools`), and their
+## commands. Built in the module rather than the services layer because health lives in
+## the arena layer, which is the module's.
+var mod_tools: DotModTools = null
+var mod_commands: DotModToolCommands = null
 
 ## NPCs the server releases, paced by a director. Also off by default.
 var waves: PlaygroundWaves = null
@@ -453,6 +460,8 @@ func _build_extras() -> DotResult:
 		spectate.on_death(victim, at, killer)
 	)
 	arena.clock_changed.connect(bridge.broadcast_match)
+
+	_build_mod_tools()
 
 	waves = PlaygroundWaves.new()
 	waves.name = "Waves"
@@ -947,8 +956,40 @@ func _welcome(session: DotClientSession) -> void:
 ## It survived because nothing had ever disconnected from this module: `dedicated.tscn`
 ## adds its players directly and tears the module down at the end. The default keeps it
 ## callable from anything that emits only the session.
+func _build_mod_tools() -> void:
+	mod_tools = DotModTools.new()
+	mod_tools.name = "ModTools"
+	mod_tools.register_service = false
+	mod_tools.manager = services.moderation if services != null else null
+	mod_tools.immunity_fn = func(id: StringName) -> int:
+		var session := server.session_by_userid(String(id).to_int()) if String(id).is_valid_int() else null
+		return session.immunity if session != null else 0
+	mod_tools.position_fn = func(id: StringName) -> Variant:
+		return PlaygroundModTools.position_of(game, id)
+	mod_tools.teleport_fn = func(id: StringName, to: Variant) -> void:
+		PlaygroundModTools.teleport(game, id, to)
+
+	var table := PlaygroundModTools.handlers(game, arena)
+	for action: Variant in table:
+		mod_tools.handlers[action] = table[action]
+
+	var refusals := PlaygroundModTools.unsupported()
+	for action: Variant in refusals:
+		mod_tools.unsupported_reasons[action] = refusals[action]
+
+	add_child(mod_tools)
+
+	mod_commands = DotModToolCommands.install(self, mod_tools, server)
+	mod_commands.alive_fn = func(id: StringName) -> bool:
+		var health := arena.health_of(PlaygroundModTools.key_of(id)) if arena != null else null
+		return health == null or health.alive
+
+
 func _on_client_disconnected(session: DotClientSession, _reason: String = "") -> void:
 	var id := _player_id(session)
+
+	if mod_tools != null:
+		mod_tools.forget(StringName(str(session.userid)))
 
 	# [b]Off the broadcast set first.[/b] Everything below announces something about this
 	# person to everybody ELSE, and their socket has already gone.
