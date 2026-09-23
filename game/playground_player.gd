@@ -365,11 +365,36 @@ func set_style(movement: DotFpsStyle, ranking: DotTimerStyle) -> DotResult:
 ##
 ## Used by a respawn zone, a teleport zone, an admin, and the spawn on map load.
 func teleport(to: Vector3, yaw: float = INF) -> void:
-	controller.state.position = to
-	controller.state.velocity = Vector3.ZERO
+	# [b]Through the controller's own teleport, and then the view is told too.[/b]
+	#
+	# This used to write `controller.state` directly, and a yaw written there lasts
+	# exactly until the next tick. Commands carry ABSOLUTE view angles, so the tick
+	# after a teleport sets the yaw back to whatever the command says: for a client,
+	# this player's own `sampler`, which had never been told and still faced wherever
+	# the mouse last left it; for a bot or any player with no command that tick,
+	# `DotFpsController`'s starved-tick substitute, which is a fresh command facing yaw
+	# 0. So every derived spawn yaw on every map here — the tower's, the circuit's,
+	# the switchback's, each with a paragraph about its sign convention — was true for
+	# no ticks at all, and the one check on it passed because it read the yaw BEFORE a
+	# tick had run. `headless_playground::_the_spawn_yaw_survives_a_tick` is the check
+	# that reads it after.
+	#
+	# `DotFpsController.teleport` also drops the smoothing and puts the player in the
+	# air, which a direct write did not: a player moved while grounded kept a ground
+	# state for a tick at a height with no ground under it.
+	controller.teleport(to, yaw)
 
-	if is_finite(yaw):
-		controller.state.yaw = yaw
+	if sampler != null:
+		sampler.look_at_angles(controller.state.yaw, controller.state.pitch)
+	else:
+		# Nothing samples this player, so leave it HOLDING STILL and facing where it was
+		# put. Not left null: a null command is a starved tick and faces north. And not
+		# the command it had: a bot that was holding forward when it fell off a course
+		# is otherwise respawned already running off the pad.
+		var hold := DotFpsCommand.new()
+		hold.yaw = controller.state.yaw
+		hold.pitch = controller.state.pitch
+		controller.apply_command(hold)
 
 	global_position = to
 

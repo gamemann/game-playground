@@ -103,6 +103,26 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(86.0, 11.0, -34.0),
 				"at": Vector3(0.0, 3.0, -38.0),
 			},
+			# Bonus 2, the switchback: three legs climbing west-east-west up to the
+			# finish at 9 m. From the south and well above, looking down at forty
+			# degrees. [b]The first attempt was from the south-west at twenty
+			# degrees and 47 m out[/b], and a 3 m block at that range and angle is a
+			# sliver on the horizon: the route was a smudge beside the main run's
+			# much bigger blocks. Down at it is the only angle where the three legs
+			# and both turns are separate things.
+			{
+				"name": "pg_bhop_intro_switchback",
+				"from": Vector3(-36.0, 27.0, -12.0),
+				"at": Vector3(-36.5, 4.0, 4.0),
+			},
+			# The first turn from beside it, at the height of the leg it turns onto:
+			# the frame that says whether a turning block reads as a turn rather than
+			# as one more block in a line.
+			{
+				"name": "pg_bhop_intro_switchback_turn",
+				"from": Vector3(-58.0, 9.0, 18.0),
+				"at": Vector3(-42.0, 4.0, 4.0),
+			},
 		]
 
 	if id == "pg_surf_intro":

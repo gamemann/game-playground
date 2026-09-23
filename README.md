@@ -69,9 +69,9 @@ Saving a checkpoint is free. *Restoring* one costs you the run, and the HUD says
 
 ## The maps
 
-- **pg_lobby** is the sandbox. A 200-metre plate to build on, a staircase, a walkable ramp and one steep enough to learn to surf on, and out in one corner a nine-platform jump course with a start line, a split and a finish. The course is on **bonus 1** and the main track has no timer at all, so building is never timed and the minigame is one **T** away. It is also what says the timer is not a surf-and-bhop thing: nothing about a jump course is a movement genre.
+- **pg_lobby** is the sandbox. A 200-metre plate to build on, a staircase, a walkable ramp and one steep enough to learn to surf on, and out in one corner a twelve-platform jump course with a start line, two splits and a finish. The course is on **bonus 1**, a spiral tower is on **bonus 2**, a driving circuit round the plate is on **bonus 3** and the main track has no timer at all, so building is never timed and the minigame is one **T** away. It is also what says the timer is not a surf-and-bhop thing: nothing about a jump course is a movement genre.
 - **pg_surf_intro** is two ramps meeting in a valley. Drop in, hold a strafe, keep your speed to the bottom.
-- **pg_bhop_intro** is blocks with gaps that widen. The later ones need the speed you kept from the earlier ones.
+- **pg_bhop_intro** is blocks with gaps that widen. The later ones need the speed you kept from the earlier ones. **The narrows** on bonus 1 keeps the gap and takes the blocks away sideways; **the switchback** on bonus 2 climbs a hillside in three legs joined by two turning blocks, so every leg ends in a quarter turn you have to jump out of.
 
 ## Setting up
 

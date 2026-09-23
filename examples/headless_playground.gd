@@ -42,19 +42,12 @@ const PlaygroundWeapons := preload("../game/playground_weapons.gd")
 
 const TICK := 1.0 / 128.0
 
-## How close to the tower's first platform the bot jumps, in metres.
-##
-## Its inner edge is 1.1 m from its centre, so this is about a metre and a half of
-## take-off — a comfortable jump rather than a perfect one, which is what a check about
-## whether the course is REACHABLE should ask for.
-const TOWER_TAKE_OFF := 2.6
-
 ## Preloaded rather than named: the built-in maps have no `class_name`, deliberately
 ## — they are content, and a map that reserved a global identifier in every consuming
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 324
+const CHECKS := 347
 
 var _passed := 0
 var _failed := 0
@@ -109,6 +102,7 @@ func _run() -> void:
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
+	await _test_the_switchback()
 	await _test_the_client_boots()
 
 	print("")
@@ -983,40 +977,20 @@ func _test_the_tower(playground: Playground, zones: DotTimerZoneSet) -> void:
 		"and somewhere to land when you come off it"
 	)
 
-	# A jump at the controller's own numbers. Airborne time is 2 * v / g with
-	# v = sqrt(2 * g * jump_height), so the reach is that time at the ground speed.
-	var tunables := DotFpsTunables.new()
-	var rise_speed := sqrt(2.0 * tunables.gravity * tunables.jump_height)
-	var airborne := 2.0 * rise_speed / tunables.gravity
-	var reach := tunables.max_speed * airborne
-
-	var widest := 0.0
-	var tallest := 0.0
-	var previous := Vector3(
-		PgLobby.TOWER_X, PgLobby.TOWER_BASE_Y, PgLobby.TOWER_Z
-	)
-
-	for i in range(PgLobby.TOWER_STEPS):
-		var at := PgLobby.tower_platform_centre(i)
-		var flat := Vector3(at.x - previous.x, 0.0, at.z - previous.z)
-
-		# Edge to edge, not centre to centre. What a player has to clear is the air
-		# between the platforms, and a check on centres quietly passes a course whose
-		# platforms shrank.
-		widest = maxf(widest, flat.length() - PgLobby.TOWER_PLATFORM.x)
-		tallest = maxf(tallest, at.y - previous.y)
-		previous = at
-
-	_check(
-		widest < reach,
-		"every gap on the spiral is inside a jump",
-		"widest %.2f m against a %.2f m reach" % [widest, reach]
-	)
-	_check(
-		tallest < tunables.jump_height,
-		"and no step is also a wall",
-		"tallest %.2f m against a %.2f m jump" % [tallest, tunables.jump_height]
-	)
+	# [b]Every jump on the spiral, measured box to box against the CLIMBING reach.[/b]
+	#
+	# What stood here until 2026-09-23 was the error `[reach-1]` found on the jump course
+	# two days earlier, one corner over and never asked about: it took the reach from a
+	# FLAT jump (airborne 2v/g) off a `DotFpsTunables.new()` — the addon's defaults, with
+	# a jump height of 1.1 where the server applies 1.15 — and called 4.64 m a jump on a
+	# course that climbs 0.6 m a step, where the real number is 4.02. Then it measured
+	# the pad-to-first-platform step centre to centre minus a width, which called 0.2 m
+	# of air 3.8 m, and stopped at the sixteenth platform, so the inward jump onto the
+	# finish cap — the widest gap on the tower — was never measured by anything. The
+	# geometry happened to be fine. The check would have passed a 4.5 m gap nobody can
+	# cross, and `_the_old_tower_rule_passes_an_unjumpable_gap` below says so.
+	_check_route_reach(PgLobby.tower_route(), "the tower")
+	_the_old_tower_rule_passes_an_unjumpable_gap()
 
 	# The splits are HEIGHT bands, and the reason is that a vertical line across a
 	# spiral is crossed twice per turn. Two bands at the same height would be the same
@@ -1046,6 +1020,232 @@ func _test_the_tower(playground: Playground, zones: DotTimerZoneSet) -> void:
 		absf(finish.x - PgLobby.TOWER_X) < 0.01
 			and absf(finish.z - PgLobby.TOWER_Z) < 0.01,
 		"and it finishes in the middle, so the last jump is a different jump"
+	)
+
+
+## Whether a jump of [param gap] metres of clear air, landing [param rise] higher, is one
+## the movement makes. The one rule every route sweep below asks.
+static func _jump_is_inside(gap: float, rise: float) -> bool:
+	return rise < PgLobby.JUMP_HEIGHT and gap <= PgLobby.jump_reach(rise)
+
+
+## Sweeps every jump on a route — a list of the boxes a player lands on, in order — and
+## asserts each is inside [method _jump_is_inside]. Two checks, and it PRINTS the worst
+## jump whether it passes or not, because a check's detail line shows only on failure and
+## the number is the thing a person re-tuning the course needs.
+##
+## Also asserts the rule itself: a jump halfway between the climbing reach and what a
+## flat jump off the addon's default tunables says is refused. That is the arithmetic the
+## tower was checked with until 2026-09-23, so this is the check that fails if the rule is
+## ever "simplified" back to it.
+func _check_route_reach(route: Array[AABB], name: String) -> void:
+	var worst := -INF
+	var worst_at := -1
+	var worst_gap := 0.0
+	var worst_rise := 0.0
+	var tallest := 0.0
+	var inside := true
+
+	for i in range(1, route.size()):
+		var gap := PgLobby.gap_between(route[i - 1], route[i])
+		var rise := route[i].end.y - route[i - 1].end.y
+		tallest = maxf(tallest, rise)
+
+		if not _jump_is_inside(gap, rise):
+			inside = false
+
+		# The tightest jump, as a fraction of the reach it has to be made in.
+		var reach := PgLobby.jump_reach(rise)
+		var used := gap / reach if reach > 0.0 else INF
+
+		if used > worst:
+			worst = used
+			worst_at = i
+			worst_gap = gap
+			worst_rise = rise
+
+	print("    %s: %d jumps, the tightest is #%d, %.2f m of air %.2f m up against a %.2f m reach (%.0f%%)" % [
+		name, route.size() - 1, worst_at, worst_gap, worst_rise,
+		PgLobby.jump_reach(worst_rise), worst * 100.0,
+	])
+
+	_check(
+		inside,
+		"every jump on %s is inside the climbing reach, box to box" % name,
+		"jump #%d is %.2f m of air %.2f m up against a %.2f m reach"
+			% [worst_at, worst_gap, worst_rise, PgLobby.jump_reach(worst_rise)]
+	)
+	_check(
+		tallest < PgLobby.JUMP_HEIGHT,
+		"and no step on %s is also a wall" % name,
+		"tallest %.2f m against a %.2f m jump apex" % [tallest, PgLobby.JUMP_HEIGHT]
+	)
+
+
+## The old tower rule, kept only to be refused: flat airtime, addon default tunables.
+func _the_old_tower_rule_passes_an_unjumpable_gap() -> void:
+	var defaults := DotFpsTunables.new()
+	var launch := sqrt(2.0 * defaults.gravity * defaults.jump_height)
+	var old_reach := defaults.max_speed * 2.0 * launch / defaults.gravity
+	var real_reach := PgLobby.jump_reach(PgLobby.TOWER_RISE)
+	var between := (old_reach + real_reach) * 0.5
+
+	_check(
+		between < old_reach and not _jump_is_inside(between, PgLobby.TOWER_RISE),
+		"a %.2f m gap a tower step up, which the old flat-jump rule passed, is refused" % between,
+		"old reach %.2f, climbing reach %.2f" % [old_reach, real_reach]
+	)
+
+
+## Drives a bot along a route of standable boxes, steering by yaw every tick.
+##
+## [b]This is what the spiral needed, and it is not air-strafing.[/b] The written reason
+## bonus 2 had no drive was that "a spiral is finished by air-strafing round a corner",
+## and that was a description of the BOT, not of the course: every bot here held one yaw
+## for its whole run, so a course that turned was one it could only ever fall off. A
+## course whose gaps are half a reach needs no carried speed at all — it needs a player
+## who faces the next platform before jumping at it, and a scripted bot can do that
+## exactly, reading the route off the map.
+##
+## Three rules, and each is a thing a player does:
+##
+## - **Face the next box's centre, every tick, in the air too.** On the ground that
+##   turns the run; in the air it is a brake as much as a steer — `air_accelerate` is
+##   100 with a 1 m/s wish cap, so a wish pointed back at a centre the bot has passed
+##   takes its speed off within a few ticks, and it lands near the middle rather than
+##   off the far side.
+## - **Jump on the last grounded tick before the edge**, judged by a point
+##   [param look_ahead] metres ahead along the heading leaving the box it stands on.
+##   Not jump held: see `_jumping_at` for why that gets a bot nowhere.
+## - **What it stands on is decided by where it is**, not by a counter. A bot that falls
+##   onto a lower turn of a spiral simply resumes from there, which is how a respawn
+##   and a missed landing both come out right without a special case.
+##
+## Returns `{started, finished, splits, reached, ticks, respawns}`; `reached` is the
+## highest box index stood on, reported so a failure names the jump.
+func _drive_route(
+	player: PlaygroundPlayer, route: Array[AABB], max_ticks: int,
+	look_ahead: float = 0.3
+) -> Dictionary:
+	# Arrays, not locals: a GDScript lambda captures by value.
+	var started: Array[bool] = [false]
+	var finished: Array[bool] = [false]
+	var splits: Array[int] = []
+	var respawns: Array[int] = [0]
+
+	var on_start := func(_run: DotTimerRun) -> void: started[0] = true
+	var on_stage := func(number: int, _split: float) -> void: splits.append(number)
+	var on_finish := func(_run: DotTimerRun) -> void: finished[0] = true
+	var on_effect := func(id: StringName, zone: DotTimerZone) -> void:
+		if id == player.player_id and zone.kind == DotTimerZone.Kind.RESPAWN:
+			respawns[0] += 1
+
+	player.timer.run_started.connect(on_start)
+	player.timer.stage_reached.connect(on_stage)
+	player.timer.run_finished.connect(on_finish)
+	playground.timers.effect_requested.connect(on_effect)
+
+	var on := 0
+	var reached := 0
+	var ticks := 0
+
+	for tick in range(max_ticks):
+		ticks = tick
+		var at := player.global_position
+		var grounded := player.controller.state.is_grounded()
+
+		if grounded:
+			# Highest first: on a spiral a box is directly under another one.
+			for i in range(route.size() - 1, -1, -1):
+				if _standing_on(at, route[i]):
+					on = i
+					break
+
+		reached = maxi(reached, on)
+
+		var target := route[mini(on + 1, route.size() - 1)]
+		var aim := target.get_center()
+		var heading := Vector3(aim.x - at.x, 0.0, aim.z - at.z)
+
+		# Wish along the ERROR, not along the heading: the velocity it wants minus the
+		# one it has. On the ground that turns a run 45 degrees in a few ticks instead
+		# of carrying the last jump's direction into this one — which is how the first
+		# version of this fell off platform 4 every time. In the air it is the only
+		# steer there is: a wish along the velocity adds nothing once the speed is past
+		# `max_air_wish_speed`, and a wish across it is what air control is for.
+		var velocity := player.controller.state.velocity
+		var flat := Vector3(velocity.x, 0.0, velocity.z)
+		var want := heading.normalized() * PgLobby.MOVE_SPEED
+		var wish := want - flat
+
+		if wish.length() < 0.2:
+			wish = heading
+
+		var command := DotFpsCommand.new()
+		command.move = Vector2(0.0, 1.0)
+		command.yaw = rad_to_deg(atan2(-wish.x, -wish.z))
+
+		# Jump on the last grounded tick before the edge, judged along where the bot is
+		# actually going rather than where it is facing — OR once the next box is
+		# within a body's reach, whichever comes first.
+		#
+		# The second half is the tower's first jump. The pad's corner is 0.2 m from the
+		# first platform's and that platform's UNDERSIDE is 0.2 m above the pad, so a
+		# jump taken at the lip puts the body into the platform's side face on the way
+		# up and kills every bit of horizontal speed: the first version of this bot
+		# bonked on it, dropped off the corner, and was respawned. A player jumps a
+		# ledge like that from a stride back, and so does this.
+		if grounded and on < route.size() - 1:
+			var going := flat if flat.length() > 0.5 else heading
+			var ahead := at + going.normalized() * look_ahead
+			var close := PgLobby.gap_between(AABB(at, Vector3.ZERO), target) < 1.0
+			if close or not _over(ahead, route[on]):
+				command.set_button(DotFpsCommand.BUTTON_JUMP, true)
+
+		player.controller.apply_command(command)
+		await get_tree().physics_frame
+
+		if finished[0]:
+			# The finish zone reaches a metre under the pad, so a run can end in the
+			# air over it before the bot has ever stood there.
+			reached = route.size() - 1
+			break
+
+	player.timer.run_started.disconnect(on_start)
+	player.timer.stage_reached.disconnect(on_stage)
+	player.timer.run_finished.disconnect(on_finish)
+	playground.timers.effect_requested.disconnect(on_effect)
+
+	# And stop driving. A bot keeps the last command it was given — this file has been
+	# bitten by that once already — so a route drive leaves it standing still.
+	player.controller.apply_command(DotFpsCommand.new())
+
+	return {
+		"started": started[0],
+		"finished": finished[0],
+		"splits": splits,
+		"reached": reached,
+		"ticks": ticks,
+		"respawns": respawns[0],
+	}
+
+
+## Whether a point is over a box seen from above.
+static func _over(at: Vector3, box: AABB) -> bool:
+	return (
+		at.x >= box.position.x and at.x <= box.end.x
+		and at.z >= box.position.z and at.z <= box.end.z
+	)
+
+
+## Whether a grounded player at [param at] is standing on [param box]: over it, with a
+## margin for the body's radius past the edge, and at its top surface.
+static func _standing_on(at: Vector3, box: AABB) -> bool:
+	var margin := 0.4
+	return (
+		at.x >= box.position.x - margin and at.x <= box.end.x + margin
+		and at.z >= box.position.z - margin and at.z <= box.end.z + margin
+		and absf(at.y - box.end.y) < 0.35
 	)
 
 
@@ -1969,17 +2169,18 @@ func _test_the_sandbox_and_its_course() -> void:
 	)
 
 
-## A bot actually gets onto bonus 2's first platform.
+## A bot climbs bonus 2 from its pad to the cap on top of the pillar.
 ##
-## [b]Only the first jump, and that is the honest limit of a bot here.[/b] A spiral is
-## finished by air-strafing round a corner, which is a human skill and not something a
-## bot holding forward can do — a test that pretended otherwise would either fail for
-## ever or be quietly relaxed until it meant nothing. What a bot CAN prove is the pair of
-## things the geometry could get wrong on its own: that the spawn faces the course, and
-## that the first platform is reachable from the pad by running at it and jumping.
+## [b]Until 2026-09-23 this was "only the first jump, and that is the honest limit of a
+## bot here", and the limit was the bot's.[/b] The written reason was that a spiral is
+## finished by air-strafing round a corner. Measured, it is not: every gap on the tower
+## is 2.04 m of air against a 4.02 m climbing reach, so nobody has to carry any speed
+## round anything — they have to FACE the next platform before jumping at it, which is
+## a thing a scripted bot can do exactly and which no bot in this family had ever been
+## written to do. Every one held a single yaw for its whole run. See [method _drive_route].
 ##
-## Both are invisible to every count. A spawn facing the pillar and a first platform half
-## a metre too far both give a course that looks perfect and cannot be started.
+## What this still proves before it drives, and both are invisible to every count: the
+## spawn faces the course, and it is outside the pillar.
 func _walk_the_tower(player: PlaygroundPlayer) -> void:
 	var track := DotTimerTrack.BONUS_FIRST + 1
 
@@ -2017,74 +2218,45 @@ func _walk_the_tower(player: PlaygroundPlayer) -> void:
 			% facing.dot(toward)
 	)
 
-	# Run first, jump at the edge. NOT jump held down from the start.
-	#
-	# [b]Holding jump is how a bot gets nowhere in an arena-shooter controller, and it is
-	# worth writing down.[/b] The first version held it, and the bot hopped in place at
-	# exactly 1.00 m/s for six hundred ticks: air acceleration only rewards strafing, so
-	# a player who never touches the ground and only holds forward never accelerates.
-	# The movement was behaving perfectly and the test was asking for something no
-	# player does either.
-	var run := DotFpsCommand.new()
-	run.move = Vector2(0.0, 1.0)
-	run.yaw = spawn.destination_yaw
+	var route := PgLobby.tower_route()
 
-	# A bit field, not a `jump` property. `cmd.jump = true` assigns nothing and pushes
-	# an error — which the first version of this did, and the run still exited 0 because
-	# a script error inside a test aborts that test rather than the suite.
-	var leap := run.duplicate_command()
-	leap.set_button(DotFpsCommand.BUTTON_JUMP, true)
+	# 16 platforms and a cap at roughly a second a jump is ~2,200 ticks; 4,000 leaves
+	# room for a fall onto a lower turn and the climb back, without being so long that a
+	# stuck bot takes a minute to say so.
+	var drive: Dictionary = await _drive_route(player, route, 4000)
 
-	# An Array, not a bool: a GDScript lambda captures by value, and while nothing here
-	# is a lambda, this file has been bitten by that often enough that the habit is
-	# cheaper than remembering which loops are safe.
-	var reached: Array[bool] = [false]
+	print("    the tower: platform %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
 
-	# Jumped when close enough to the platform and standing on something.
-	#
-	# Distance to the target rather than distance from the pad's centre, because the
-	# pad is a square and the course runs off one of its CORNERS — a radius from the
-	# middle is a different number in every direction and would have the bot taking off
-	# a metre early on the diagonal. And only while grounded, because the controller
-	# only jumps on a tick it is standing on something.
-	for _tick in range(240):
-		var to_platform := Vector3(
-			player.global_position.x - first.x, 0.0, player.global_position.z - first.z
-		).length()
-
-		var jumping := (
-			player.controller.state.is_grounded() and to_platform < TOWER_TAKE_OFF
-		)
-
-		player.controller.apply_command(
-			(leap if jumping else run).duplicate_command()
-		)
-
-		await get_tree().physics_frame
-
-		# Whether it was EVER over the platform, not where it ends up.
-		#
-		# A bot holding forward runs straight, and this course turns — so it crosses
-		# platform 0, carries on over the far edge and falls. The first version of this
-		# check looked at the final position and reported 6.90 m for a bot that had
-		# been dead centre on the platform seventy ticks earlier. Reaching it is the
-		# question; staying on a spiral is a human's job.
-		if not reached[0]:
-			var over := Vector3(
-				player.global_position.x - first.x,
-				0.0,
-				player.global_position.z - first.z
-			).length()
-
-			reached[0] = (
-				over < PgLobby.TOWER_PLATFORM.x * 0.5
-				and player.global_position.y >= first.y + PgLobby.TOWER_PLATFORM.y * 0.5
-			)
-
+	_check(drive["started"], "leaving the tower's pad starts a run on bonus 2")
 	_check(
-		reached[0],
+		int(drive["reached"]) >= 1,
 		"and a bot running off the pad reaches the first platform",
-		"never got over it; the spawn faces it and the gap is supposed to be jumpable"
+		"never got onto one; the spawn faces it and the gap is 0.2 m"
+	)
+	_check(
+		drive["splits"] == [1, 2],
+		"it climbs through both height bands, in order",
+		str(drive["splits"])
+	)
+	_check(
+		drive["finished"],
+		"and reaches the cap on the pillar: bonus 2 run end to end",
+		"got to box %d of %d at y %.1f in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.y, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns; a drive that finishes on its third attempt is a drive that is lucky"
+			% int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
 	)
 
 
@@ -2127,9 +2299,12 @@ func _test_the_narrows() -> void:
 		", ".join(zones.problems()))
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
-			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST]
+			[
+				DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST,
+				PgBhopIntro.SWITCHBACK_TRACK,
+			]
 		),
-		"and both of its routes can be run",
+		"and all three of its routes can be run, the switchback included",
 		str(zones.playable_tracks())
 	)
 
@@ -2742,6 +2917,11 @@ func _test_the_jump_course() -> void:
 			% [PgLobby.widest_gap(), reach]
 	)
 
+	# And box to box, pad and finish pad included. `widest_gap` above reads the ramp
+	# the platforms are placed by; this reads the platforms, so a pad resized or a
+	# finish moved is asked about too.
+	_check_route_reach(PgLobby.course_route(), "the jump course")
+
 	_check(player.timer.set_track(track), "the course's track switches")
 	playground.spawn_player(&"bot")
 	await get_tree().physics_frame
@@ -2847,6 +3027,173 @@ static func _jumping_on_the_course(z: float) -> bool:
 			return true
 
 	return false
+
+
+# --- The switchback ---------------------------------------------------------
+
+## `pg_bhop_intro`'s bonus 2, driven start to finish by a bot that turns.
+##
+## [b]The first route in this family built to be turned round and run by a bot.[/b] The
+## narrows, the plunge and `the needle` in game-g2gfast are all straight, and each says
+## so as a design decision: a bot that holds one yaw cannot run a route that turns. The
+## tower on `pg_lobby` showed that was a limit of the bots rather than of routes, and
+## this is the first route designed after that was known: three legs joined by two
+## quarter turns, climbing 7 m, driven by [method _drive_route] reading the map's own
+## [method PgBhopIntro.switchback_route].
+##
+## The zones are walked on this track by NAME rather than by trusting `problems()` —
+## `[track-zone-1]`: a set complete for one track and partial for another passes a
+## per-zone check while being a route nobody can finish.
+func _test_the_switchback() -> void:
+	print("")
+	print("the switchback — pg_bhop_intro's bonus 2, run end to end")
+
+	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
+	_check(loaded.ok, "the bhop map loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgBhopIntro.SWITCHBACK_TRACK
+	var zones := PgBhopIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2},
+		"bonus 2 has a start, a finish, a spawn, a respawn and two splits, on its own track",
+		str(kinds)
+	)
+	_check(
+		playground.tracks_on_this_map() == [
+			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track,
+		],
+		"and the game sees three tracks on the map without being told",
+		str(playground.tracks_on_this_map())
+	)
+
+	var route := PgBhopIntro.switchback_route()
+	_check_route_reach(route, "the switchback")
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	_check(player.timer.set_track(track), "the switchback's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	var first := route[1].get_center()
+	var toward := Vector3(
+		first.x - player.global_position.x, 0.0, first.z - player.global_position.z
+	).normalized()
+	_check(
+		player.aim_direction().dot(toward) > 0.9,
+		"facing the first block",
+		"dot %.2f; yaw %.1f, the spawn says %.1f"
+			% [player.aim_direction().dot(toward), player.controller.state.yaw,
+				spawn.destination_yaw]
+	)
+
+	# Fourteen jumps at about a second each is ~1,800 ticks.
+	var drive: Dictionary = await _drive_route(player, route, 4000)
+
+	print("    the switchback: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 2")
+	_check(
+		drive["splits"] == [1, 2],
+		"it turns through both turning blocks' splits, in order",
+		str(drive["splits"])
+	)
+	_check(
+		drive["finished"],
+		"and reaches the finish pad: the switchback run end to end",
+		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.x, player.global_position.y,
+				player.global_position.z, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+
+
+## A spawn's yaw, read after the simulation has run rather than before it.
+##
+## [b]Every spawn-yaw check in this file used to read the yaw on the tick it was set,
+## and that is the only tick it was ever true.[/b] `PlaygroundPlayer.teleport` wrote
+## `controller.state.yaw` directly, and a command carries absolute view angles — so the
+## next tick set it back to whatever the command said. A client's sampler had never been
+## told and still faced where the mouse last left it; a bot with no command got the
+## controller's starved-tick substitute, a fresh command facing yaw 0. Both are asked
+## here, and both failed before the fix: this section's own "facing the first block"
+## read `yaw 0.0, the spawn says 90.0` once the bot had been standing on a map for a
+## while, and passed on a freshly-added one only because its controller had not started
+## ticking yet.
+func _the_spawn_yaw_survives_a_tick(
+	player: PlaygroundPlayer, spawn: DotTimerZone
+) -> void:
+	var still := 8
+
+	# A bot: nothing samples it and nothing is applied for eight ticks.
+	playground.spawn_player(player.player_id)
+	for _i in range(still):
+		await get_tree().physics_frame
+
+	_check(
+		absf(angle_difference(
+			deg_to_rad(player.controller.state.yaw), deg_to_rad(spawn.destination_yaw)
+		)) < 0.01,
+		"a bot's spawn yaw is still the spawn's %d ticks later" % still,
+		"yaw %.1f, the spawn says %.1f"
+			% [player.controller.state.yaw, spawn.destination_yaw]
+	)
+
+	# A client: a sampler that last faced somewhere else, applied every tick the way
+	# `PlaygroundPlayer.simulate` applies a real one.
+	var sampler := DotFpsSampler.new(player.controller.tunables)
+	DotFpsSampler.register_default_actions(sampler)
+	sampler.look_at_angles(spawn.destination_yaw - 90.0, 0.0)
+	player.sampler = sampler
+
+	playground.spawn_player(player.player_id)
+	for _i in range(still):
+		await get_tree().physics_frame
+
+	_check(
+		absf(angle_difference(
+			deg_to_rad(player.controller.state.yaw), deg_to_rad(spawn.destination_yaw)
+		)) < 0.01,
+		"and so is a client's, whose sampler was facing 90 degrees away",
+		"yaw %.1f, the spawn says %.1f"
+			% [player.controller.state.yaw, spawn.destination_yaw]
+	)
+
+	player.sampler = null
+	playground.spawn_player(player.player_id)
+	await get_tree().physics_frame
 
 
 func _test_the_client_boots() -> void:

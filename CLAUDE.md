@@ -24,8 +24,9 @@ game, drives a bot down a surf map, finishes a run, files it, ranks it, spawns p
 and checks their bodies were built from their definitions, opens the spawn menu on a
 real `DotScreenStack` and clicks a prop in it, runs the sandbox's own course and falls
 off it, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a
-script path, and changes the map underneath all of it. **183 checks, and it has now
-found nine real bugs — three of them in other repositories.** Three more were found by
+script path, and changes the map underneath all of it. **347 checks, and it has now
+found nine real bugs — three of them in other repositories** — which undercounts it
+since; the later ones are in the sections below. Three more were found by
 a screenshot, which no assertion could have.
 
 It is also playable: `game/playground.tscn` is a first-person client with a spawn
@@ -59,7 +60,7 @@ game/
 maps/
   pg_lobby.gd            the sandbox, and a jump course on bonus 1
   pg_surf_intro.gd       two ramps and a valley, and the plunge on bonus 1
-  pg_bhop_intro.gd       blocks with widening gaps
+  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2
   *.zones.json           generated from the maps, and checked against them
 tools/
   export_zones.gd        writes those files. Run it after changing a map
@@ -458,7 +459,7 @@ is aiming at buttons with.
 
 ## The timer is not a surf-and-bhop thing, and `pg_lobby` is where that is said
 
-`pg_lobby` is a sandbox on the **main** track, a nine-platform jump course on
+`pg_lobby` is a sandbox on the **main** track, a twelve-platform jump course on
 **bonus 1** and a sixteen-platform spiral tower on **bonus 2**, and all three are
 deliberate.
 
@@ -508,12 +509,121 @@ builds forward as `(-sin(yaw), 0, -cos(yaw))`, so facing a direction is
 `atan2(-dx, -dz)`; the obvious `atan2(dx, dz)` is 180 degrees out *and* mirrored. A
 spiral has no obvious forward, so a player spawning with their back to it has to find the
 course before they can start it — the bot caught it as a dot product of exactly -1.
+**And then it did not survive a tick** — see "A spawn yaw lasted no ticks" below.
+
+### Bonus 2 is run end to end now, and "a bot cannot" was about the bot
+
+The written reason the tower had no drive was that a spiral is finished by air-strafing
+round a corner. Measured, it is not. Every gap on the tower is **2.04 m of air against a
+4.02 m climbing reach** — the platforms are axis-aligned squares 45 degrees apart round a
+circle, so their nearest edges are closer than the 4.59 m between their centres says — and
+nobody has to carry speed round anything. They have to **face the next platform before
+jumping at it**, which a scripted bot can do exactly and which no bot in this family had
+ever been written to do: every one held a single yaw for its whole run, so a course that
+turned was one it could only fall off.
+
+`headless_playground::_drive_route` is that bot, and it is generic: a map declares a
+route as the list of boxes a player lands on (`PgLobby.tower_route()`,
+`PgLobby.course_route()`, `PgBhopIntro.switchback_route()`), read off the same functions
+the geometry is built from, and the bot drives any of them. Three rules, each a thing a
+player does. **Wish along the error** — the velocity it wants minus the one it has — not
+along the heading: a wish along the velocity adds nothing in the air once the speed is past
+`max_air_wish_speed`, and on the ground it carries the last jump's direction into this one,
+which is how the first version fell off platform 4 every time. **Jump on the last grounded
+tick before the edge, or once the next box is within a metre**, whichever is first: the
+tower's first platform has its underside 0.2 m above the pad and 0.2 m off its corner, so a
+jump taken at the lip puts the body into its side face and kills every bit of horizontal
+speed. **What it stands on is decided by where it is**, so a fall onto a lower turn simply
+resumes from there. It climbs all seventeen jumps through both height bands in 1,672 ticks
+without once being put back on the pad.
+
+**And the check over the tower's gaps was the jump course's bug, one corner over.**
+`_test_the_tower` took its reach from a *flat* jump (airborne `2v/g`) off
+`DotFpsTunables.new()` — the addon's defaults, with a jump height of 1.1 where the server
+applies 1.15 — so it called 4.64 m a jump on a course that climbs 0.6 m a step, where the
+real number is 4.02. It measured the pad-to-first-platform step as centre distance minus a
+width, which called 0.2 m of air 3.8 m, and it stopped at the sixteenth platform, so the
+inward jump onto the finish cap — the widest on the tower at 2.40 m — was measured by
+nothing. The geometry happened to be fine; the check would have passed a 4.3 m gap nobody
+can cross, and `_the_old_tower_rule_passes_an_unjumpable_gap` now says so. Every route is
+swept box to box by `_check_route_reach` against `PlaygroundMap.jump_reach(rise)`, which
+also **prints** the tightest jump on each route whether it passes or not.
+
+`MOVE_SPEED`, `JUMP_HEIGHT`, `MOVE_GRAVITY`, `jump_reach` and `gap_between` moved from
+`pg_lobby` to `PlaygroundMap`, because a second map needed them and a second copy is a
+second thing to disagree with the first. `PgLobby.jump_reach` still answers, by
+inheritance, and the suite still asserts the three constants against the tunables the
+server applies.
+
+### A spawn yaw lasted no ticks
+
+**`PlaygroundPlayer.teleport` wrote `controller.state.yaw` directly, and a yaw written
+there lasts exactly until the next tick.** A `DotFpsCommand` carries *absolute* view
+angles, so the tick after a teleport sets the view back to whatever the command says: for
+a client, the player's own `sampler`, which had never been told and still faced wherever
+the mouse last left it; for a bot, or anybody with no command that tick,
+`DotFpsController`'s starved-tick substitute — `DotFpsCommand.new()`, facing yaw 0. So
+every derived spawn yaw on every map here, the tower's and the circuit's included, each
+with its paragraph about the sign convention, was true for no ticks at all.
+
+**The one check on it passed because it read the yaw before a tick had run.** The
+switchback's "facing the first block" is the one that found it, because it reads after a
+physics frame: `yaw 0.0, the spawn says 90.0` in the full suite, and a pass when run on its
+own — because a freshly-added bot's controller had not started ticking yet. A check whose
+answer depends on how long the player has existed is the tick-400 respawn check's bug in a
+new place.
+
+`teleport` goes through `DotFpsController.teleport` now (which also drops the smoothing and
+puts the player in the air, rather than leaving a ground state at a height with no ground
+under it), tells `PlaygroundPlayer.sampler` the new angles, and leaves a player that nothing
+samples **holding still and facing where it was put** — not the command it had, because a
+bot holding forward when it fell off a course was otherwise respawned already running off
+the pad. `_the_spawn_yaw_survives_a_tick` reads the yaw eight ticks later for a bot and for
+a player with a sampler facing 90 degrees away; both fail with the old `teleport`.
+
+The starved-tick substitute is the addon's half and is not fixed here: a server that loses
+one packet from a player holding no buttons turns that player's view to north for the tick.
+It wants `_repeat_command()` in both branches, in dot-player-controller.
 
 **`Playground.tracks_on_this_map()` is derived from the zones, not declared.** A second
 list of tracks is a second thing that can disagree with the zone file — and it is the
 zone file a *delivered* map ships, so the declaration would be the half that is missing
 exactly when it matters. `MAIN` is always in the result even with no zones on it,
 because a sandbox is a legitimate track and a player has to be able to get back to it.
+
+## `pg_bhop_intro`'s switchback: the first route built to be turned round by a bot
+
+The narrows, the plunge and game-g2gfast's `the needle` are all straight, and each says so
+as a design decision: a route a scripted bot cannot run is a route no suite ever finishes,
+and every bot here held one yaw. The tower showed that was a limit of the bots, and **the
+switchback is the first route designed after that was known**. Bonus 2 on
+`pg_bhop_intro`: a hillside of 3 m floating blocks west of the main run, three legs —
+west four, a turning block south, east four, a turning block south, west four onto the
+finish — climbing 0.5 m a jump from 2 m to 9 m. Every leg ends in a quarter turn and every
+turn is a jump, so it asks whether a player can land, face somewhere else and go: the thing
+between the narrows' "hold your line" and the main run's "keep your speed".
+
+**One description.** `PgBhopIntro.switchback_route()` is the list of boxes, walked edge to
+edge from the pad through `SWITCHBACK_LEGS`; the geometry is built from it, the splits sit
+on its turning blocks, and the suite reads every jump's gap and rise off it and drives a bot
+along it. The gaps grow from 2.0 m to 3.3 m, which is 79% of `jump_reach(0.5)`. Blocks are
+square so a turning block is the same target from whichever side a leg arrives.
+
+**The splits are slabs, not blocks.** A turning block shares its Z with the leg it turns
+onto, so a slab at that Z is the whole of the next leg and the only way into it. The legs
+are 2.4 to 2.9 m of air apart — which reads like a jump, but beside anything but a turn the
+next leg is 1.5 m or more higher, over the 1.15 m apex. Beside a turn it is a diagonal of
+3.5 m up 1.0 against a 3.2 m reach: a corner a player carrying bhop speed can cut, landing
+on the next leg without touching the turning block. A split on the block would be one that
+player skips.
+
+All five zone kinds are on its own track and walked **by name** (`[track-zone-1]`).
+Driven start to finish through both splits in about 1,560 ticks with no respawns; with the
+last gap pushed to 4.8 m the same bot gives up at the jump `jump_reach` says it should, so
+the drive decides something. `tools/screenshot.sh pg_bhop_intro` renders it from above
+(`pg_bhop_intro_switchback`) — the first angle, from the south-west at twenty degrees and
+47 m out, made the whole route a smudge beside the main run's much larger blocks — and at
+its first turn.
 
 ## Bonus 3 is a circuit, and a track now says whether it is driven
 
@@ -844,7 +954,10 @@ which is what makes the two times worth comparing at all.
 It is **straight**, and that is the same design decision `the narrows` and
 `game-g2gfast`'s `the needle` were built on rather than a lack of ambition: a scripted
 bot cannot air-strafe, so a route that needs turning is a route no suite ever runs end
-to end, and an unrun route is one nobody finds the holes in. The bot holds forward and
+to end, and an unrun route is one nobody finds the holes in. (Half of that was later found
+to be wrong — a route that needs *facing* somewhere new is drivable, and the tower and the
+switchback are; a route that needs speed *carried* round a turn, which a surf bank is, is
+still not.) The bot holds forward and
 nothing else — no jump pattern at all, because on a face nobody can stand on there is
 no ground to leave — and reaches the finish through both splits at **33 m/s**, against
 the main run's 12.
@@ -907,7 +1020,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 324 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  84 checks
 godot --headless --path . res://examples/headless_net.tscn          # 117 checks

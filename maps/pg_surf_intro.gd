@@ -63,8 +63,15 @@ const PAD_SIZE := Vector3(18.0, 1.0, 18.0)
 # ambition — the same one `game-g2gfast`'s `the needle` was built on. A scripted
 # bot cannot air-strafe, so a route that needs turning is a route no suite can run
 # end to end, and an unrun route is one nobody finds the holes in. See
-# `[bonus-run-2]` in the nightly to-do list: this family has driven exactly two
+# `[bonus-run-2]` in the nightly to-do list: this family had driven exactly two
 # bonus routes start to finish, and both were straight for this reason.
+#
+# [b]Half of that was wrong, and it is worth saying which half.[/b] A bot cannot
+# air-strafe, so a route that needs speed CARRIED round a turn is still out of reach.
+# A route that only needs the player to face somewhere new before the next jump is not:
+# `pg_lobby`'s tower and `pg_bhop_intro`'s switchback are both driven end to end by a
+# bot that steers by yaw every tick. A surf route turns by riding a bank, which is the
+# first kind, so this one stays straight.
 
 ## Where the plunge sits, well clear of the main run. The main map's ramps reach
 ## out to x = 17, so sixty is a route beside it rather than through it.

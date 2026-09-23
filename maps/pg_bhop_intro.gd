@@ -23,8 +23,19 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ## for. A player who can clear the main run by hammering the speed usually cannot
 ## clear the narrows at all, and that is the point of having both.
 ##
-## Both tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with one
-## start and one finish exercises none of dot-timer's per-stage machinery.
+## [b]A third route, and it asks the one question the other two cannot.[/b] Both of
+## those are straight lines, and that was a decision rather than a shortage of ideas: a
+## route a scripted bot cannot run is a route no suite ever finishes, and every bot in
+## this family used to hold one yaw for its whole run. "The switchback", on bonus 2,
+## climbs a hillside of floating blocks in three legs joined by two turning blocks —
+## west, south, east, south, west — so every leg ends in a quarter turn and every turn
+## is a jump. It asks whether a player can land, face somewhere else and go, which is
+## the thing between the narrows' "hold your line" and the main run's "keep your speed".
+## Its gaps widen along the route and every one is inside [method jump_reach] for the
+## step it climbs.
+##
+## All three tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
+## one start and one finish exercises none of dot-timer's per-stage machinery.
 
 const START_Z := 0.0
 const BLOCKS := 14
@@ -63,6 +74,62 @@ const BONUS_LAST_WIDTH := 2.0
 ## Which blocks the bonus's splits come after.
 const BONUS_STAGE_AFTER_BLOCKS := [2, 5, 8]
 
+# --- Bonus 2: "the switchback" -------------------------------------------------
+#
+# Every number below is read by `_build_the_switchback`, `switchback_route` and
+# `_add_the_switchback`, and nothing else describes where a block is. The route is
+# walked edge to edge from the pad — gap, then block — for the reason `pg_lobby`'s
+# `platform_centre` gives: spacing by centres makes the clear air a player actually
+# jumps quietly differ from the number written here.
+
+## The track it runs on.
+const SWITCHBACK_TRACK := DotTimerTrack.BONUS_FIRST + 1
+
+## The start pad's centre, and the height of its top surface.
+##
+## West of the main run by twenty metres, so the whole hillside — which reaches about
+## 28 m further west — is clear of both other routes, and level with the main run's
+## start in Z so all three read as three ways out of one place.
+const SWITCHBACK_X := -24.0
+const SWITCHBACK_Z := 10.0
+const SWITCHBACK_Y := 2.0
+
+const SWITCHBACK_PAD := Vector3(6.0, 1.0, 6.0)
+
+## Square, so a block is the same target from whichever side a leg arrives at it. A
+## turning block that is long one way and short the other is a turn that is easy in one
+## direction and a fall in the other.
+const SWITCHBACK_BLOCK := Vector3(3.0, 0.5, 3.0)
+
+## How much each jump climbs. Over `step_height` (0.4), so every block is a jump rather
+## than a stair, and well under the 1.15 m apex, so no block is also a wall.
+const SWITCHBACK_RISE := 0.5
+
+## The legs, as a direction and a number of jumps. West four, a turning block south,
+## east four, a turning block south, west four onto the finish.
+##
+## [b]The one-jump legs are the turns.[/b] A leg of one is a block a player lands on
+## travelling south and leaves travelling east or west — a quarter turn on 3 m of
+## floor, and the thing this route exists to ask. The long legs are where the widening
+## gaps are felt.
+const SWITCHBACK_LEGS := [
+	[Vector3(-1.0, 0.0, 0.0), 4],
+	[Vector3(0.0, 0.0, -1.0), 1],
+	[Vector3(1.0, 0.0, 0.0), 4],
+	[Vector3(0.0, 0.0, -1.0), 1],
+	[Vector3(-1.0, 0.0, 0.0), 4],
+]
+
+## The first jump's clear air and the last's, in metres. Grows evenly across the route.
+##
+## [b]The last is sized against [method jump_reach], not against a feeling.[/b] A jump
+## here climbs [constant SWITCHBACK_RISE], so the reach is `jump_reach(0.5)` = 4.16 m,
+## and 3.3 is 79% of it: past the point where a player who stopped on the block before
+## makes it comfortably, inside the point where only a bhop does. The first is 2.0 so
+## the first leg is a lesson rather than a test.
+const SWITCHBACK_FIRST_GAP := 2.0
+const SWITCHBACK_LAST_GAP := 3.3
+
 
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
@@ -98,6 +165,7 @@ func _build() -> void:
 	)
 
 	_build_the_narrows()
+	_build_the_switchback()
 
 
 ## The bonus route, alongside the main run and six metres above it.
@@ -137,6 +205,28 @@ func _build_the_narrows() -> void:
 		Vector3(BONUS_FIRST_WIDTH, 1.0, 16.0),
 		PlaygroundGeometry.COLOUR_END
 	)
+
+
+## Bonus 2, built from [method switchback_route] and nothing else.
+##
+## The turning blocks are the ramp colour, so the three turns of the route read from
+## anywhere on the map as the places where it changes direction.
+func _build_the_switchback() -> void:
+	var route := switchback_route()
+	var corners := switchback_corners()
+
+	for i in range(route.size()):
+		var box: AABB = route[i]
+		var colour := PlaygroundGeometry.COLOUR_PLATFORM
+
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif i == route.size() - 1:
+			colour = PlaygroundGeometry.COLOUR_END
+		elif corners.has(i):
+			colour = PlaygroundGeometry.COLOUR_RAMP
+
+		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
 
 
 ## The gap after block [param index], in metres.
@@ -191,6 +281,78 @@ static func bonus_width_at(index: int) -> float:
 	)
 
 
+# --- The switchback, as arithmetic -------------------------------------------
+
+## Every jump's direction, in order: the legs of [constant SWITCHBACK_LEGS] flattened.
+static func switchback_hops() -> Array[Vector3]:
+	var hops: Array[Vector3] = []
+
+	for leg in SWITCHBACK_LEGS:
+		for _i in range(int(leg[1])):
+			hops.append(leg[0])
+
+	return hops
+
+
+## The clear air before the box jump [param index] lands on, counted from 0.
+static func switchback_gap(index: int) -> float:
+	var last := maxi(switchback_hops().size() - 1, 1)
+	return lerpf(
+		SWITCHBACK_FIRST_GAP, SWITCHBACK_LAST_GAP, float(index) / float(last)
+	)
+
+
+## Bonus 2 as the boxes a player lands on, start pad to finish pad, in order.
+##
+## [b]This is the whole description of the route.[/b] The geometry is built from it,
+## the splits are placed on its turning blocks, and `headless_playground` reads the gap
+## and the rise of every jump off it and drives a bot along it — so a block moved here
+## moves the jump, the split and the drive together.
+static func switchback_route() -> Array[AABB]:
+	var pad_centre := Vector3(
+		SWITCHBACK_X, SWITCHBACK_Y - SWITCHBACK_PAD.y * 0.5, SWITCHBACK_Z
+	)
+	var route: Array[AABB] = [standable(pad_centre, SWITCHBACK_PAD)]
+
+	var hops := switchback_hops()
+	var centre := pad_centre
+	var size := SWITCHBACK_PAD
+
+	for i in range(hops.size()):
+		var direction: Vector3 = hops[i]
+		var next := SWITCHBACK_PAD if i == hops.size() - 1 else SWITCHBACK_BLOCK
+
+		# Half of each box ALONG the direction of travel, so a square block and a
+		# square pad are both walked edge to edge.
+		var along := absf(direction.dot(size)) * 0.5 + switchback_gap(i) \
+			+ absf(direction.dot(next)) * 0.5
+		var top := SWITCHBACK_Y + SWITCHBACK_RISE * float(i + 1)
+
+		centre = Vector3(
+			centre.x + direction.x * along,
+			top - next.y * 0.5,
+			centre.z + direction.z * along
+		)
+		size = next
+		route.append(standable(centre, size))
+
+	return route
+
+
+## The route indices of the turning blocks: every box a one-jump leg lands on.
+static func switchback_corners() -> Array[int]:
+	var corners: Array[int] = []
+	var index := 0
+
+	for leg in SWITCHBACK_LEGS:
+		index += int(leg[1])
+
+		if int(leg[1]) == 1:
+			corners.append(index)
+
+	return corners
+
+
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
 
@@ -233,6 +395,7 @@ static func build_zones() -> DotTimerZoneSet:
 
 	_add_main_stages(zones)
 	_add_the_narrows(zones)
+	_add_the_switchback(zones)
 
 	return zones
 
@@ -349,5 +512,90 @@ static func _add_the_narrows(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(BONUS_X - 20.0, BONUS_Y - 5.0, bonus_end_z() - 40.0),
 		Vector3(BONUS_X + 20.0, BONUS_Y - 2.0, bonus_start_z() + 40.0)
+	)
+	zones.add(reset)
+
+
+## Everything on bonus 2: a spawn, a start, a split on each turning block, a finish and
+## a volume under the hillside that puts a player who fell off back on the pad.
+##
+## [b]All five kinds, on this track, by name.[/b] A [DotTimerZone] carries a track, and
+## a set that is complete for one track and partial for another passes
+## [method DotTimerZoneSet.problems] — which is a per-zone check — while being a route a
+## player falls off for ever. This family has shipped that hole twice; the suite walks
+## this track's zones one kind at a time rather than believing `problems()`.
+static func _add_the_switchback(zones: DotTimerZoneSet) -> void:
+	var track := SWITCHBACK_TRACK
+	var route := switchback_route()
+	var pad: AABB = route[0]
+	var first_hop: Vector3 = switchback_hops()[0]
+
+	# On the pad, set back from its leading edge by a stride, facing the first block.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = pad.get_center() - first_hop * 1.5 \
+		+ Vector3(0.0, SWITCHBACK_PAD.y * 0.5 + 1.0, 0.0)
+	# `atan2(-dx, -dz)`: the two minus signs are `pg_lobby`'s tower's, and for the same
+	# reason — `DotFpsMotor._view_basis` builds forward as `(-sin(yaw), 0, -cos(yaw))`.
+	spawn.destination_yaw = rad_to_deg(atan2(-first_hop.x, -first_hop.z))
+	zones.add(spawn)
+
+	# Timing begins when the player leaves the pad, which is the first jump.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	# The route's whole footprint, for the splits and the reset volume below.
+	var low := pad.position
+	var high := pad.end
+
+	for box in route:
+		low = low.min(box.position)
+		high = high.max(box.end)
+
+	# A split on each turning block, spanning the whole hillside east to west.
+	#
+	# [b]Across the route rather than on the block.[/b] A turning block shares its Z
+	# with the leg it turns onto, so a slab at that Z two metres deep is the whole of
+	# the next leg — and the only way into it. The legs are 2.4 to 2.9 m of air apart,
+	# which reads like a jump, but everywhere except beside a turn the next leg is 1.5 m
+	# or more HIGHER, over the 1.15 m apex, so it cannot be climbed onto. Beside a turn
+	# it is a diagonal of 3.5 m up 1.0 against a 3.2 m reach: a corner a player carrying
+	# bhop speed can cut, landing on the next leg without touching the turning block. A
+	# split ON the block would be one that player skips; the slab is one nobody can.
+	var corners := switchback_corners()
+
+	for n in range(corners.size()):
+		var corner: AABB = route[corners[n]]
+		var z := corner.get_center().z
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n + 1)
+		stage.set_box(
+			Vector3(low.x - 2.0, corner.end.y - 1.5, z - 1.0),
+			Vector3(high.x + 2.0, corner.end.y + 6.0, z + 1.0)
+		)
+		zones.add(stage)
+
+	# The finish: the whole pad and the air above it, deep for `thin_zones`' reason.
+	var last: AABB = route[route.size() - 1]
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(last.position.x, last.end.y - 1.0, last.position.z),
+		Vector3(last.end.x, last.end.y + 5.0, last.end.z)
+	)
+	zones.add(finish)
+
+	# Falling off: a slab three to eight metres under the pad, the whole hillside wide.
+	# Everything on this route is above the pad, so anybody who leaves a block passes
+	# through it, and it stops well west of the main run at x = 0 so it is never under
+	# a player hopping along those blocks — the track filter would cover that anyway,
+	# but a volume that only behaves because of a filter misbehaves the day somebody
+	# widens it.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(low.x - 10.0, SWITCHBACK_Y - 8.0, low.z - 10.0),
+		Vector3(high.x + 10.0, SWITCHBACK_Y - 3.0, high.z + 10.0)
 	)
 	zones.add(reset)

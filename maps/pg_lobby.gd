@@ -93,48 +93,10 @@ const COURSE_GAP_GROWTH := 0.1
 ## How much each platform rises. Under `jump_height`, so a gap is never also a wall.
 const COURSE_RISE := 0.8
 
-# --- What the movement can do ----------------------------------------------
-#
-# [b]The three numbers the course is sized against, copied from
-# `PlaygroundPlayer._tunables` deliberately.[/b] A map is content: it is loaded by
-# `DotMapDef` from a catalogue, it has no player in front of it when `build_zones` is
-# called from a tool, and reaching into the game's player class from here would make a
-# map depend on the game rather than the other way round. The family's answer to a
-# deliberate copy is a check that the copies agree, and `headless_playground` asserts
-# these three against the tunables the server actually applies.
-
-## Ground speed, m/s. `DotFpsTunables.max_speed`.
-const MOVE_SPEED := 7.0
-
-## Metres. `DotFpsTunables.jump_height`.
-const JUMP_HEIGHT := 1.15
-
-## m/s². `DotFpsTunables.gravity`. Not Godot's project default, which is 9.8.
-const MOVE_GRAVITY := 20.0
-
-
-## The clear air a player running at [constant MOVE_SPEED] crosses in one jump, landing
-## [param rise] metres higher than they left.
-##
-## [b]The landing height is the whole point of this function.[/b] Time to fall back to
-## the height you jumped from is the number everybody writes down, and it is the wrong
-## one for any course that climbs: at 1.15 m of jump height a player is airborne for
-## 0.68 s flat and 0.53 s onto a step 0.8 m up, which is 4.8 m against 3.7. A course
-## sized with the first number is 30% longer than the movement can do, and every check
-## over it passes, because nothing in a zone set knows how far a player can jump.
-##
-## Returns 0.0 for a rise the jump cannot reach at all.
-static func jump_reach(rise: float) -> float:
-	var launch := sqrt(2.0 * MOVE_GRAVITY * JUMP_HEIGHT)
-	var inside := launch * launch - 2.0 * MOVE_GRAVITY * rise
-
-	if inside < 0.0:
-		return 0.0
-
-	# The LATER root: the way back down through that height, not the way up.
-	var airborne := (launch + sqrt(inside)) / MOVE_GRAVITY
-
-	return MOVE_SPEED * airborne
+# What the movement can do — `MOVE_SPEED`, `JUMP_HEIGHT`, `MOVE_GRAVITY` and
+# `jump_reach(rise)` — is on `PlaygroundMap` now, because `pg_bhop_intro`'s switchback
+# needed the same arithmetic and a second copy is a second thing to disagree with the
+# first. `PgLobby.jump_reach` still answers, by inheritance.
 
 
 ## The clear air before platform [param index], counted from 0. [constant COURSE_STEPS]
@@ -170,12 +132,17 @@ const TOWER_Z := 60.0
 
 ## The radius the platforms are arranged on.
 ##
-## [b]Sized against the movement, like the jump course's gaps.[/b] At `jump_height`
-## 1.15 m and `gravity` 20 m/s² a jump lasts about 0.68 s, so a player at the 7 m/s
-## ground speed covers 4.8 m. Sixteen platforms over two turns at radius 6 puts their
-## centres 4.59 m apart, which is 2.4 m of air between the edges — comfortably inside
-## a jump on the flat, and only comfortable here if the player carries their speed
-## round the turn.
+## [b]Sized against the movement, and the sentence that used to be here sized it
+## against the wrong jump.[/b] It said a jump lasts 0.68 s and so covers 4.8 m — which
+## is the FLAT jump, the exact error `[reach-1]` found on the jump course one corner
+## over. Every step here is [constant TOWER_RISE] up, so the reach is
+## `jump_reach(0.6)` = 4.0 m. Sixteen platforms over two turns at radius 6 puts their
+## centres 4.59 m apart, and because the platforms are axis-aligned squares 45 degrees
+## apart round a circle, the air between their nearest edges is 2.04 m rather than the
+## 2.4 m the centre distance suggests. Half a reach: a turning jump nobody has to
+## carry speed into, which is what made the spiral drivable by a bot at all — see
+## `headless_playground::_walk_the_tower`, and [method tower_route] for the boxes the
+## gaps are measured between.
 const TOWER_RADIUS := 6.0
 
 ## Platforms in the spiral, not counting the start pad.
@@ -219,8 +186,13 @@ const TOWER_PLATFORM := Vector3(2.2, 0.4, 2.2)
 ## at `TOWER_RADIUS - TOWER_PLATFORM.x / 2` = 4.9 m — so the two OVERLAP, and the first
 ## jump of the course is not a jump.[/b] Nothing about that is visible in a count or in
 ## a screenshot from above: the pad is there, the platform is there, and a player simply
-## walks the first step of a jumping course. A 6 m pad reaches 4.24 m and leaves two
-## thirds of a metre of air, which is a first jump anybody can make and is still a jump.
+## walks the first step of a jumping course. A 6 m pad's corner is at (3, 3) from the
+## middle and the first platform's nearest corner at (3.14, 3.14) — the "4.9 m" above is
+## its inner edge's MIDDLE, and a square 45 degrees round points a corner inward — so
+## what is left is 0.2 m of air, diagonally. Still a jump, because the platform is
+## [constant TOWER_RISE] up; and a tricky one, because its underside is 0.2 m above the
+## pad, so a jump taken at the lip puts a body into its side face. The suite's bot jumps
+## it from a stride back for that reason (`headless_playground::_drive_route`).
 const TOWER_PAD := Vector3(6.0, 1.0, 6.0)
 
 ## The finish cap on top of the pillar. See [method _build_tower] for why it is this
@@ -531,6 +503,58 @@ static func tower_finish_centre() -> Vector3:
 		last.y + TOWER_PLATFORM.y * 0.5 + TOWER_RISE,
 		TOWER_Z
 	)
+
+
+## Bonus 1 as the boxes a player lands on, start pad to finish pad, in order.
+##
+## Built from the same functions the geometry is, so a route cannot describe a course
+## that is not there. `headless_playground` reads the gap and the rise of every jump off
+## it and asserts each one is inside [method jump_reach] — which asks the question of
+## the pad and the finish pad as well as of [method gap_at]'s ramp.
+static func course_route() -> Array[AABB]:
+	var route: Array[AABB] = [
+		standable(
+			Vector3(COURSE_X, COURSE_BASE_Y - PAD.y * 0.5, COURSE_START_Z), PAD
+		),
+	]
+
+	for i in range(COURSE_STEPS):
+		route.append(standable(platform_centre(i), PLATFORM))
+
+	var finish := finish_centre()
+	route.append(
+		standable(Vector3(finish.x, finish.y - PAD.y * 0.5, finish.z), PAD)
+	)
+
+	return route
+
+
+## Bonus 2 as the boxes a player lands on: the pad, sixteen platforms round the pillar,
+## and the cap on top of it.
+##
+## [b]The last jump is in this list, and it had never been measured.[/b] The check this
+## replaced walked the sixteen platforms and stopped, so the inward jump onto the finish
+## cap — 2.4 m of air, the widest on the tower — was the one gap on the course nothing
+## asked about.
+static func tower_route() -> Array[AABB]:
+	var route: Array[AABB] = [
+		standable(
+			Vector3(TOWER_X, TOWER_BASE_Y - TOWER_PAD.y * 0.5, TOWER_Z), TOWER_PAD
+		),
+	]
+
+	for i in range(TOWER_STEPS):
+		route.append(standable(tower_platform_centre(i), TOWER_PLATFORM))
+
+	var finish := tower_finish_centre()
+	route.append(
+		standable(
+			Vector3(finish.x, finish.y - TOWER_PLATFORM.y * 0.5, finish.z),
+			Vector3(TOWER_FINISH, TOWER_PLATFORM.y, TOWER_FINISH)
+		)
+	)
+
+	return route
 
 
 func timer_zones() -> DotTimerZoneSet:
