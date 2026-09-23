@@ -282,8 +282,53 @@ func _ready() -> void:
 	# that renders under the speedometer is one whose bottom row cannot be clicked.
 	_build_client_services()
 	_build_screens()
+	_wire_presentation()
 
 	set_process(true)
+
+
+## Hands what happened in the world to the presentation layer, which is what turns it into
+## a noise, a puff and a shake.
+##
+## [b]Nothing called these, and the client was silent.[/b] `PlaygroundPresentation` had a
+## hook per event, a synthesised voice per sound id, a probe that proved a speaker moved and
+## a suite that called the hooks directly — and not one line of the game called any of them,
+## so every check about sound passed while the playable client never made one. A value
+## produced and consumed by nothing, with the ends swapped: the consumer was there and the
+## producer was the suite.
+##
+## [b]On a networked client only YOUR props make a noise.[/b] A joining client is sent every
+## prop already in the world through the same PROP event a new spawn uses, and the wire
+## cannot tell the two apart; sounding somebody else's would greet every join with a burst
+## of an hour's building. Your own cannot be in that backlog — the session is new — and it
+## is the one sound that answers something you just did.
+func _wire_presentation() -> void:
+	if presentation == null or presentation.settings == null \
+			or presentation.audio == null or presentation.fx == null:
+		return
+
+	# Both ends: a map change frees the world the live effects are parented into.
+	playground.maps.changed.connect(
+		func(_map: DotMapDef, _loaded: Node) -> void: presentation.on_map_changed()
+	)
+
+	if bridge != null:
+		bridge.prop_arrived.connect(func(at: Vector3, owner_session: int) -> void:
+			if owner_session != 0 and owner_session == bridge.local_player_id:
+				presentation.on_prop_spawned(at, true)
+		)
+		return
+
+	playground.props.spawned.connect(func(prop: DotPropInstance) -> void:
+		var body := prop.node as Node3D if prop != null else null
+		if body != null:
+			presentation.on_prop_spawned(body.global_position, prop.owner_id == player_id)
+	)
+	playground.props.refused.connect(
+		func(id: StringName, _prop: StringName, _reason: String) -> void:
+			if id == player_id:
+				presentation.on_refused()
+	)
 
 
 ## Brings up the netcode and points it at the server's link.
@@ -799,7 +844,13 @@ func _process(_delta: float) -> void:
 	# something the movement drives. Parenting works and hides a real difference: the
 	# simulation runs at a fixed tick and the camera is drawn every frame, so a
 	# parented camera steps once per tick and judders between them.
-	camera.global_position = player.eye_position()
+	#
+	# The shake is added here, on the drawn camera and never to the eye the simulation
+	# aims from: a punt that moved the aim would move where the next shot goes, and a
+	# player who turned `shake_scale` to zero gets an offset of exactly zero.
+	var shake := presentation.camera_shake() \
+		if presentation != null and presentation.fx != null else Vector3.ZERO
+	camera.global_position = player.eye_position() + shake
 	camera.global_rotation = Vector3(
 		deg_to_rad(player.controller.state.pitch),
 		deg_to_rad(player.controller.state.yaw),
@@ -1281,16 +1332,23 @@ func _grab() -> void:
 
 	_holding = grabbed.ok
 
+	if grabbed.ok and presentation != null and presentation.audio != null:
+		presentation.on_tool_grab()
+
 	if not grabbed.ok and hud != null:
 		hud.notice(grabbed.error.message)
 
 
 func _punt() -> void:
-	player.grav_gun.punt(
+	var punted: DotPropInstance = player.grav_gun.punt(
 		_space(), player.eye_position(), player.aim_direction(),
 		playground.may_touch_others()
 	)
 	_pulling = false
+
+	var body := punted.node as Node3D if punted != null else null
+	if body != null and presentation != null and presentation.fx != null:
+		presentation.on_tool_punt(body.global_position, true)
 
 
 func _physics_process(delta: float) -> void:

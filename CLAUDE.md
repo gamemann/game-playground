@@ -907,10 +907,10 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 309 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 324 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
-godot --headless --path . res://examples/headless_presentation.tscn #  80 checks
-godot --headless --path . res://examples/headless_net.tscn          # 115 checks
+godot --headless --path . res://examples/headless_presentation.tscn #  84 checks
+godot --headless --path . res://examples/headless_net.tscn          # 117 checks
 godot --headless --path . res://examples/dedicated.tscn             # 170 checks
 ```
 
@@ -1187,6 +1187,8 @@ Settings, randomness, audio, effects and a console. Two decisions are this game'
   you just did.
 - **`refused` outranks a crate hitting the floor.** A refusal answers something the player
   did; a crate landing does not.
+
+**Nothing in the game called any of it, and the client was silent.** Every hook — `on_prop_spawned`, `on_refused`, `on_tool_grab`, `on_tool_punt`, `on_map_changed` — was called by `headless_presentation` and by nothing else, `camera_shake()` was computed and never added to a camera, and `tools/audio_probe.sh` plays through the manager directly — so every check about sound passed while the playable client never made one. `PlaygroundClient._wire_presentation` is the producer now, and `headless_playground` drives it through the client's own spawn, the spawner's own refusal and a real map change rather than through the hooks. On a networked client only your own props make a noise, from `PlaygroundNetBridge.prop_arrived`, because a joining client is sent the whole world's props through the same PROP event and the wire cannot tell a backlog from a spawn. Still unwired: `on_prop_landed` (nothing reports a landing), `on_bought` and `on_wave_incoming` (the shop and the waves are server-side and no event carries either to the client), and every tool sound on a networked client (the server actuates the tools).
 
 The randomness manager is built **before** the playground, because `Playground._ready`
 loads its first map inside `add_child` and a generated map asks the registry for a seed

@@ -54,7 +54,7 @@ const TOWER_TAKE_OFF := 2.6
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 319
+const CHECKS := 324
 
 var _passed := 0
 var _failed := 0
@@ -2984,6 +2984,41 @@ func _test_the_client_boots() -> void:
 
 	networked.link.free()
 	networked.free()
+
+	# [b]The client makes a noise when something happens, through the game and not
+	# through the hooks.[/b] headless_presentation calls `on_prop_spawned` itself, which
+	# proved every hook correct while nothing in the game called one and the playable
+	# client was silent. This goes through the client's own spawn, the spawner's own
+	# refusal and a real map change.
+	var sink := client.presentation.audio.sink as DotAudioSinkNull \
+		if client.presentation != null and client.presentation.audio != null else null
+	_check(sink != null, "the headless client's presentation has a null sink to count on")
+
+	if sink != null:
+		sink.forget()
+		client.selected_prop = &"crate"
+		client._spawn()
+		_check(
+			sink.count_of(&"prop_spawn") == 1,
+			"a prop the client spawns through the game makes a noise",
+			"%d" % sink.count_of(&"prop_spawn")
+		)
+
+		sink.forget()
+		client.playground.props.spawn(&"no_such_prop", client.player_id, Vector3.ZERO)
+		_check(
+			sink.count_of(&"refused") == 1,
+			"and a spawn the spawner refuses makes the refusal noise",
+			"%d" % sink.count_of(&"refused")
+		)
+
+		client.presentation.fx.shake.add(1.0)
+		_check(client.presentation.fx.shake.active(), "a shake is live before a map change")
+		await client.playground.change_map(&"pg_bhop_intro")
+		_check(
+			not client.presentation.fx.shake.active(),
+			"and a map change clears it, because the effects' world has gone"
+		)
 
 	client.queue_free()
 

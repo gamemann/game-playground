@@ -24,9 +24,6 @@ const CHANNEL := "playground.player"
 ## The run finished. The world files it; the player just reports.
 signal finished(run: DotTimerRun)
 
-## A zone asked for something only this class can do.
-signal teleport_requested(to: Vector3, yaw: float)
-
 @export var player_id: StringName = &"local"
 @export var display_name: String = "Player"
 

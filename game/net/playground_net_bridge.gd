@@ -49,6 +49,12 @@ signal hello_received(player_id: int)
 signal roster_changed(player_id: int)
 ## A prop or entity appeared or went away, on a client. For the HUD's counter.
 signal props_changed()
+
+## A mirrored prop arrived, on a client: where, and whose session spawned it. For the
+## presentation layer, which [signal props_changed] cannot serve because it carries
+## neither. A joining client is sent the whole world's props through the same event, so
+## this fires for those too — a listener that makes a noise has to decide which it wants.
+signal prop_arrived(at: Vector3, owner_session: int)
 signal finish_received(player_id: int, time: float, rank: int)
 signal notice_received(player_id: int, text: String)
 
@@ -1261,6 +1267,7 @@ func _apply_prop(reader: DotNetReader) -> void:
 
 	_prop_nets[net_id] = behaviour
 	props_changed.emit()
+	prop_arrived.emit(body.global_position, int(info["owner_id"]))
 
 
 func _on_ride_entered(

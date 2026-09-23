@@ -446,6 +446,12 @@ func _card(icon: Texture2D, text: String, tip: String) -> Button:
 	button.text = text
 	button.tooltip_text = tip
 	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+	# [b]And the icon's own horizontal alignment too.[/b] It defaults to LEFT, and
+	# `vertical_icon_alignment` alone puts the icon in the top-LEFT corner and still
+	# reserves its width beside the text, so the label is centred in what is left and
+	# drawn off-centre under nothing. Every property above reads right; only a
+	# rendered frame shows it.
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	button.custom_minimum_size = CARD
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL

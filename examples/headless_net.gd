@@ -39,7 +39,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 116
+const CHECKS := 117
 
 var _passed := 0
 var _failed := 0
@@ -781,6 +781,12 @@ func _test_prop_request() -> void:
 	if choice == null:
 		return
 
+	# What the presentation layer hears. An Array because a lambda captures locals by
+	# value, and a counter assigned inside it would stay at zero out here.
+	var arrivals: Array = []
+	var hear := func(_at: Vector3, owner_session: int) -> void: arrivals.append(owner_session)
+	_client_bridge.prop_arrived.connect(hear)
+
 	# The spawn menu emits rather than spawning, which is the division this bridge was
 	# waiting for: the client sends intent and the server owns the answer.
 	_client_bridge.ask_spawn_prop(choice.id)
@@ -796,6 +802,14 @@ func _test_prop_request() -> void:
 		int(_client_bridge.describe()["props"]) == after,
 		"and the client was told about the one it asked for"
 	)
+	# The client makes its own spawn's noise by comparing this with its own session, so
+	# an arrival that named nobody, or the server, would leave every spawn silent.
+	_check(
+		arrivals.size() == 1 and int(arrivals[0]) == _client_bridge.local_player_id,
+		"and the arrival names the asking client as its owner, which is what makes it 'mine'",
+		"%s, local %d" % [str(arrivals), _client_bridge.local_player_id]
+	)
+	_client_bridge.prop_arrived.disconnect(hear)
 
 	# A prop this build does not have is refused, not guessed at.
 	_client_bridge.ask_spawn_prop(&"no_such_prop_at_all")
