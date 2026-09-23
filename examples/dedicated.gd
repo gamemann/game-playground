@@ -445,15 +445,17 @@ func _test_map_commands() -> void:
 	var next := _run_command("pg_nextmap")
 	_check(_said(next, "next"), "pg_nextmap says what plays next", str(next))
 
-	game.maps.time_limit.duration = 600.0
-	game.maps.time_limit.start()
+	# The ballot's clock, which is the one that ends a map on a server with a vote. It
+	# extended the map session's, which on this server decides nothing.
+	var clock := (_module().get("vote") as PlaygroundVote).director.clock
+	var before := clock.remaining
 
 	var extended := _run_command("pg_extend 300")
 	_check(_said(extended, "extended"), "pg_extend extends the map", str(extended))
 	_check(
-		game.maps.time_limit.remaining > 800.0,
-		"and adds the time",
-		"%.0f" % game.maps.time_limit.remaining
+		is_equal_approx(clock.remaining, before + 300.0),
+		"and adds the time to the clock that ends it",
+		"%.0f -> %.0f" % [before, clock.remaining]
 	)
 
 	# From the server console there is no player, so rocking the vote is refused
@@ -1257,6 +1259,75 @@ func _test_vote() -> void:
 		vote.director.rules.nomination_seconding,
 		"seconding is allowed, which is what makes MOST_NOMINATED mean anything",
 		"without it every nomination count is exactly 1 and there is nothing to sort by"
+	)
+
+	# Once. It self-advanced AND the module advanced it every tick, so every clock in the
+	# vote ran at twice the speed it said.
+	_check(
+		not vote.director.self_advance and not vote.director.is_physics_processing(),
+		"the vote's clock is advanced once a tick, by the module, and not also by itself"
+	)
+
+	# dot-vote's commands, none of which existed here.
+	var absent := PackedStringArray()
+	for name in [
+		"rtv", "unrtv", "nominate", "vote", "timeleft", "nextmap",
+		"setnextmap", "nominate_addmap", "forcertv", "votereload",
+	]:
+		if server.console.find_command(name) == null:
+			absent.append(name)
+	_check(absent.is_empty(), "dot-vote's commands are on the console", ", ".join(absent))
+
+	# One rock-the-vote. `pg_rtv` went to the map session's tally while the wire's `rtv`
+	# went to the ballot. What the ballot says to this player is asked first — a refusal,
+	# so asking changes nothing — and both commands must say exactly that, and leave the
+	# session's tally where it was.
+	var session := DotClientSession.new()
+	session.peer_id = 4343
+	session.userid = 43
+	session.display_name = "Rocker"
+	var _adopted := server.adopt_session(session)
+	var expected := vote.director.rock_the_vote(&"u43")
+	var tally_before := game.maps.time_limit.rtv_votes()
+	for line in ["rtv", "pg_rtv"]:
+		var replies: Array[String] = []
+		var ctx := session.make_context(
+			line, PackedStringArray(), DotCmdContext.Source.CHAT,
+			func(text: String) -> void: replies.append(text)
+		)
+		server.console.execute(line, ctx)
+		_check(
+			not expected.ok and replies.size() == 1
+				and replies[0].begins_with(expected.error.message),
+			"`%s` is the ballot's rock-the-vote (%s)" % [line, str(replies)]
+		)
+	_check(
+		game.maps.time_limit.rtv_votes() == tally_before,
+		"and neither touches the map session's tally"
+	)
+	var _released := server.release_session(session.peer_id)
+
+	_check(
+		not game.rotation_ends_maps,
+		"and the map session's own clock no longer ends a map the vote may have extended"
+	)
+
+	# What the module forwards to every client as a VOTE event, heard at the vote's edge.
+	var heard: Array = []
+	var probe := func(cue: StringName, seconds_left: int, _runoff: bool) -> void:
+		heard.append([String(cue), seconds_left])
+	vote.cue_due.connect(probe)
+	var was_min := vote.director.rules.min_players_to_vote
+	vote.director.rules.min_players_to_vote = 0
+	var opened := vote.director.open_vote(DotVoteClock.REASON_MANUAL)
+	vote.director.rules.min_players_to_vote = was_min
+	if opened.ok:
+		vote.director.close_vote()
+	vote.cue_due.disconnect(probe)
+	_check(
+		heard.has([String(PlaygroundVote.CUE_START), 0]) and heard.has([String(PlaygroundVote.CUE_END), 0]),
+		"a ballot's start and end cues are handed on for the wire (%s)" % str(heard),
+		"" if opened.ok else opened.error.message
 	)
 
 

@@ -3,6 +3,7 @@ extends Node
 const PlaygroundPaths := preload("playground_paths.gd")
 
 const PlaygroundServices := preload("playground_services.gd")
+const PlaygroundVote := preload("playground_vote.gd")
 
 ## Settings, randomness, audio, effects and a console.
 ##
@@ -256,6 +257,20 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	refused.priority = 85
 	c.add(refused)
 
+	# The map vote's cues. Flat, on the interface bus: a ballot is about the server, not
+	# about a place in it. The ids are PlaygroundVote's, which its rules name too.
+	for vote_id in [
+		PlaygroundVote.CUE_START, PlaygroundVote.CUE_END,
+		PlaygroundVote.CUE_WARNING, PlaygroundVote.CUE_COUNT,
+	]:
+		var cue := DotAudioDef.new()
+		cue.id = vote_id
+		cue.path = "%s/%s.ogg" % [SOUND_DIR, String(vote_id)]
+		cue.bus = &"UI"
+		cue.max_concurrent = 1
+		cue.priority = 70
+		c.add(cue)
+
 	var wave := DotAudioDef.new()
 	wave.id = &"wave_incoming"
 	wave.path = "%s/wave.ogg" % SOUND_DIR
@@ -285,6 +300,12 @@ static func sound_recipes() -> Dictionary:
 		&"buy": DotAudioSynth.Voice.PICKUP,
 		&"refused": DotAudioSynth.Voice.DENY,
 		&"wave_incoming": DotAudioSynth.Voice.BOOM,
+		# Voices nothing else in the table uses, so a ballot opening is never heard as a
+		# prop arriving or a refusal.
+		PlaygroundVote.CUE_START: DotAudioSynth.Voice.SHOT_TIGHT,
+		PlaygroundVote.CUE_END: DotAudioSynth.Voice.DIE,
+		PlaygroundVote.CUE_WARNING: DotAudioSynth.Voice.BLIP,
+		PlaygroundVote.CUE_COUNT: DotAudioSynth.Voice.STEP,
 	}
 
 
@@ -583,6 +604,15 @@ func on_bought() -> void:
 
 func on_refused() -> void:
 	audio.play(&"refused")
+
+
+## A map-vote cue from the server. Empty is silence, and an id this catalogue does not
+## have is dot-audio's silent refusal rather than an error.
+func on_vote_cue(id: StringName) -> int:
+	if id == &"" or audio == null:
+		return 0
+
+	return audio.play(id)
 
 
 func on_wave_incoming() -> void:

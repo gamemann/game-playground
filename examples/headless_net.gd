@@ -2,6 +2,7 @@ extends Node
 
 const Playground := preload("../game/playground.gd")
 const PlaygroundConfig := preload("../game/playground_config.gd")
+const PlaygroundEvent := preload("../game/net/playground_event.gd")
 const PlaygroundEvents := preload("../game/net/playground_events.gd")
 const PlaygroundNetBridge := preload("../game/net/playground_net_bridge.gd")
 const PlaygroundNetCommand := preload("../game/net/playground_net_command.gd")
@@ -39,7 +40,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 117
+const CHECKS := 119
 
 var _passed := 0
 var _failed := 0
@@ -289,6 +290,20 @@ func _test_event_wire() -> void:
 		bool(earned["ok"]) and String(earned["id"]) == "build_50"
 			and int(earned["value"]) == 10,
 		"progress: an achievement round-trips"
+	)
+
+	# --- the map vote's cue, which is the other direction's vote traffic ---
+	var cue := PlaygroundEvents.read_vote_cue(
+		DotNetReader.new(PlaygroundEvents.write_vote_cue("vote_count", 7, true))
+	)
+	_check(
+		bool(cue["ok"]) and String(cue["cue"]) == "vote_count"
+			and int(cue["seconds_left"]) == 7 and bool(cue["runoff"]),
+		"vote cue: the cue, the countdown second and the runoff flag round-trip"
+	)
+	_check(
+		PlaygroundEvent.new(PlaygroundEvents.Kind.VOTE, PackedByteArray([1])).validate().ok,
+		"and VOTE is a kind the message validates"
 	)
 
 	# --- votes and loadouts ---

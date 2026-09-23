@@ -114,6 +114,14 @@ var authoritative: bool = true
 var booted: bool = false
 
 var maps: DotMapSession = null
+
+## Whether the map session's own clock running out changes to the rotation's next map.
+##
+## On for a sandbox with no vote, where that clock is the only thing that ever ends a map.
+## Off once [code]PlaygroundModule[/code] has a ballot: the vote's clock ends a map then,
+## and both acting was a map the players voted to extend being ended on the old clock, by
+## a rotation nobody asked.
+var rotation_ends_maps: bool = true
 var timers: DotTimerManager = null
 var props: DotPropSpawner = null
 
@@ -1388,6 +1396,10 @@ func _on_map_changed(map: DotMapDef, loaded: Node) -> void:
 ## that attempt, which is what a time limit means. Waiting for the last runner would
 ## mean a map that never ends while one person keeps restarting.
 func _on_map_over(_map: DotMapDef, reason: StringName) -> void:
+	if not rotation_ends_maps:
+		DotLog.debug(CHANNEL, "the map clock ran out; the vote decides", {"reason": String(reason)})
+		return
+
 	var next := maps.rotation.choose(players.size())
 
 	if next == null:

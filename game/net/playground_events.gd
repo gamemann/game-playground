@@ -46,6 +46,9 @@ enum Kind {
 	MATCH,
 	## Something somebody earned: an achievement or a personal best.
 	PROGRESS,
+	## The map vote: a sound cue to play, or a second of the countdown before a ballot.
+	## Last, because a kind is its index on the wire.
+	VOTE,
 }
 
 enum Ask {
@@ -584,6 +587,30 @@ static func write_vote(token: String) -> PackedByteArray:
 
 static func read_vote(reader: DotNetReader) -> String:
 	return reader.read_string(VOTE_TOKEN_BYTES)
+
+
+## Bytes a vote cue id may occupy. An id, never a path.
+const CUE_BYTES := 32
+
+
+## A map-vote cue id (empty for none) and a countdown second (0 for none). Named `_cue`
+## because [method write_vote] is the other direction's: a player's token to the server.
+static func write_vote_cue(cue: String, seconds_left: int, runoff: bool) -> PackedByteArray:
+	var writer := DotNetWriter.new()
+	writer.write_string(cue, CUE_BYTES)
+	writer.write_uint(clampi(seconds_left, 0, 255), 8)
+	writer.write_bool(runoff)
+	return writer.to_bytes()
+
+
+static func read_vote_cue(reader: DotNetReader) -> Dictionary:
+	var out := {
+		"cue": reader.read_string(CUE_BYTES),
+		"seconds_left": reader.read_uint(8),
+		"runoff": reader.read_bool(),
+	}
+	out["ok"] = reader.ok()
+	return out
 
 
 ## What a player wants to spawn with, as slot/item pairs.

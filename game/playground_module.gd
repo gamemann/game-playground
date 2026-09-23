@@ -575,6 +575,20 @@ func _build_extras() -> DotResult:
 	vote.change_due.connect(_on_vote_change_due)
 	vote.announced.connect(_on_vote_announced)
 
+	# The cues and the countdown, to every client. The ballot goes out as chat through
+	# `announced`; a sound and a number a HUD counts are what chat cannot carry.
+	vote.cue_due.connect(func(cue: StringName, seconds_left: int, runoff: bool) -> void:
+		if bridge != null:
+			bridge.broadcast_vote_cue(cue, seconds_left, runoff)
+	)
+
+	# [b]One clock that ends a map, and it is the vote's.[/b] See
+	# `Playground.rotation_ends_maps`.
+	game.rotation_ends_maps = false
+
+	var commanded := vote.install_commands(self)
+	DotLog.result(CHANNEL, "the vote's commands", commanded)
+
 	# [b]The one signal that fires for every change however it happened.[/b] An operator
 	# typing `pg_map`, the time limit expiring and the vote applying all end at
 	# `DotMapSession.changed` — which is why the director does not announce its own change
@@ -1496,6 +1510,19 @@ func _cmd_map(ctx: DotCmdContext) -> void:
 
 
 func _cmd_nextmap(ctx: DotCmdContext) -> void:
+	# With a ballot, the ballot's answer: its clock, its rock-the-vote and what it would
+	# play. The map session's are the ones that decide nothing then.
+	if vote != null and vote.director != null:
+		var director := vote.director
+		var pending := director.pending_id()
+		ctx.reply("Next: %s   ·   %s   ·   %d rocked the vote (%d needed)" % [
+			String(pending) if pending != &"" else String(director.next_in_rotation()),
+			director.clock.timeleft_line(),
+			director.clock.rtv_votes(),
+			director.clock.rtv_needed(director.player_count()),
+		])
+		return
+
 	var next := game.maps.rotation.choose(game.players.size())
 
 	ctx.reply("Next: %s   ·   %s left   ·   %d rocked the vote (%d needed)" % [
@@ -1511,6 +1538,15 @@ func _cmd_rtv(ctx: DotCmdContext) -> void:
 
 	if id == &"":
 		ctx.reply("Only a player can rock the vote.")
+		return
+
+	# With a ballot, `pg_rtv` is the ballot's rock-the-vote — the one `rtv` and the wire
+	# reach. It went to the map session's tally, which on a server with a vote is a vote
+	# that decides nothing. The voter id is the ballot's, `u<userid>`.
+	if vote != null and vote.director != null:
+		var voter := StringName("u%d" % ctx.session.userid) if ctx.session != null else id
+		var res := vote.director.rock_the_vote(voter)
+		ctx.reply("Rocked the vote." if res.ok else res.error.message)
 		return
 
 	if game.maps.time_limit.has_rocked(id):
@@ -1538,6 +1574,15 @@ func _cmd_extend(ctx: DotCmdContext) -> void:
 
 	if ctx.args.size() > 0 and ctx.args[0].is_valid_float():
 		seconds = ctx.args[0].to_float()
+
+	# The ballot's clock is the one that ends a map when there is a ballot.
+	if vote != null and vote.director != null:
+		var extended := vote.director.extend(seconds)
+		ctx.reply(
+			("Extended. %s." % vote.director.clock.timeleft_line()) if extended.ok
+			else extended.error.message
+		)
+		return
 
 	if not game.maps.extend_map(seconds):
 		ctx.reply("This map has been extended as often as it may be.")

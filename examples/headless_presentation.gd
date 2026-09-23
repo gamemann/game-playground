@@ -3,6 +3,7 @@ extends Node
 const PlaygroundInventory := preload("../game/playground_inventory.gd")
 const PlaygroundParty := preload("../game/playground_party.gd")
 const PlaygroundPresentation := preload("../game/playground_presentation.gd")
+const PlaygroundVote := preload("../game/playground_vote.gd")
 const PlaygroundServices := preload("../game/playground_services.gd")
 const PlaygroundSpawnables := preload("../game/playground_spawnables.gd")
 const PlaygroundWorldGen := preload("../game/playground_worldgen.gd")
@@ -21,7 +22,7 @@ const PlaygroundWorldGen := preload("../game/playground_worldgen.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 84
+const CHECKS := 87
 
 var _passed := 0
 var _failed := 0
@@ -53,6 +54,7 @@ func _run() -> void:
 	_test_chat_box()
 
 	_test_every_sound_has_a_voice()
+	_test_the_vote_is_heard()
 
 	print("")
 	_check(
@@ -358,6 +360,44 @@ func _test_sounds_and_effects() -> void:
 	_check(
 		p.camera_shake() == Vector3.ZERO,
 		"and a player who turned shake off gets exactly none of it"
+	)
+
+	p.queue_free()
+	_done()
+
+
+func _test_the_vote_is_heard() -> void:
+	_section("The map vote is heard: every cue its rules name is a sound here")
+
+	var p := _make()
+	var sink := p.audio.sink as DotAudioSinkNull
+	var rules := PlaygroundVote.vote_rules()
+
+	var named: Array[StringName] = []
+	for id in [
+		rules.cue_vote_start, rules.cue_vote_end, rules.cue_warning,
+		rules.cue_runoff_warning, rules.countdown_cue_id(3),
+	]:
+		named.append(StringName(id))
+
+	var missing: Array[String] = []
+	for id in named:
+		if id == &"" or not p.audio.catalogue.has(id):
+			missing.append(String(id))
+	_check(
+		missing.is_empty(),
+		"the rules name a cue for every moment, and each is in the catalogue (missing: %s)"
+			% str(missing)
+	)
+
+	sink.forget()
+	_check(p.on_vote_cue(StringName(rules.cue_vote_start)) != 0, "a ballot opening plays")
+	p.on_vote_cue(&"")
+	p.on_vote_cue(&"not_in_this_build")
+	_check(
+		sink.count_of(StringName(rules.cue_vote_start)) == 1
+			and sink.count_of(&"not_in_this_build") == 0,
+		"once, and an empty or unknown cue is silence"
 	)
 
 	p.queue_free()

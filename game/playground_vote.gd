@@ -47,6 +47,17 @@ const CONFIG_PATH := "user://cfg/playground_vote.json"
 ## from — [code]metadata: map_vote:[/code] in a delivered game's [code]game.yml[/code].
 const METADATA_KEY := "map_vote"
 
+## The vote's sound cues, as ids in [code]PlaygroundPresentation.sound_catalogue()[/code].
+## One copy: the rules name them and the catalogue defines them, both from here.
+const CUE_START := &"vote_start"
+const CUE_END := &"vote_end"
+const CUE_WARNING := &"vote_warning"
+const CUE_COUNT := &"vote_count"
+
+## What dot-vote's commands are called here. `vote` rather than `votefor`, so the command
+## a player types is the token this game's own wire already sends.
+const COMMAND_NAMES := {"vote": "vote"}
+
 
 ## The vote picked something. The game is what changes to it.
 signal change_due(map_id: StringName)
@@ -54,8 +65,14 @@ signal change_due(map_id: StringName)
 ## Something a player should be told: the ballot, the tally, a warning.
 signal announced(line: String)
 
+## Something for every client to hear or count: a [code]cue_*[/code] id, or a second of
+## the countdown before a ballot. One of the two is empty or zero. The module puts it on
+## the wire as [constant PlaygroundEvents.Kind].VOTE.
+signal cue_due(cue: StringName, seconds_left: int, runoff: bool)
+
 
 var director: DotVoteDirector = null
+var commands: DotVoteCommands = null
 var game: Playground = null
 
 ## How many people are playing. Every threshold in a vote needs it.
@@ -113,6 +130,12 @@ static func vote_rules() -> DotVoteRules:
 	rules.cooldown_mode = DotVoteRules.Cooldown.PLAYS
 	rules.apply = DotVoteRules.Apply.IMMEDIATE
 	rules.apply_delay_sec = 5.0
+	# The ids PlaygroundPresentation's catalogue plays. dot-vote ships every cue empty.
+	rules.cue_vote_start = String(CUE_START)
+	rules.cue_vote_end = String(CUE_END)
+	rules.cue_warning = String(CUE_WARNING)
+	rules.cue_runoff_warning = String(CUE_WARNING)
+	rules.cue_countdown = String(CUE_COUNT)
 	return rules
 
 
@@ -154,7 +177,12 @@ func setup(p_game: Playground) -> DotResult:
 	# that has to be connected. Both firing is two entries in the play history for one
 	# play, and a "played in the last N" cooldown that is quietly half what it says.
 	director.begin_on_apply = false
-	director.self_advance = true
+	# [b]Off: the module advances it, once per server tick.[/b] It was on, AND the module
+	# called `advance(step)` every tick, so every clock in the vote ran at twice the speed
+	# it said — a thirty-minute limit was fifteen, a thirty-second ballot fifteen, and the
+	# three-minute rock-the-vote delay ninety seconds. Nothing errored: every number was
+	# consistent with itself, and only a clock on the wall disagrees.
+	director.self_advance = false
 	director.register_service = false
 	director.player_count_fn = _player_count
 	director.is_admin_fn = _is_admin
@@ -165,7 +193,34 @@ func setup(p_game: Playground) -> DotResult:
 		change_due.emit(id)
 	)
 
+	# Two signals, two messages: dot-vote emits a countdown second and that second's cue
+	# separately, and merging them here would be this file deciding which is which.
+	director.cue.connect(func(id: StringName) -> void: cue_due.emit(id, 0, false))
+	director.countdown_tick.connect(func(seconds_left: int, runoff: bool) -> void:
+		cue_due.emit(&"", seconds_left, runoff)
+	)
+
 	return DotResult.success(null)
+
+
+## dot-vote's commands, on [param host] — the module, so they go when it does.
+##
+## [b]The only vote commands, and the one rock-the-vote.[/b] `pg_rtv` went to the map
+## session's own `DotMapTimeLimit` while the wire's `rtv` went to this director — two
+## votes under one name — and none of dot-vote's commands existed here: no `nominate`
+## from chat, no `timeleft`, and none of the operator's `setnextmap`, `nominate_addmap`,
+## `forcertv`, `votereload`. A chat `!` line goes to the console in this game, so
+## registering them is all it takes. Voters are `u<userid>`, dot-vote's default and the
+## id [method submit] is handed off the wire.
+func install_commands(host: Object) -> DotResult:
+	if director == null:
+		return DotResult.fail(DotError.CODE_STATE, "There is no vote to command.")
+
+	commands = DotVoteCommands.new()
+	commands.director = director
+	commands.names = COMMAND_NAMES
+
+	return commands.bind(host)
 
 
 ## Somebody is playing something. The vote is told, once, from the one signal that fires

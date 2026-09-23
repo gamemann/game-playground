@@ -89,6 +89,8 @@ signal voice_arrived(payload: PackedByteArray)
 signal combat_received(state: Dictionary)
 signal match_received(state: Dictionary)
 signal progress_received(state: Dictionary)
+## The map vote's cue and countdown second, from [method PlaygroundEvents.read_vote_cue].
+signal vote_cue_received(state: Dictionary)
 
 var game: Playground = null
 var net: DotNetManager = null
@@ -1099,6 +1101,11 @@ func _on_event(message: DotNetMessage) -> void:
 
 			if bool(earned["ok"]):
 				progress_received.emit(earned)
+		PlaygroundEvents.Kind.VOTE:
+			var cue := PlaygroundEvents.read_vote_cue(reader)
+
+			if bool(cue["ok"]):
+				vote_cue_received.emit(cue)
 
 
 func _apply_hello(reader: DotNetReader) -> void:
@@ -1404,6 +1411,14 @@ func broadcast_match(
 	_broadcast(
 		PlaygroundEvents.Kind.MATCH,
 		PlaygroundEvents.write_match(state, seconds_left, round_number, label)
+	)
+
+
+## The map vote's cue or countdown second. Server side.
+func broadcast_vote_cue(cue: StringName, seconds_left: int, runoff: bool) -> void:
+	_broadcast(
+		PlaygroundEvents.Kind.VOTE,
+		PlaygroundEvents.write_vote_cue(String(cue), seconds_left, runoff)
 	)
 
 

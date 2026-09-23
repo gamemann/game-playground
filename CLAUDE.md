@@ -874,6 +874,15 @@ anything), and `begin_on_apply` (both the director and the host announcing one p
 every cooldown — the host's `DotMapSession.changed` is the one signal that fires for every
 change however it happened, so it is the only connection).
 
+**And then it ran at double speed, beside a second clock, under a second rock-the-vote.** Found finishing the map-chooser work, 2026-09-23:
+
+- `self_advance` was on *and* the module advanced the director every tick, so every clock in the vote counted twice: a thirty-minute limit was fifteen, a thirty-second ballot fifteen, the three-minute rock-the-vote delay ninety seconds. Every number agreed with every other, which is why nothing noticed. It is off; `dedicated` asserts the director is not processing itself.
+- `pg_rtv` went to the map session's `DotMapTimeLimit` while the wire's `rtv` went to the ballot — two votes under one name — and none of dot-vote's commands existed. `PlaygroundVote.install_commands` puts `DotVoteCommands` on the module (a chat `!` line reaches the console here, so that is all it takes), and `pg_rtv`, `pg_extend` and `pg_nextmap` answer from the ballot when there is one.
+- The map session's clock, on a server whose `pg_map_seconds` was not 0, changed to the rotation on the old clock after the players had voted to extend. `Playground.rotation_ends_maps` is off once the module has a ballot.
+- The ballot's cues go to clients as `PlaygroundEvents.Kind.VOTE` (`write_vote_cue`, because `write_vote` is a player's token going the other way) and play through `PlaygroundPresentation`'s catalogue, on voices nothing else in it uses.
+
+**The deployed sandbox runs until it is voted out, and now says so in both places.** `pg_map_seconds: "0"` stopped the map session's timer and not the vote's, so the delivered game was put to a ballot at twenty-eight minutes. Its `game.yml` sets `metadata: map_vote: {trigger: rtv_only, duration_sec: 0}`, and dot-server-deploy's selftest fails for any shipped game that stops its map clock without stopping the vote's. A sandbox has no leading score — the arena inside it is a side activity, not what a map is for — so nothing here calls `note_score`.
+
 ## Identity, and why a sandbox needs it at all
 
 `PlaygroundPlatform` builds dot-user, dot-user-avatar and `DotPlatformHub`, and
@@ -1029,9 +1038,9 @@ done
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
-godot --headless --path . res://examples/headless_presentation.tscn #  84 checks
-godot --headless --path . res://examples/headless_net.tscn          # 117 checks
-godot --headless --path . res://examples/dedicated.tscn             # 181 checks
+godot --headless --path . res://examples/headless_presentation.tscn #  87 checks
+godot --headless --path . res://examples/headless_net.tscn          # 119 checks
+godot --headless --path . res://examples/dedicated.tscn             # 188 checks
 ```
 
 **Run the check-only pass first.** A script that fails to parse makes the scene fail
