@@ -76,7 +76,7 @@ game/
 maps/
   pg_lobby.gd            the sandbox, and a jump course on bonus 1
   pg_surf_intro.gd       two ramps and a valley, and the plunge on bonus 1
-  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2
+  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3
   *.zones.json           generated from the maps, and checked against them
 tools/
   export_zones.gd        writes those files. Run it after changing a map
@@ -642,6 +642,16 @@ the drive decides something. `tools/screenshot.sh pg_bhop_intro` renders it from
 47 m out, made the whole route a smudge beside the main run's much larger blocks — and at
 its first turn.
 
+## `pg_bhop_intro`'s ascent: the first route a player has to walk part of
+
+Bonus 3 on `pg_bhop_intro`, east of the narrows at x = 60: four sections, each a level jump onto a 4 m block and a ramp up off it to a crest 2 m higher, then a last jump onto the finish — 2 m to 10 m in 64 m. **Every ramp rises 2 m against a 1.15 m jump apex, so there is no way up but to walk it**, and the pitches go 16, 24, 32, 40 degrees against the server's `max_slope_angle` of 46. It could not exist before dot-player-controller's `[slope-1]` (803308f): until then the first tick on any walkable slope read as airborne, and a ramp was a wall.
+
+**One description.** `PgBhopIntro.ascent_route()` is the boxes stood on, `ascent_walks()` names the ones whose next step is a ramp, and `ascent_ramps()` is each ramp's foot, crest and tilted box — dropped from the middle of its top surface along its own normal, so the top face passes through both blocks' edges exactly (the plunge's 0.8 m lip came from dropping vertically). The geometry, the zones and the suite read those three and nothing else. Splits are on the crests of ramps two to four, the one place nobody reaches but by the ramp below it.
+
+**`_drive_route` walks now.** Its `walks` argument stops the bot jumping off a walked box and counts its grounded ticks between that box and the next — on the ramp. It also found the bot's own bug on the first drive: near a crest `_standing_on`'s 0.4 m margin calls the bot on the crest while it is still on the ramp, with the look-ahead short of the crest too, which read as "past the edge" — so it jumped from the top of every ramp over the whole crest into the gap. Off a box a ramp climbed to, it jumps only once actually over it. Driven start to finish through all three splits in ~1,210 ticks, no respawns, grounded 118, 74, 52 and 40 ticks on the four ramps; `_check_route_reach` skips walked steps and prints the tightest jump, 3.40 m level against a 4.75 m reach (72%).
+
+**Armed, and what arming it found.** With the last ramp at 50 degrees the walkability check and the ramp-grounded check both fail (0 grounded ticks on it) — **but the drive still finishes.** An airborne player holding forward into a face past `max_slope_angle` creeps up it at a steady ~0.97 m/s vertical: air acceleration refills the wish each tick, the clip turns it up the plane, and gravity never wins, so 2 m of 50 degrees is climbed in about 1.5 s. Whether that is the genre (high air acceleration pressed into a surf face) or a bug is dot-player-controller's call (reported from the 2026-09-24 nightly run as `[steep-climb-1]`); it is why "it finished" alone proves nothing here and the grounded-ticks check exists. `tools/screenshot.sh pg_bhop_intro` renders `pg_bhop_intro_ascent` (the profile, from beside) and `pg_bhop_intro_ascent_start` (from behind the pad).
+
 ## Bonus 3 is a circuit, and a track now says whether it is driven
 
 `pg_lobby` gained a **driving circuit** round the outside of the plate: a rounded
@@ -1048,7 +1058,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 361 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 379 checks, 22 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_net.tscn          # 154 checks, 17 sections

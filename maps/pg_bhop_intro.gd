@@ -34,7 +34,17 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ## Its gaps widen along the route and every one is inside [method jump_reach] for the
 ## step it climbs.
 ##
-## All three tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
+## [b]A fourth route, and it is the first one a player walks part of.[/b] "The ascent", on
+## bonus 3, climbs 8 m in four sections, and every section is a jump onto a block and a
+## ramp up off it. Each ramp rises 2 m — nearly twice the 1.15 m apex, so there is no
+## way up but to walk it — and each is steeper than the last, from 16 degrees to 40,
+## against the 46 the controller can stand on. It could not exist before
+## dot-player-controller's `[slope-1]` (803308f): until then the first tick on any slope
+## under the limit read as airborne, and a ramp was a wall. The jumps between ramps ask
+## the question the jumps on the other routes do; the ramps ask whether a player can
+## carry a walk up a slope and off the crest into the next jump.
+##
+## All four tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
 ## one start and one finish exercises none of dot-timer's per-stage machinery.
 
 const START_Z := 0.0
@@ -130,6 +140,54 @@ const SWITCHBACK_LEGS := [
 const SWITCHBACK_FIRST_GAP := 2.0
 const SWITCHBACK_LAST_GAP := 3.3
 
+# --- Bonus 3: "the ascent" -----------------------------------------------------
+#
+# Every number below is read by `_build_the_ascent`, `ascent_route`, `ascent_ramps` and
+# `_add_the_ascent`, and nothing else describes where a block or a ramp is.
+
+## The track it runs on.
+const ASCENT_TRACK := DotTimerTrack.BONUS_FIRST + 2
+
+## The start pad's centre in X and Z, and the height of its top surface.
+##
+## East of the narrows by thirty metres, so the narrows' own reset slab (which reaches
+## x = 48) is clear of this route's, and level with the other three starts in Z so all
+## four read as four ways out of one place.
+const ASCENT_X := 60.0
+const ASCENT_Z := 10.0
+const ASCENT_Y := 2.0
+
+const ASCENT_PAD := Vector3(6.0, 1.0, 6.0)
+
+## A block a jump lands on, or a ramp's crest a jump leaves from. 4 m wide so the route is
+## about the slope and the jump, not about holding a line.
+const ASCENT_BLOCK := Vector3(4.0, 0.5, 3.0)
+
+## How much every ramp climbs, in metres.
+##
+## [b]Over the jump apex on purpose.[/b] 2 m against 1.15 means no crest can be jumped to
+## from the block below it, so the only way up the route is to walk every ramp — which
+## is the thing this route is for, and the thing `headless_playground` asserts.
+const ASCENT_RAMP_RISE := 2.0
+
+## The ramps' pitches, in degrees, first to last. One section per entry.
+##
+## [b]Steeper each time, and the last is six degrees inside the limit.[/b]
+## `PlaygroundPlayer._tunables` sets `max_slope_angle` to 46; a ramp past that is a
+## surf face a player slides down, and one AT it is a ramp that is walkable on one tick
+## and not the next. 40 is steep enough to feel like a climb and far enough inside that
+## nobody's floating point decides whether it is a floor.
+const ASCENT_PITCHES := [16.0, 24.0, 32.0, 40.0]
+
+## The clear air of the first jump and the last, in metres. Grows evenly.
+##
+## Every jump here is level — it leaves a crest and lands on a block at the crest's
+## height — so the reach is `jump_reach(0.0)`, 4.75 m. 3.4 is 72% of it: a player
+## walking off the crest at full speed makes it, and one who stalled on the ramp and
+## jumps from a standing start does not.
+const ASCENT_FIRST_GAP := 2.2
+const ASCENT_LAST_GAP := 3.4
+
 
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
@@ -166,6 +224,7 @@ func _build() -> void:
 
 	_build_the_narrows()
 	_build_the_switchback()
+	_build_the_ascent()
 
 
 ## The bonus route, alongside the main run and six metres above it.
@@ -227,6 +286,37 @@ func _build_the_switchback() -> void:
 			colour = PlaygroundGeometry.COLOUR_RAMP
 
 		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
+
+
+## Bonus 3, built from [method ascent_route] and [method ascent_ramps] and nothing else.
+##
+## The landing blocks are the platform colour and the ramps and their crests the ramp
+## colour, so from anywhere on the map the route reads as "jump, climb, jump, climb".
+func _build_the_ascent() -> void:
+	var route := ascent_route()
+
+	for i in range(route.size()):
+		var box: AABB = route[i]
+		var colour := PlaygroundGeometry.COLOUR_PLATFORM
+
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif i == route.size() - 1:
+			colour = PlaygroundGeometry.COLOUR_END
+		elif i % 2 == 0:
+			# Every even box after the pad is a crest: the top of a ramp.
+			colour = PlaygroundGeometry.COLOUR_RAMP
+
+		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
+
+	for ramp in ascent_ramps():
+		PlaygroundGeometry.ramp(
+			self,
+			ramp["centre"],
+			ramp["size"],
+			float(ramp["pitch"]),
+			Vector3.RIGHT
+		)
 
 
 ## The gap after block [param index], in metres.
@@ -353,6 +443,108 @@ static func switchback_corners() -> Array[int]:
 	return corners
 
 
+# --- The ascent, as arithmetic -----------------------------------------------
+
+## The run of ramp [param index] along the ground, in metres: what its rise and its pitch
+## leave.
+static func ascent_ramp_run(index: int) -> float:
+	return ASCENT_RAMP_RISE / tan(deg_to_rad(float(ASCENT_PITCHES[index])))
+
+
+## The clear air before the landing block of section [param index].
+static func ascent_gap(index: int) -> float:
+	var last := maxi(ASCENT_PITCHES.size(), 1)
+	return lerpf(ASCENT_FIRST_GAP, ASCENT_LAST_GAP, float(index) / float(last))
+
+
+## Bonus 3 as the boxes a player stands on, start pad to finish pad, in order: the pad,
+## then per section a landing block and the crest its ramp climbs to, then the finish.
+##
+## [b]Two kinds of step, and [method ascent_walks] says which is which.[/b] Pad to block,
+## and crest to the next block, is a jump; block to crest is a ramp, walked. The route
+## runs straight along -Z, edge to edge from the pad, for the reason `switchback_route`
+## gives — spacing by centres makes the air a player jumps quietly differ from the number
+## written here.
+static func ascent_route() -> Array[AABB]:
+	var top := ASCENT_Y
+	var pad_centre := Vector3(ASCENT_X, top - ASCENT_PAD.y * 0.5, ASCENT_Z)
+	var route: Array[AABB] = [standable(pad_centre, ASCENT_PAD)]
+
+	# The near (high-Z) edge of whatever comes next.
+	var z := ASCENT_Z - ASCENT_PAD.z * 0.5
+
+	for i in range(ASCENT_PITCHES.size()):
+		z -= ascent_gap(i)
+		route.append(standable(
+			Vector3(ASCENT_X, top - ASCENT_BLOCK.y * 0.5, z - ASCENT_BLOCK.z * 0.5),
+			ASCENT_BLOCK
+		))
+		z -= ASCENT_BLOCK.z + ascent_ramp_run(i)
+		top += ASCENT_RAMP_RISE
+		route.append(standable(
+			Vector3(ASCENT_X, top - ASCENT_BLOCK.y * 0.5, z - ASCENT_BLOCK.z * 0.5),
+			ASCENT_BLOCK
+		))
+		z -= ASCENT_BLOCK.z
+
+	z -= ASCENT_LAST_GAP
+	route.append(standable(
+		Vector3(ASCENT_X, top - ASCENT_PAD.y * 0.5, z - ASCENT_PAD.z * 0.5), ASCENT_PAD
+	))
+
+	return route
+
+
+## The route indices a player WALKS off rather than jumps from: every landing block,
+## whose far edge is the foot of a ramp.
+static func ascent_walks() -> Array[int]:
+	var walks: Array[int] = []
+
+	for i in range(ASCENT_PITCHES.size()):
+		walks.append(1 + i * 2)
+
+	return walks
+
+
+## Each ramp as `{pitch, foot, crest, centre, size}`: the pitch in degrees, the foot and
+## the crest as the middle of the ramp's top surface's two ends, and the centre and size
+## of the tilted box [method PlaygroundGeometry.ramp] builds.
+##
+## [b]The top surface meets both blocks exactly, and that is arithmetic rather than a
+## nudge.[/b] The foot is the landing block's far top edge and the crest the next block's
+## near top edge; the box is dropped from the midpoint of that surface along its own
+## NORMAL by half its thickness. `pg_surf_intro`'s plunge drops by half a thickness
+## vertically and has to correct by 1/cos(pitch) — getting that wrong left a 0.8 m lip
+## there. Along the normal, there is nothing to correct: the top face passes through
+## both edges, and the box's ends sink into the blocks below their tops rather than
+## standing proud of them.
+static func ascent_ramps() -> Array[Dictionary]:
+	var route := ascent_route()
+	var ramps: Array[Dictionary] = []
+	var thickness := 0.5
+
+	for i in range(ASCENT_PITCHES.size()):
+		var block: AABB = route[1 + i * 2]
+		var crest_box: AABB = route[2 + i * 2]
+		var pitch := float(ASCENT_PITCHES[i])
+		var radians := deg_to_rad(pitch)
+		var foot := Vector3(ASCENT_X, block.end.y, block.position.z)
+		var crest := Vector3(ASCENT_X, crest_box.end.y, crest_box.end.z)
+		# `Basis(RIGHT, +pitch)` turns the box's up to (0, cos, sin): its top faces up
+		# and back toward the foot, which is what a ramp climbing toward -Z does.
+		var normal := Vector3(0.0, cos(radians), sin(radians))
+
+		ramps.append({
+			"pitch": pitch,
+			"foot": foot,
+			"crest": crest,
+			"centre": (foot + crest) * 0.5 - normal * thickness * 0.5,
+			"size": Vector3(ASCENT_BLOCK.x, thickness, foot.distance_to(crest)),
+		})
+
+	return ramps
+
+
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
 
@@ -396,6 +588,7 @@ static func build_zones() -> DotTimerZoneSet:
 	_add_main_stages(zones)
 	_add_the_narrows(zones)
 	_add_the_switchback(zones)
+	_add_the_ascent(zones)
 
 	return zones
 
@@ -597,5 +790,67 @@ static func _add_the_switchback(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(low.x - 10.0, SWITCHBACK_Y - 8.0, low.z - 10.0),
 		Vector3(high.x + 10.0, SWITCHBACK_Y - 3.0, high.z + 10.0)
+	)
+	zones.add(reset)
+
+
+## Everything on bonus 3: a spawn, a start, a split on each crest after the first ramp's,
+## a finish, and a volume under the whole climb that puts a player who fell back on the
+## pad.
+##
+## [b]The splits are on the crests of ramps two, three and four.[/b] A crest is the one
+## place a player cannot reach but by the ramp below it, so a split there is one nobody
+## skips — and it measures the climb and the jump before it together, which is the
+## section. The first crest has none because the first section is a lesson.
+static func _add_the_ascent(zones: DotTimerZoneSet) -> void:
+	var track := ASCENT_TRACK
+	var route := ascent_route()
+	var pad: AABB = route[0]
+
+	# On the pad, a stride behind its middle so there is a run-up to the first jump,
+	# facing -Z — the way the route runs, which is yaw 0 by `DotFpsMotor._view_basis`'s
+	# convention.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = pad.get_center() + Vector3(0.0, ASCENT_PAD.y * 0.5 + 1.0, 1.5)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	# Timing begins when the player leaves the pad, which is the first jump.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	# Wider than the route and tall, for the narrows' reason: a player drifting off the
+	# side as they cross has still crossed.
+	for n in range(1, ASCENT_PITCHES.size()):
+		var crest: AABB = route[2 + n * 2]
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n)
+		stage.set_box(
+			Vector3(crest.position.x - 2.0, crest.end.y - 1.0, crest.position.z),
+			Vector3(crest.end.x + 2.0, crest.end.y + 6.0, crest.end.z)
+		)
+		zones.add(stage)
+
+	# The finish: the whole pad and the air above it, deep for `thin_zones`' reason.
+	var last: AABB = route[route.size() - 1]
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(last.position.x, last.end.y - 1.0, last.position.z),
+		Vector3(last.end.x, last.end.y + 5.0, last.end.z)
+	)
+	zones.add(finish)
+
+	# Falling off: a slab three to eight metres under the pad, the whole climb long.
+	# Everything on this route is at or above the pad, so anybody who leaves it passes
+	# through, and ten metres either side stops it at x = 50 — clear of the narrows'
+	# own slab, which ends at 48.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(ASCENT_X - 10.0, ASCENT_Y - 8.0, last.position.z - 10.0),
+		Vector3(ASCENT_X + 10.0, ASCENT_Y - 3.0, pad.end.z + 10.0)
 	)
 	zones.add(reset)

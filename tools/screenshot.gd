@@ -123,6 +123,23 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(-58.0, 9.0, 18.0),
 				"at": Vector3(-42.0, 4.0, 4.0),
 			},
+			# Bonus 3, the ascent: four jumps onto blocks and four ramps up off them,
+			# climbing from 2 m to 10 m along z at x = 60. From square beside it and a
+			# little above the top, because the thing the frame has to show is the
+			# PROFILE — each ramp steeper than the last — and from any angle down the
+			# route the ramps foreshorten into the blocks.
+			{
+				"name": "pg_bhop_intro_ascent",
+				"from": Vector3(100.0, 8.0, -22.0),
+				"at": Vector3(60.0, 6.0, -22.0),
+			},
+			# And from behind the pad at a player's height: what a player sees before
+			# the first jump, a green pad, a gap, and the first ramp going up.
+			{
+				"name": "pg_bhop_intro_ascent_start",
+				"from": Vector3(60.0, 5.5, 17.0),
+				"at": Vector3(60.0, 4.0, -20.0),
+			},
 		]
 
 	if id == "pg_surf_intro":

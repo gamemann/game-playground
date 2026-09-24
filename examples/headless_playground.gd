@@ -47,13 +47,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 361
+const CHECKS := 379
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 21
+const SECTIONS := 22
 
 var _passed := 0
 var _failed := 0
@@ -111,6 +111,7 @@ func _run() -> void:
 	await _test_the_plunge()
 	await _test_the_jump_course()
 	await _test_the_switchback()
+	await _test_the_ascent()
 	await _test_the_client_boots()
 
 	print("")
@@ -1110,7 +1111,13 @@ static func _jump_is_inside(gap: float, rise: float) -> bool:
 ## flat jump off the addon's default tunables says is refused. That is the arithmetic the
 ## tower was checked with until 2026-09-23, so this is the check that fails if the rule is
 ## ever "simplified" back to it.
-func _check_route_reach(route: Array[AABB], name: String) -> void:
+##
+## [param walks] names the boxes a player walks off rather than jumps from — the foot of a
+## ramp — and those steps are skipped here: a ramp's rise is not a jump's, and the ascent's
+## are twice the apex on purpose. Its own section checks them as slopes.
+func _check_route_reach(
+	route: Array[AABB], name: String, walks: Array[int] = []
+) -> void:
 	var worst := -INF
 	var worst_at := -1
 	var worst_gap := 0.0
@@ -1119,6 +1126,9 @@ func _check_route_reach(route: Array[AABB], name: String) -> void:
 	var inside := true
 
 	for i in range(1, route.size()):
+		if walks.has(i - 1):
+			continue
+
 		var gap := PgLobby.gap_between(route[i - 1], route[i])
 		var rise := route[i].end.y - route[i - 1].end.y
 		tallest = maxf(tallest, rise)
@@ -1137,7 +1147,7 @@ func _check_route_reach(route: Array[AABB], name: String) -> void:
 			worst_rise = rise
 
 	print("    %s: %d jumps, the tightest is #%d, %.2f m of air %.2f m up against a %.2f m reach (%.0f%%)" % [
-		name, route.size() - 1, worst_at, worst_gap, worst_rise,
+		name, route.size() - 1 - walks.size(), worst_at, worst_gap, worst_rise,
 		PgLobby.jump_reach(worst_rise), worst * 100.0,
 	])
 
@@ -1193,11 +1203,17 @@ func _the_old_tower_rule_passes_an_unjumpable_gap() -> void:
 ##   onto a lower turn of a spiral simply resumes from there, which is how a respawn
 ##   and a missed landing both come out right without a special case.
 ##
-## Returns `{started, finished, splits, reached, ticks, respawns}`; `reached` is the
-## highest box index stood on, reported so a failure names the jump.
+## [param walks] names the boxes whose next step is WALKED — a ramp up to the next box —
+## rather than jumped. Off one of those the bot never jumps, and it counts the ticks it
+## spends grounded between the two boxes, which is on the ramp: a drive that finishes
+## with none on some ramp got up it some other way.
+##
+## Returns `{started, finished, splits, reached, ticks, respawns, walked}`; `reached` is
+## the highest box index stood on, reported so a failure names the jump; `walked` maps
+## each of [param walks] to its grounded ramp ticks.
 func _drive_route(
 	player: PlaygroundPlayer, route: Array[AABB], max_ticks: int,
-	look_ahead: float = 0.3
+	look_ahead: float = 0.3, walks: Array[int] = []
 ) -> Dictionary:
 	# Arrays, not locals: a GDScript lambda captures by value.
 	var started: Array[bool] = [false]
@@ -1220,6 +1236,10 @@ func _drive_route(
 	var on := 0
 	var reached := 0
 	var ticks := 0
+	var walked := {}
+
+	for i in walks:
+		walked[i] = 0
 
 	for tick in range(max_ticks):
 		ticks = tick
@@ -1228,10 +1248,16 @@ func _drive_route(
 
 		if grounded:
 			# Highest first: on a spiral a box is directly under another one.
+			var on_a_box := false
+
 			for i in range(route.size() - 1, -1, -1):
 				if _standing_on(at, route[i]):
 					on = i
+					on_a_box = true
 					break
+
+			if not on_a_box and walked.has(on):
+				walked[on] = int(walked[on]) + 1
 
 		reached = maxi(reached, on)
 
@@ -1267,11 +1293,17 @@ func _drive_route(
 		# up and kills every bit of horizontal speed: the first version of this bot
 		# bonked on it, dropped off the corner, and was respawned. A player jumps a
 		# ledge like that from a stride back, and so does this.
-		if grounded and on < route.size() - 1:
+		if grounded and on < route.size() - 1 and not walks.has(on):
 			var going := flat if flat.length() > 0.5 else heading
 			var ahead := at + going.normalized() * look_ahead
 			var close := PgLobby.gap_between(AABB(at, Vector3.ZERO), target) < 1.0
-			if close or not _over(ahead, route[on]):
+			# Off a box a ramp climbed to, only once actually over it. Near the crest
+			# `_standing_on`'s margin already calls the bot on the box while it is still
+			# on the ramp, with the look-ahead short of the box too — which reads as "past
+			# the edge", and the first drive of the ascent jumped from the top of every
+			# ramp across the whole crest into the gap beyond it.
+			var arriving := walks.has(on - 1) and not _over(at, route[on])
+			if not arriving and (close or not _over(ahead, route[on])):
 				command.set_button(DotFpsCommand.BUTTON_JUMP, true)
 
 		player.controller.apply_command(command)
@@ -1299,6 +1331,7 @@ func _drive_route(
 		"reached": reached,
 		"ticks": ticks,
 		"respawns": respawns[0],
+		"walked": walked,
 	}
 
 
@@ -2377,10 +2410,10 @@ func _test_the_narrows() -> void:
 		zones.playable_tracks() == PackedInt32Array(
 			[
 				DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST,
-				PgBhopIntro.SWITCHBACK_TRACK,
+				PgBhopIntro.SWITCHBACK_TRACK, PgBhopIntro.ASCENT_TRACK,
 			]
 		),
-		"and all three of its routes can be run, the switchback included",
+		"and all four of its routes can be run, the switchback and the ascent included",
 		str(zones.playable_tracks())
 	)
 
@@ -3146,8 +3179,9 @@ func _test_the_switchback() -> void:
 	_check(
 		playground.tracks_on_this_map() == [
 			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track,
+			PgBhopIntro.ASCENT_TRACK,
 		],
-		"and the game sees three tracks on the map without being told",
+		"and the game sees four tracks on the map without being told",
 		str(playground.tracks_on_this_map())
 	)
 
@@ -3198,6 +3232,165 @@ func _test_the_switchback() -> void:
 	_check(
 		drive["finished"],
 		"and reaches the finish pad: the switchback run end to end",
+		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.x, player.global_position.y,
+				player.global_position.z, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+# --- The ascent -------------------------------------------------------------
+
+## `pg_bhop_intro`'s bonus 3, driven start to finish, walking every ramp.
+##
+## [b]The first route here a player cannot finish by jumping alone.[/b] Every crest is
+## [constant PgBhopIntro.ASCENT_RAMP_RISE] above the block below it — over the jump apex —
+## so the bot reaching the finish at all says each ramp was walked up; the per-ramp count
+## of grounded ticks between block and crest says it was walked rather than bounced up.
+## Until dot-player-controller's `[slope-1]` a slope under the limit read as airborne on
+## its first tick, and this drive would stall at the foot of the first ramp.
+##
+## The geometry is also asked of the physics space rather than of the arithmetic alone: a
+## ray down onto the middle of each ramp finds the height the map says, so a ramp built
+## tilted the wrong way or dropped along the wrong axis — the plunge's 0.8 m lip — fails
+## here before any bot does.
+func _test_the_ascent() -> void:
+	print("")
+	_section("the ascent — pg_bhop_intro's bonus 3, jumped and walked end to end")
+
+	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
+	_check(loaded.ok, "the bhop map loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgBhopIntro.ASCENT_TRACK
+	var zones := PgBhopIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 3},
+		"bonus 3 has a start, a finish, a spawn, a respawn and three splits, on its own track",
+		str(kinds)
+	)
+	_check(
+		zones.route_problems().is_empty(),
+		"and every route on the map, this one included, is complete by route_problems()",
+		", ".join(zones.route_problems())
+	)
+
+	var route := PgBhopIntro.ascent_route()
+	var walks := PgBhopIntro.ascent_walks()
+	_check_route_reach(route, "the ascent", walks)
+
+	# The ramps, as slopes: walkable by the tunables the server applies, taller than a
+	# jump, and actually where the arithmetic says in the physics space.
+	var player := playground.add_player(&"bot", "Bot")
+	var max_slope: float = player.controller.tunables.max_slope_angle
+	var ramps := PgBhopIntro.ascent_ramps()
+	var steepest := 0.0
+	var shortest_rise := INF
+	var worst_miss := 0.0
+	var space := playground.get_world_3d().direct_space_state
+
+	for i in range(ramps.size()):
+		var ramp: Dictionary = ramps[i]
+		var foot: Vector3 = ramp["foot"]
+		var crest: Vector3 = ramp["crest"]
+		steepest = maxf(steepest, float(ramp["pitch"]))
+		shortest_rise = minf(shortest_rise, crest.y - foot.y)
+
+		var middle := (foot + crest) * 0.5
+		var query := PhysicsRayQueryParameters3D.create(
+			middle + Vector3.UP * 5.0, middle + Vector3.DOWN * 5.0
+		)
+		var hit := space.intersect_ray(query)
+		var miss: float = (
+			absf((hit["position"] as Vector3).y - middle.y) if not hit.is_empty() else INF
+		)
+		worst_miss = maxf(worst_miss, miss)
+
+	print("    the ascent: %d ramps, %.0f to %.0f degrees against a %.0f limit, each %.2f m up against a %.2f m apex" % [
+		ramps.size(), float(ramps[0]["pitch"]), steepest, max_slope, shortest_rise,
+		PgLobby.JUMP_HEIGHT,
+	])
+
+	_check(
+		steepest < max_slope,
+		"every ramp is walkable: the steepest is under the server's max_slope_angle",
+		"%.1f against %.1f" % [steepest, max_slope]
+	)
+	_check(
+		shortest_rise > PgLobby.JUMP_HEIGHT,
+		"and every ramp climbs more than a jump can, so the only way up is to walk it",
+		"%.2f m against a %.2f m apex" % [shortest_rise, PgLobby.JUMP_HEIGHT]
+	)
+	_check(
+		worst_miss < 0.02,
+		"and a ray onto the middle of each ramp finds the surface where the map says",
+		"worst %.3f m off" % worst_miss
+	)
+
+	_check(player.timer.set_track(track), "the ascent's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	# Five jumps and four ramps at about a second each; 3,000 leaves room.
+	var drive: Dictionary = await _drive_route(player, route, 3000, 0.3, walks)
+	var walked: Dictionary = drive["walked"]
+
+	print("    the ascent: box %d of %d, splits %s, finish %s, %d ticks, %d respawns, ramp ticks %s" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+		str(walked.values()),
+	])
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 3")
+	_check(
+		drive["splits"] == [1, 2, 3],
+		"it crosses the three crests' splits, in order",
+		str(drive["splits"])
+	)
+
+	var every_ramp_walked := walked.size() == ramps.size()
+
+	for i in walked:
+		if int(walked[i]) < 5:
+			every_ramp_walked = false
+
+	_check(
+		every_ramp_walked,
+		"standing on every ramp on the way up rather than bouncing off it",
+		"grounded ticks per ramp %s" % str(walked)
+	)
+	_check(
+		drive["finished"],
+		"and reaches the finish pad: the ascent run end to end",
 		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
 			% [int(drive["reached"]), route.size() - 1,
 				player.global_position.x, player.global_position.y,
