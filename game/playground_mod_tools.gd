@@ -118,6 +118,9 @@ static func handlers(game: Playground, arena: PlaygroundArena) -> Dictionary:
 			# A shove is movement, which every server here has; the damage is the arena's.
 			p.controller.state.velocity += Vector3(3.0, 5.0, 3.0)
 			p.controller.state.mode = DotFpsState.Mode.AIR
+			# Speed nobody earned: an admin's help, which a course time must not carry.
+			if p.timer != null:
+				p.timer.taint()
 			var amount := float(args.get("damage", 0.0))
 			if amount > 0.0 and _health(arena, id) != null:
 				var _hurt := arena.hurt(&"", key_of(id), amount, 0.0)

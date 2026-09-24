@@ -43,7 +43,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 23
-const CHECKS := 208
+const CHECKS := 209
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -1646,6 +1646,14 @@ func _test_live_tools() -> void:
 	player._on_simulated(0, player.controller.state)
 	_check(player.timer.run.tainted, "a run begun while noclipped is marked assisted")
 	var _off := await _run_command_later("noclip Pat off")
+
+	# A slap is a shove in a direction the slapper knows: speed nobody earned.
+	player.timer.run.begin(0.0)
+	var clean_before_slap := not player.timer.run.tainted
+	var _slapped := await _run_command_later("slap Pat")
+	_check(clean_before_slap and player.timer.run.tainted,
+		"a slap taints the course run it lands in, so it is not a boost with a time at the end")
+
 	player.timer.run_stopped.disconnect(on_stop)
 	player.timer.stop()
 
