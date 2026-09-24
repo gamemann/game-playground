@@ -26,7 +26,8 @@ const Playground := preload("../playground.gd")
 ## go, and dot-server reports the running map in a query — so a person who wants the surf
 ## map can have only servers on it, without any server having to be asked.
 
-const CHANNEL := "playground.browser"
+# No CHANNEL: a screen on a player's machine, where nobody reads a log. The asking is dot-browser's,
+# and it logs its own queries; what this decides — a row, a filter — the player is looking at.
 
 const DEFAULT_PORT := 27015
 

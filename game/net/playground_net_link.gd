@@ -83,12 +83,42 @@ static func attached_to(
 
 
 func _live() -> bool:
-	if loopback.is_valid():
-		return true
-
-	return is_inside_tree() \
-		and multiplayer != null \
+	var live := loopback.is_valid() or (
+		is_inside_tree()
+		and multiplayer != null
 		and multiplayer.has_multiplayer_peer()
+	)
+
+	# Every send asks, so this is said when it changes and not per packet: a link with
+	# no peer drops snapshots 128 times a second, and one line saying it started is the
+	# whole of what anybody needs. DEBUG, because it is also what every clean disconnect
+	# looks like.
+	if live == _dropping:
+		_dropping = not live
+		if _dropping:
+			DotLog.debug(CHANNEL, "sending stopped: the link has no multiplayer peer", describe())
+		else:
+			DotLog.debug(CHANNEL, "sending resumed", {"server": is_server})
+
+	return live
+
+
+## Whether sends were being dropped at the last [method _live]. See there.
+var _dropping := false
+
+## Whether a message has arrived with no bridge to hand it to since one was last set.
+var _unbridged := false
+
+
+## A message with nowhere to go. Said once per stretch rather than per packet.
+func _note_unbridged(method: String) -> void:
+	if _unbridged:
+		return
+
+	_unbridged = true
+	DotLog.debug(CHANNEL, "messages are arriving with no bridge to hand them to; dropping", {
+		"first": method, "server": is_server,
+	})
 
 
 # --- Sending ---------------------------------------------------------------
@@ -179,8 +209,13 @@ func send_request(payload: PackedByteArray) -> void:
 func _net_snapshot(payload: PackedByteArray) -> void:
 	snapshots_received += 1
 
-	if bridge != null:
-		bridge.receive_snapshot(payload)
+	if bridge == null:
+		_note_unbridged("snapshot")
+		return
+
+	_unbridged = false
+
+	bridge.receive_snapshot(payload)
 
 
 ## Anything from the authority that must arrive: spawns, removals, the roster, a prop
@@ -189,8 +224,13 @@ func _net_snapshot(payload: PackedByteArray) -> void:
 func _net_event(payload: PackedByteArray) -> void:
 	events_received += 1
 
-	if bridge != null:
-		bridge.receive_event(payload)
+	if bridge == null:
+		_note_unbridged("event")
+		return
+
+	_unbridged = false
+
+	bridge.receive_event(payload)
 
 
 ## A client's intent. Unreliable, and not resent: the next tick's packet carries the
@@ -199,10 +239,15 @@ func _net_event(payload: PackedByteArray) -> void:
 func _net_client_input(payload: PackedByteArray) -> void:
 	inputs_received += 1
 
-	if bridge != null:
-		# The sender comes from the transport, never from inside the payload. A peer id
-		# in a body is a claim; this is a fact.
-		bridge.receive_input(multiplayer.get_remote_sender_id(), payload)
+	if bridge == null:
+		_note_unbridged("client_input")
+		return
+
+	_unbridged = false
+
+	# The sender comes from the transport, never from inside the payload. A peer id
+	# in a body is a claim; this is a fact.
+	bridge.receive_input(multiplayer.get_remote_sender_id(), payload)
 
 
 ## A client asking for something: spawn this prop, hold that one, change map, restart.
@@ -210,8 +255,13 @@ func _net_client_input(payload: PackedByteArray) -> void:
 func _net_request(payload: PackedByteArray) -> void:
 	requests_received += 1
 
-	if bridge != null:
-		bridge.receive_request(multiplayer.get_remote_sender_id(), payload)
+	if bridge == null:
+		_note_unbridged("request")
+		return
+
+	_unbridged = false
+
+	bridge.receive_request(multiplayer.get_remote_sender_id(), payload)
 
 
 ## Hands a payload to this end as though it had arrived over the wire.
@@ -228,13 +278,21 @@ func _net_request(payload: PackedByteArray) -> void:
 func _net_voice(payload: PackedByteArray) -> void:
 	voice_received += 1
 
-	if bridge != null:
-		bridge.receive_voice(multiplayer.get_remote_sender_id(), payload)
+	if bridge == null:
+		_note_unbridged("voice")
+		return
+
+	_unbridged = false
+
+	bridge.receive_voice(multiplayer.get_remote_sender_id(), payload)
 
 
 func deliver(method: StringName, from_peer_id: int, payload: PackedByteArray) -> void:
 	if bridge == null:
+		_note_unbridged(String(method))
 		return
+
+	_unbridged = false
 
 	match method:
 		&"snapshot":

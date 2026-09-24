@@ -51,14 +51,27 @@ func setup() -> DotResult:
 	var profiled: DotResult = await _build_users()
 
 	if not profiled.ok:
+		DotLog.result(CHANNEL, "profiles could not start", profiled)
 		return profiled
 
 	var dressed: DotResult = await _build_avatars()
 
 	if not dressed.ok:
+		DotLog.result(CHANNEL, "avatars could not start", dressed)
 		return dressed
 
-	return await _build_hub()
+	var joined: DotResult = await _build_hub()
+
+	if not joined.ok:
+		DotLog.result(CHANNEL, "the platform hub could not start", joined)
+		return joined
+
+	# Where profiles live and under which scope: the two things an operator needs to find
+	# somebody's record, or to know why a returning player was not recognised.
+	DotLog.info(CHANNEL, "identity is up: guest profiles, fixed names, local storage", {
+		"scope": scope, "directory": directory,
+	})
+	return joined
 
 
 func _build_users() -> DotResult:

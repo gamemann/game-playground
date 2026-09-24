@@ -33,7 +33,8 @@ const PlaygroundWeapons := preload("playground_weapons.gd")
 ## server — the same division the tools make, and the reason this file works unchanged
 ## when a dot-net bridge arrives and a spawn becomes a message.
 
-const CHANNEL := "playground.menu"
+# No CHANNEL: a screen, and nothing it draws is an operator's to act on. What a player picks is
+# logged where it is acted on — by the spawner, or by the server the bridge asks.
 
 ## The pseudo-category that shows everything on a tab. Not a real category.
 const ALL := &"__all"

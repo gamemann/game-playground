@@ -24,7 +24,8 @@ const PlaygroundPaths := preload("playground_paths.gd")
 ## reason the chassis is a subclass point is that a boat and a car are the same problem
 ## with different suspension.
 
-const CHANNEL := "playground.vehicles"
+# No CHANNEL: a static catalogue that decides nothing at runtime. A vehicle spawned, entered or
+# refused is logged where that happens — the spawner, the bridge, the module.
 
 ## The scene every vehicle is built into. A [VehicleBody3D], because Godot's raycast
 ## vehicle needs one at the root and a [VehicleBody3D] is a [RigidBody3D] — so the hover

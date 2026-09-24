@@ -22,6 +22,10 @@ const PlaygroundCharacter := preload("playground_character.gd")
 
 const CHANNEL := "playground.player"
 
+## Whether admin help was on last tick, so it is logged when it changes rather than on
+## every one of 128 ticks a second.
+var _assisted := false
+
 ## The run finished. The world files it; the player just reports.
 signal finished(run: DotTimerRun)
 
@@ -528,12 +532,28 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 	# finishes and shows and is never filed. Every tick, because a run begun while the
 	# help is on must carry it too. game-g2gfast's player does the same, for the same
 	# reason; see PlaygroundModTools.
-	if (
+	var helped := (
 		DotFpsAdminModifiers.is_noclipped(controller)
 		or not is_equal_approx(DotFpsAdminModifiers.speed_of(controller), 1.0)
 		or not is_equal_approx(DotFpsAdminModifiers.gravity_of(controller), 1.0)
-	):
+	)
+
+	if helped:
 		timer.taint()
+
+	# Said on the edge, not every tick. INFO when it comes on, because "my time was not
+	# filed" is the complaint an admin will be asked about and this is the answer.
+	if helped != _assisted:
+		_assisted = helped
+		if helped:
+			DotLog.info(CHANNEL, "admin help is on: this player's runs are assisted and will not be filed", {
+				"player": String(player_id),
+				"noclip": DotFpsAdminModifiers.is_noclipped(controller),
+				"speed": DotFpsAdminModifiers.speed_of(controller),
+				"gravity": DotFpsAdminModifiers.gravity_of(controller),
+			})
+		else:
+			DotLog.debug(CHANNEL, "admin help is off", {"player": String(player_id)})
 
 	# The prespeed limit runs INSIDE the simulation: clamping a player's speed
 	# changes where they end up, so it has to happen on the tick, every tick, rather

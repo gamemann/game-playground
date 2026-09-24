@@ -209,6 +209,14 @@ func setup(p_game: Playground) -> DotResult:
 		return linked.wrap("The achievement stats link could not start")
 
 	_watch_game()
+
+	# Once, at boot: where progress is kept and whether it leaves the box, which is the
+	# first thing an operator asks when somebody says their achievements vanished.
+	DotLog.info(CHANNEL, "statistics and achievements are counting", {
+		"directory": progress_dir,
+		"backbone": backbone != null,
+		"achievements": achievements.catalogue.size() if achievements.catalogue != null else 0,
+	})
 	return DotResult.success(null)
 
 
@@ -254,6 +262,11 @@ func _record(player_id: StringName, stat: StringName, value: float) -> void:
 		else String(player_id)
 
 	if key == "":
+		# A decision, not a fault: a player with no key yet (mid sign-on, or a bot) has no
+		# record to file under, and a reading guessed onto somebody else's would be worse.
+		DotLog.debug(CHANNEL, "a reading with no key to file it under is dropped", {
+			"player": String(player_id), "stat": String(stat),
+		})
 		return
 
 	stats.record(StringName(key), stat, value)
