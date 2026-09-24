@@ -176,6 +176,15 @@ func setup(p_game: Playground) -> DotResult:
 			"detail": layered.error.detail,
 		})
 
+	# Nothing in this game reports a round end or a leading score to the vote, so a
+	# `trigger: round_end` or a score limit in an operator's file would validate and then
+	# wait for ever — and with the map's own clock handed to the vote, the map never ends.
+	var unfed := rules.drop_unfed(false, false)
+	if not unfed.is_empty():
+		DotLog.error(CHANNEL, "the map vote configuration asks for what this game cannot drive; ignored", {
+			"path": config_path, "ignored": ", ".join(unfed),
+		})
+
 	director = DotVoteDirector.new()
 	director.name = "Vote"
 	director.rules = rules
