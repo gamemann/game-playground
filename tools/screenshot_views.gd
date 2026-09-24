@@ -115,6 +115,8 @@ func _process(_delta: float) -> bool:
 			{"name": "admin_beacon", "third": false, "beacon": true},
 			{"name": "admin_beacon_wall", "third": false, "beacon": true, "wall": true},
 			{"name": "admin_blind", "third": false, "blind": true},
+			{"name": "body_standing", "third": false, "other": true},
+			{"name": "rider_seated", "third": false, "other": true, "seated": true},
 		]
 		return false
 
@@ -178,18 +180,15 @@ func _process(_delta: float) -> bool:
 func _arrange_admin(shot: Dictionary) -> void:
 	var beaconing := bool(shot.get("beacon", false))
 
-	# [b]Her body is not drawn, and that is a finding rather than a choice.[/b] A player
-	# with no view switch has `set_shown(false)`, and `PlaygroundCharacter`'s rig is a
-	# Node3D under a plain-Node component, so it does not follow its player: shown, it
-	# stands at the world origin whatever the player's position (measured here, 2026-09-24:
-	# player at (1.5, 0, -7), rig at (0, 0, 0)). The earlier frames showed a body under the
-	# column only because the camera was the rig's, four metres behind an origin where
-	# both bodies stood. So these frames are the marker alone, which is what they check.
-	if beaconing and _other == null:
+	# Her body is drawn: dot-player-char seats the rig on the player it belongs to (b04a9ac),
+	# so it stands where she does. Until then it stood at the world origin and these frames
+	# could show the marker alone. `body_standing` and `rider_seated` are about the body itself.
+	if (beaconing or shot.has("other")) and _other == null:
 		_other = _game.add_player(&"other", "Bea")
 
 	if _other != null:
 		_other.beacon = beaconing
+		_other.set_riding(bool(shot.get("seated", false)))
 		var flat := _player.aim_direction()
 		flat.y = 0.0
 		flat = flat.normalized() if flat.length() > 0.01 else Vector3.FORWARD
