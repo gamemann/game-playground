@@ -978,7 +978,7 @@ var mouse_capture_override: Variant = null
 ## Whether the pointer is currently a look input rather than a pointer.
 ##
 ## [b]A released cursor is not a look input, and [method _menu_is_open] does not answer
-## that.[/b] KEY_ESCAPE toggles the capture with no screen open, so after one press the
+## that.[/b] KEY_ESCAPE releases the capture with no screen open, so after one press the
 ## cursor is free, the menu check is false, and every motion of a pointer the player is
 ## using as a pointer was still spent turning the view or twisting the prop in the gun.
 ## `game-arena` has always guarded on the mode here; this file and `game-g2gfast` did
@@ -996,6 +996,19 @@ func mouse_drives_view() -> bool:
 		return bool(mouse_capture_override)
 
 	return Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+
+## Captures or releases the pointer: the one place this client writes the mouse mode
+## itself (the screen stack writes it as screens open and close).
+##
+## [b]Through a method so a suite can see what was asked for.[/b] The dummy display server
+## drops the write, so the override — when a suite has set one — follows it, and the
+## Escape and click-to-capture checks read that.
+func _set_captured(on: bool) -> void:
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
+
+	if mouse_capture_override != null:
+		mouse_capture_override = on
 
 
 func active_sampler() -> DotFpsSampler:
@@ -1019,6 +1032,20 @@ func _unhandled_input(event: InputEvent) -> void:
 	# branch below this deliberately does not.
 	if voice != null and voice.handle_event(event):
 		get_viewport().set_input_as_handled()
+		return
+
+	# [b]A click on the world with the pointer released takes it back, and does nothing
+	# else.[/b] Escape releases and never captures (see KEY_ESCAPE below), so this is the
+	# way back — game-g2gfast's contract, because a browser refuses pointer lock from a
+	# key for about a second after Escape and grants it to a click. Spent on capturing
+	# rather than also firing: the player was pointing, not aiming. Before the
+	# `player == null` guard for g2gfast's reason too — a click while the world is still
+	# loading must not be swallowed, or the cursor is never captured at all.
+	if (
+		event is InputEventMouseButton and (event as InputEventMouseButton).pressed
+		and not _menu_is_open() and not mouse_drives_view()
+	):
+		_set_captured(true)
 		return
 
 	if player == null:
@@ -1103,18 +1130,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			# and a second handler here would pop it and open the pause menu in one
 			# press.
 			#
-			# Release, THEN open -- the same two-step game-arena uses, and for the
-			# browser's sake rather than the desktop's: Escape is how a browser itself
-			# exits pointer lock and it then refuses to re-enter for about a second, so a
-			# press that both released and opened would leave the menu up with no way to
-			# get the mouse back.
+			# [b]Release, THEN open, and never capture.[/b] game-g2gfast's contract:
+			# Escape is how a browser itself exits pointer lock, and it then refuses to
+			# re-enter for about a second — so a toggle bound to Escape works on the
+			# desktop and silently does nothing every other press on the web. One key
+			# that releases and one gesture that captures (a click, in
+			# `_unhandled_input`) is the same contract on both. The second press opens
+			# the pause menu, game-arena's two-step, which g2gfast has no menu for;
+			# with no pause menu it does nothing. It used to capture again there, which
+			# was the toggle.
 			if not _menu_is_open():
-				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-					Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+				if mouse_drives_view():
+					_set_captured(false)
+					if hud != null:
+						hud.notice("Click to play. Escape again for the menu.")
 				elif pause != null:
 					screens.push(&"pause")
-				else:
-					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 ## Q is the one key that still means something while the menu is open.

@@ -47,7 +47,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 379
+const CHECKS := 382
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -3575,6 +3575,45 @@ func _test_the_client_boots() -> void:
 		is_equal_approx(client.player.controller.state.yaw, released_yaw),
 		"and a motion with the cursor released turns nothing",
 		"yaw %.3f -> %.3f" % [released_yaw, client.player.controller.state.yaw]
+	)
+
+	# [b]Escape releases and never captures; a click captures.[/b] game-g2gfast's
+	# contract, for the browser: Escape is how a browser itself leaves pointer lock and it
+	# then refuses to re-enter from a key for about a second, so an Escape that toggled
+	# the capture back silently did nothing every other press on the web. `_set_captured`
+	# moves the override with it, which is what these read.
+	client.mouse_capture_override = true
+	var escape := InputEventKey.new()
+	escape.physical_keycode = KEY_ESCAPE
+	escape.pressed = true
+	client._unhandled_input(escape)
+
+	_check(
+		client.mouse_capture_override == false and not client._menu_is_open(),
+		"Escape releases the pointer and opens nothing on the first press"
+	)
+
+	# With no pause menu the second press is where the old toggle captured again.
+	var kept_pause := client.pause
+	client.pause = null
+	client._unhandled_input(escape)
+	client.pause = kept_pause
+
+	_check(
+		client.mouse_capture_override == false,
+		"and a second Escape never captures it again, which a browser would refuse"
+	)
+
+	# From released, whatever the line above left, so this check stands on its own.
+	client.mouse_capture_override = false
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	client._unhandled_input(click)
+
+	_check(
+		client.mouse_capture_override == true,
+		"a click on the world is what takes the pointer back"
 	)
 
 	client.mouse_capture_override = true

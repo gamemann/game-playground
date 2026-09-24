@@ -1060,7 +1060,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 379 checks, 22 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 382 checks, 22 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_net.tscn          # 156 checks, 17 sections
@@ -1378,6 +1378,8 @@ persistent, and `reporting_allowed()` is the one place that is asked.
 This client had a spawn menu, a server browser and no pause screen. Escape toggled the mouse capture and nothing else, so the only route to a setting was the console.
 
 It now **releases the cursor on the first press and opens the menu on the second** — game-arena's two-step, and it exists for the browser rather than the desktop. Escape is how a browser itself exits pointer lock and it then refuses to re-enter for about a second, so a press that both released and opened would leave a menu up with no way to get the mouse back.
+
+**And Escape never captures; a click does** (`[esc-1]`, 2026-09-24), which is game-g2gfast's contract (`G2GClient`'s KEY_ESCAPE: "one key that releases and one gesture that captures is the same contract on both"). The second press used to capture again when there was no pause menu — a toggle, which on the web silently does nothing every other press — and a released pointer had no way back but through the pause menu's Resume, because a click fired the gun instead. Now a click on the world with the pointer released and no screen up captures it and does nothing else, before the `player == null` guard so a click during loading is not lost; the HUD says "Click to play. Escape again for the menu." The two games still differ in one way on purpose: this one has a pause menu on the second Escape, which g2gfast has no screen for. `_set_captured` is the one write, and moves `mouse_capture_override` with it so `headless_playground`'s "the client boots" can see it: Escape releases and opens nothing, a second Escape with no pause menu leaves it released, a click takes it back (three checks; armed, the old toggle fails the second and a click that does not capture fails the third).
 
 Both screens are dot-ui's `DotPauseScreen` and `DotSettingsScreen` rather than this game's own, because four clients in the family had written the same panel-title-buttons shape and two copies of one thing is this tree's most repeated mistake. What is this game's own is the button list — Resume, Settings, Servers, Leave — and which document the settings screen edits.
 
