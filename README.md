@@ -127,8 +127,9 @@ The end-of-map vote and the option to extend the current map:
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 183 checks
-godot --headless --path . res://examples/dedicated.tscn             # 57 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
+godot --headless --path . res://examples/headless_net.tscn          # 129 checks
+godot --headless --path . res://examples/dedicated.tscn             # 188 checks
 ```
 
 The headless suite boots the whole game, drives a bot down the surf map, finishes and files a run, ranks it, spawns props and builds their bodies from their definitions, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a script path, opens the spawn menu on a real screen stack and clicks through all three tabs, runs the sandbox's course, falls off it, and changes the map underneath all of it. It has found nine real bugs, three of them in other repositories; a screenshot found three more that no assertion could have. See [`CLAUDE.md`](CLAUDE.md).

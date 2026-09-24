@@ -26,6 +26,16 @@ var _notice_until: float = 0.0
 var playground: Playground = null
 var player_id: StringName = &"local"
 
+## The map's time left as the server's vote last described it. Null, or never adopted,
+## when nothing has told this HUD anything — offline, where the local map session IS the
+## clock that ends the map, and the only case in which it is.
+##
+## [b]The map session's clock was what this drew, and on a client it is wrong.[/b] A
+## client's session starts its own clock when it loads the map and nothing the server
+## decides ever reaches it: an extend never arrived, and the deployed `trigger: rtv_only`
+## with no limit had this counting down thirty minutes the server did not have.
+var clock_view: DotVoteClockView = null
+
 ## What the client says is in the player's hands, and what the menu last armed.
 ##
 ## Pushed in by [method set_tool] rather than read off the client, because the HUD is
@@ -172,12 +182,21 @@ func _process(_delta: float) -> void:
 		var map := playground.maps.current
 		var checkpoints := playground.timers.checkpoints_for(player_id)
 
-		var parts := PackedStringArray([
-			map.name_or_id() if map != null else "-",
+		var parts := PackedStringArray([map.name_or_id() if map != null else "-"])
+
+		var time_left := time_left_text(
+			clock_view,
 			playground.maps.time_limit.formatted_remaining(),
-			"%d props" % playground.props.world_count(),
-			player.movement_style.display_name if player.movement_style else "-",
-		])
+			Time.get_ticks_msec() / 1000.0
+		)
+
+		# Nothing at all when the vote has no clock, rather than "no limit": a status line
+		# spending a slot on something that is not happening is one a player learns to skip.
+		if time_left != "":
+			parts.append(time_left)
+
+		parts.append("%d props" % playground.props.world_count())
+		parts.append(player.movement_style.display_name if player.movement_style else "-")
 
 		if checkpoints != null and not checkpoints.is_empty():
 			parts.append("cp %d/%d" % [
@@ -271,3 +290,12 @@ func _refresh_comparison() -> void:
 		record = ((top.value as Array)[0] as DotTimerRecord).time
 
 	timer_hud.set_comparisons(personal, record)
+
+
+## What the status line says about the map's time left: the server's clock when it has
+## said anything — empty when that clock does not exist — and [param local] otherwise.
+static func time_left_text(view: DotVoteClockView, local: String, now: float) -> String:
+	if view != null and view.known:
+		return view.formatted_at(now)
+
+	return local

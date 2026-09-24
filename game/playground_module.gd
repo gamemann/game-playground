@@ -582,6 +582,16 @@ func _build_extras() -> DotResult:
 			bridge.broadcast_vote_cue(cue, seconds_left, runoff)
 	)
 
+	# The time left, from the clock that ends the map. The HUD drew the map session's,
+	# which on a client is a clock nobody extends; see `DotVoteClockView`.
+	vote.clock_due.connect(func(state: Dictionary) -> void:
+		if bridge != null:
+			bridge.broadcast_clock(state)
+	)
+
+	if bridge != null:
+		bridge.clock_fn = vote.clock_state
+
 	# [b]One clock that ends a map, and it is the vote's.[/b] See
 	# `Playground.rotation_ends_maps`.
 	game.rotation_ends_maps = false

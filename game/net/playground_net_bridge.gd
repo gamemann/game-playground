@@ -91,6 +91,9 @@ signal match_received(state: Dictionary)
 signal progress_received(state: Dictionary)
 ## The map vote's cue and countdown second, from [method PlaygroundEvents.read_vote_cue].
 signal vote_cue_received(state: Dictionary)
+## The vote's clock changed: [member clock_view] has just adopted [param state]. Client
+## side.
+signal clock_received(state: Dictionary)
 
 var game: Playground = null
 var net: DotNetManager = null
@@ -108,6 +111,16 @@ var local_player_id: int = 0
 ## Nothing in dot-net writes a sample. It was shipped without one in two games before
 ## anybody noticed the clock was reading a median of an empty set.
 var rtt_source: Callable = Callable()
+
+## [code]func() -> Dictionary[/code], in [method DotVoteClockView.state_of]'s shape. What a
+## joining peer is told about the map's time left. Server side; empty sends nothing, and
+## the client then shows its own map session's clock — which on a server with no vote is
+## the one that ends the map.
+var clock_fn: Callable = Callable()
+
+## The map's time left as the server last described it. Client side; what the HUD draws.
+## Never adopted means never told, which the HUD answers with the local clock.
+var clock_view: DotVoteClockView = DotVoteClockView.new()
 
 var _entities: Node = null
 var _behaviours: Dictionary = {}
@@ -732,6 +745,11 @@ func _admit(peer_id: int) -> void:
 	for other in _behaviours.keys():
 		_tell(peer_id, PlaygroundEvents.Kind.JOIN, _join_body(int(other)))
 
+	# The time left now, rather than at the clock's next change — which on a quiet map is
+	# never, and a joiner would count down nothing until it came.
+	if clock_fn.is_valid():
+		_tell(peer_id, PlaygroundEvents.Kind.CLOCK, PlaygroundEvents.write_clock(clock_fn.call()))
+
 	# And everything already in the world. A player who joins a sandbox that has been
 	# running for an hour has to be told about the hour's worth of props, or they walk
 	# into things they cannot see.
@@ -1106,6 +1124,12 @@ func _on_event(message: DotNetMessage) -> void:
 
 			if bool(cue["ok"]):
 				vote_cue_received.emit(cue)
+		PlaygroundEvents.Kind.CLOCK:
+			var clock := PlaygroundEvents.read_clock(reader)
+
+			if bool(clock["ok"]):
+				clock_view.adopt(clock, Time.get_ticks_msec() / 1000.0)
+				clock_received.emit(clock)
 
 
 func _apply_hello(reader: DotNetReader) -> void:
@@ -1420,6 +1444,11 @@ func broadcast_vote_cue(cue: StringName, seconds_left: int, runoff: bool) -> voi
 		PlaygroundEvents.Kind.VOTE,
 		PlaygroundEvents.write_vote_cue(String(cue), seconds_left, runoff)
 	)
+
+
+## The vote's clock, to every ready peer. Server side.
+func broadcast_clock(state: Dictionary) -> void:
+	_broadcast(PlaygroundEvents.Kind.CLOCK, PlaygroundEvents.write_clock(state))
 
 
 ## Something somebody earned. Server side.

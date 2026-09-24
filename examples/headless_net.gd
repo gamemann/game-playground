@@ -11,6 +11,8 @@ const PlaygroundPropNet := preload("../game/net/playground_prop_net.gd")
 const PlaygroundServices := preload("../game/playground_services.gd")
 const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
 const PlaygroundVehicleNet := preload("../game/net/playground_vehicle_net.gd")
+const PlaygroundVote := preload("../game/playground_vote.gd")
+const PlaygroundHud := preload("../game/playground_hud.gd")
 
 ## game-playground over the wire: a real server, a real client, and a lossy loopback
 ## between them.
@@ -40,7 +42,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 119
+const CHECKS := 129
 
 var _passed := 0
 var _failed := 0
@@ -90,6 +92,7 @@ func _run() -> void:
 		# before the vehicle one took its 1-in-5 flake to 3 failures out of 3, at the
 		# same -0.16 m/s. Nothing here spawns a body, so run last it moves nothing.
 		await _test_weapon_request()
+		_test_clock_wire()
 		await _test_leave()
 
 	_report()
@@ -534,6 +537,113 @@ func _on_server_send(method: StringName, peer_id: int, payload: PackedByteArray)
 
 func _on_client_send(method: StringName, _peer_id: int, payload: PackedByteArray) -> void:
 	_to_server.append({"method": method, "payload": payload})
+
+
+## The map's time left, from the server's vote to what the client's HUD draws.
+##
+## The HUD drew the client's own map session, which starts when the client loads the map
+## and hears nothing the server decides — so an extend changed the server's clock and
+## not one pixel on a client, and the deployed `trigger: rtv_only` with no limit showed
+## thirty minutes counting down to nothing. This is the check that both reach the screen.
+func _test_clock_wire() -> void:
+	_section("the vote's clock over the link")
+
+	var round_trip := PlaygroundEvents.read_clock(DotNetReader.new(
+		PlaygroundEvents.write_clock({"has_clock": true, "seconds_left": 1234, "running": true})
+	))
+	_check(
+		bool(round_trip["ok"]) and bool(round_trip["has_clock"])
+			and int(round_trip["seconds_left"]) == 1234 and bool(round_trip["running"]),
+		"a CLOCK round-trips, with the flag, the seconds and whether it counts"
+	)
+
+	# A real vote on the server's game, on this game's own rules. `setup` does not apply
+	# or register anything; the module is what would.
+	var vote := PlaygroundVote.new()
+	vote.name = "ClockVote"
+	vote.config_path = ""
+	add_child(vote)
+	var built := vote.setup(_server_game)
+	_check(built.ok, "a vote is built on the server's game", str(built.error) if not built.ok else "")
+	if not built.ok:
+		remove_child(vote)
+		vote.free()
+		return
+	vote.note_playing(_server_game.maps.current.id)
+
+	var arrived: Array[Dictionary] = []
+	var on_clock := func(state: Dictionary) -> void: arrived.append(state)
+	_client_bridge.clock_received.connect(on_clock)
+	vote.clock_due.connect(_server_bridge.broadcast_clock)
+	var dt := 1.0 / float(_server_game.tick_rate)
+
+	vote.advance(dt)
+	_flush()
+	var now := Time.get_ticks_msec() / 1000.0
+	var before := _client_bridge.clock_view.remaining_at(now)
+	_check(
+		arrived.size() == 1 and _client_bridge.clock_view.has_clock
+			and absf(before - vote.director.clock.remaining) <= 1.0,
+		"the client is told the vote's time left (%.0f s, the server's is %.0f s)" % [
+			before, vote.director.clock.remaining
+		]
+	)
+	_check(
+		PlaygroundHud.time_left_text(_client_bridge.clock_view, "9:59", now)
+			== _client_bridge.clock_view.formatted_at(now),
+		"and the HUD draws that rather than the client's own map clock (%s)" % (
+			PlaygroundHud.time_left_text(_client_bridge.clock_view, "9:59", now)
+		)
+	)
+
+	for i in range(_server_game.tick_rate * 3):
+		vote.advance(dt)
+	_flush()
+	_check(
+		arrived.size() == 1,
+		"three quiet seconds send nothing: the client counts them itself (%d sent)" % (
+			arrived.size() - 1
+		)
+	)
+
+	var extend_by := vote.director.rules.extend_seconds
+	_check(vote.director.clock.extend(), "the server extends the map")
+	vote.advance(dt)
+	_flush()
+	now = Time.get_ticks_msec() / 1000.0
+	var after := _client_bridge.clock_view.remaining_at(now)
+	_check(
+		arrived.size() == 2 and absf((after - before) - (extend_by - 3.0)) <= 2.0,
+		"and what the client sees moves by the extension (%.0f s -> %.0f s, extended by %.0f)" % [
+			before, after, extend_by
+		],
+		"the HUD would go on counting down the old limit"
+	)
+
+	# The deployed shape: `metadata: map_vote: {trigger: rtv_only, duration_sec: 0}`.
+	vote.director.rules.duration_sec = 0.0
+	vote.director.rules.trigger = DotVoteRules.Trigger.RTV_ONLY
+	vote.note_playing(_server_game.maps.current.id)
+	vote.advance(dt)
+	_flush()
+	now = Time.get_ticks_msec() / 1000.0
+	_check(
+		arrived.size() == 3 and not _client_bridge.clock_view.has_clock,
+		"an rtv-only vote with no limit tells the client there is no clock"
+	)
+	_check(
+		PlaygroundHud.time_left_text(_client_bridge.clock_view, "29:59", now) == "",
+		"and the HUD shows none, rather than the local session's thirty minutes"
+	)
+	_check(
+		PlaygroundHud.time_left_text(null, "29:59", now) == "29:59",
+		"while a HUD nothing has told (offline) keeps the local session's, which is the real one there"
+	)
+
+	_client_bridge.clock_received.disconnect(on_clock)
+	_client_bridge.clock_view = DotVoteClockView.new()
+	remove_child(vote)
+	vote.free()
 
 
 func _flush() -> void:

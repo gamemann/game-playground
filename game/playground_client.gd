@@ -384,6 +384,11 @@ func _build_netcode() -> DotResult:
 		if hud != null:
 			hud.notice(text)
 	)
+	# The map's time left, from the server's vote. The bridge holds it and adopts every
+	# CLOCK into the same object, so the HUD is handed it once; until the first arrives
+	# it is unknown and the HUD says what it said before.
+	if hud != null:
+		hud.clock_view = bridge.clock_view
 	# The map vote's cue and countdown. The ballot itself arrives as chat; this is what
 	# chat cannot carry.
 	bridge.vote_cue_received.connect(func(info: Dictionary) -> void:

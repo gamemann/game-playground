@@ -70,6 +70,12 @@ signal announced(line: String)
 ## the wire as [constant PlaygroundEvents.Kind].VOTE.
 signal cue_due(cue: StringName, seconds_left: int, runoff: bool)
 
+## The map's time left changed in a way a client counting it down would not have guessed:
+## an extend, a new map, a clock stopped for a ballot or started again. [param state] is
+## [method DotVoteClockView.state_of]'s. The module puts it on the wire as
+## [constant PlaygroundEvents.Kind].CLOCK.
+signal clock_due(state: Dictionary)
+
 
 var director: DotVoteDirector = null
 var commands: DotVoteCommands = null
@@ -78,6 +84,13 @@ var game: Playground = null
 ## How many people are playing. Every threshold in a vote needs it.
 var player_count_fn: Callable = Callable()
 var is_admin_fn: Callable = Callable()
+
+## What every client was last told about the clock, counted down the way they count it.
+## See [method advance].
+var clock_view: DotVoteClockView = DotVoteClockView.new()
+
+## Simulated seconds, for [member clock_view]. Never compared with a client's clock.
+var _clock_time: float = 0.0
 
 ## The file [method setup] layers over the defaults. A test sets it empty.
 var config_path: String = CONFIG_PATH
@@ -233,6 +246,22 @@ func note_playing(map_id: StringName) -> void:
 func advance(delta: float) -> void:
 	if director != null:
 		director.advance(delta)
+
+	_clock_time += delta
+
+	# [b]Sent when a client's own count would be wrong, not every second.[/b] Both ends
+	# count with `DotVoteClockView`, so the server knows exactly what every client is
+	# showing and only an extend, a new map or a stopped clock is worth a message.
+	if clock_view.is_stale(director, _clock_time):
+		clock_view.adopt(clock_state(), _clock_time)
+		clock_due.emit(clock_view.to_state())
+
+
+## The map's time left as a client should show it: the VOTE's clock, which is the one that
+## ends a map here, and no clock at all when the vote has none — which is the deployed
+## `trigger: rtv_only` with `duration_sec: 0`.
+func clock_state() -> Dictionary:
+	return DotVoteClockView.state_of(director)
 
 
 ## Rock the vote, nominate, or cast one. The token comes off the wire.

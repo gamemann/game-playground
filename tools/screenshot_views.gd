@@ -3,6 +3,7 @@ extends SceneTree
 const Playground := preload("../game/playground.gd")
 const PlaygroundConfig := preload("../game/playground_config.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
+const PlaygroundHud := preload("../game/playground_hud.gd")
 
 ## Renders the sandbox in first person and in third, so a person can look at both.
 ##
@@ -10,6 +11,11 @@ const PlaygroundPlayer := preload("../game/playground_player.gd")
 ## on the view switch is a check on an id — `active_id()`answers "tp" — and an id is equally
 ## happy when the rig is inside the player's head, behind a wall, or looking at the sky.
 ## Four of the bugs in this family's list were found by looking at a frame.
+##
+## The last two frames put the HUD over first person, with the map's time left as a
+## server's vote would describe it: `hud_clock` after an extend, `hud_no_clock` under the
+## deployed `trigger: rtv_only` with no limit, where the slot must be gone rather than
+## showing the local session's thirty minutes.
 ##
 ## [codeblock]
 ## tools/screenshot_views.sh
@@ -26,6 +32,7 @@ const SETTLE := 12
 
 var _game: Playground = null
 var _player: PlaygroundPlayer = null
+var _hud: PlaygroundHud = null
 var _shots: Array[Dictionary] = []
 var _at := 0
 var _wait := SETTLE
@@ -79,9 +86,20 @@ func _process(_delta: float) -> bool:
 			_done = true
 			return true
 
+		_hud = PlaygroundHud.new()
+		_hud.name = "Hud"
+		root.add_child(_hud)
+		_hud.bind(_game, &"local")
+		_hud.visible = false
+
 		_shots = [
 			{"name": "view_first_person", "third": false},
 			{"name": "view_third_person", "third": true},
+			{
+				"name": "hud_clock", "third": false,
+				"clock": {"has_clock": true, "seconds_left": 2700, "running": true},
+			},
+			{"name": "hud_no_clock", "third": false, "clock": {"has_clock": false}},
 		]
 		return false
 
@@ -95,6 +113,12 @@ func _process(_delta: float) -> bool:
 	if not _arranged:
 		var now := _player.set_view_mode(bool(shot["third"]))
 		print("[views] %s -> %s" % [String(shot["name"]), String(now)])
+
+		_hud.visible = shot.has("clock")
+		if shot.has("clock"):
+			var view := DotVoteClockView.new()
+			view.adopt(shot["clock"], Time.get_ticks_msec() / 1000.0)
+			_hud.clock_view = view
 		_arranged = true
 		_wait = SETTLE
 		return false

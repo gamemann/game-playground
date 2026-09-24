@@ -49,6 +49,9 @@ enum Kind {
 	## The map vote: a sound cue to play, or a second of the countdown before a ballot.
 	## Last, because a kind is its index on the wire.
 	VOTE,
+	## The map's time left, from the vote's clock: sent when it changes rather than
+	## counted, so an extend reaches the HUD. Last, for the same reason.
+	CLOCK,
 }
 
 enum Ask {
@@ -608,6 +611,27 @@ static func read_vote_cue(reader: DotNetReader) -> Dictionary:
 		"cue": reader.read_string(CUE_BYTES),
 		"seconds_left": reader.read_uint(8),
 		"runoff": reader.read_bool(),
+	}
+	out["ok"] = reader.ok()
+	return out
+
+
+## The vote's clock as [method DotVoteClockView.state_of] describes it: whether there is
+## one, the whole seconds left, and whether it is counting. A client counts it down
+## itself between messages; the server sends another only when that count would be wrong.
+static func write_clock(state: Dictionary) -> PackedByteArray:
+	var writer := DotNetWriter.new()
+	writer.write_bool(bool(state.get("has_clock", false)))
+	writer.write_varint(maxi(int(state.get("seconds_left", 0)), 0))
+	writer.write_bool(bool(state.get("running", false)))
+	return writer.to_bytes()
+
+
+static func read_clock(reader: DotNetReader) -> Dictionary:
+	var out := {
+		"has_clock": reader.read_bool(),
+		"seconds_left": reader.read_varint(),
+		"running": reader.read_bool(),
 	}
 	out["ok"] = reader.ok()
 	return out
