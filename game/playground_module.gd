@@ -723,7 +723,10 @@ func _voter_is_admin(voter: StringName) -> bool:
 		return false
 
 	var session := server.session_by_userid(text.substr(1).to_int())
-	return session != null and session.is_admin()
+	# CHANGEMAP, not any flag: `is_admin()` is "holds a flag at all", which a reserved slot
+	# or admin chat satisfies, and this gates extending the map, an instant rtv and the
+	# nomination bypasses. The console's own extend asks for CHANGEMAP; the wire must too.
+	return session != null and session.has_permission(DotAdminFlags.CHANGEMAP)
 
 
 func _on_vote_announced(line: String) -> void:

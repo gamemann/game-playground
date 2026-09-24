@@ -43,7 +43,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 23
-const CHECKS := 207
+const CHECKS := 208
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -1435,6 +1435,18 @@ func _test_vote() -> void:
 		game.maps.time_limit.rtv_votes() == tally_before,
 		"and neither touches the map session's tally"
 	)
+
+	# Who the vote treats as an admin — the wire's `extend`, an instant rtv, the
+	# nomination bypasses. It was `is_admin()`, which is "holds any flag at all", so a
+	# reserved slot was enough to extend the map from the client.
+	session.permissions = PackedStringArray(["reservation", "chat"])
+	var slot_only: bool = _module().call("_voter_is_admin", &"u43")
+	session.permissions = PackedStringArray(["changemap"])
+	var changer: bool = _module().call("_voter_is_admin", &"u43")
+	session.permissions = PackedStringArray()
+	_check(not slot_only and changer,
+		"a reserved slot is not a vote admin, and changemap is",
+		"slot %s, changemap %s" % [slot_only, changer])
 	var _released := server.release_session(session.peer_id)
 
 	_check(

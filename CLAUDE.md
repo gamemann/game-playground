@@ -1052,7 +1052,7 @@ godot --headless --path . res://examples/headless_playground.tscn   # 358 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_net.tscn          # 154 checks, 17 sections
-godot --headless --path . res://examples/dedicated.tscn             # 207 checks, 23 sections
+godot --headless --path . res://examples/dedicated.tscn             # 208 checks, 23 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
