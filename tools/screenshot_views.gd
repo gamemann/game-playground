@@ -17,6 +17,11 @@ const PlaygroundHud := preload("../game/playground_hud.gd")
 ## deployed `trigger: rtv_only` with no limit, where the slot must be gone rather than
 ## showing the local session's thirty minutes.
 ##
+## The last three are an administrator's marks, from first person through the real HUD:
+## `admin_beacon` a beaconed player on open floor ahead, `admin_beacon_wall` the same
+## player behind a wall with only the through-walls column showing, and `admin_blind` the
+## local player blinded, where the world must be gone to the edges and the HUD still on top.
+##
 ## [codeblock]
 ## tools/screenshot_views.sh
 ## [/codeblock]
@@ -32,6 +37,13 @@ const SETTLE := 12
 
 var _game: Playground = null
 var _player: PlaygroundPlayer = null
+
+## The other player the admin frames beacon. See [method _arrange_admin].
+var _other: PlaygroundPlayer = null
+
+## A wall between the camera and [member _other], for `admin_beacon_wall`. Visual only:
+## the beacon's column is drawn without a depth test, and a mesh is all that needs.
+var _wall: MeshInstance3D = null
 var _hud: PlaygroundHud = null
 var _shots: Array[Dictionary] = []
 var _at := 0
@@ -100,8 +112,26 @@ func _process(_delta: float) -> bool:
 				"clock": {"has_clock": true, "seconds_left": 2700, "running": true},
 			},
 			{"name": "hud_no_clock", "third": false, "clock": {"has_clock": false}},
+			{"name": "admin_beacon", "third": false, "beacon": true},
+			{"name": "admin_beacon_wall", "third": false, "beacon": true, "wall": true},
+			{"name": "admin_blind", "third": false, "blind": true},
 		]
 		return false
+
+	# The first-person camera at the simulated eye, as `PlaygroundClient._process` puts it.
+	var eye_camera := _player.get_node_or_null("Camera") as Camera3D
+	if eye_camera != null and eye_camera.current:
+		eye_camera.global_position = _player.eye_position()
+		eye_camera.global_rotation = Vector3(
+			deg_to_rad(_player.controller.state.pitch),
+			deg_to_rad(_player.controller.state.yaw),
+			0.0
+		)
+
+	# Every frame, as `PlaygroundClient._present_beacons` does: the ripple is an animation.
+	for body: PlaygroundPlayer in [_player, _other]:
+		if body != null:
+			var _pinged := body.present_beacon(_delta, body == _player)
 
 	if _at >= _shots.size():
 		print("[views] %d frames in screenshots/" % _shots.size())
@@ -114,7 +144,17 @@ func _process(_delta: float) -> bool:
 		var now := _player.set_view_mode(bool(shot["third"]))
 		print("[views] %s -> %s" % [String(shot["name"]), String(now)])
 
-		_hud.visible = shot.has("clock")
+		# [b]Back to the first-person camera, which nothing else does.[/b] The rig's
+		# camera makes itself current when third person starts and nothing hands the view
+		# back, so every first-person frame after `view_third_person` used to be taken from
+		# four metres behind the player with the body hidden — which reads as first person
+		# until something stands in front of the player. The beacon frames are what showed
+		# it: Bea's ring was behind the local player's own (hidden) position, out of shot.
+		if not bool(shot["third"]):
+			(_player.get_node("Camera") as Camera3D).make_current()
+
+		_arrange_admin(shot)
+		_hud.visible = shot.has("clock") or shot.has("beacon") or shot.has("blind")
 		if shot.has("clock"):
 			var view := DotVoteClockView.new()
 			view.adopt(shot["clock"], Time.get_ticks_msec() / 1000.0)
@@ -131,6 +171,52 @@ func _process(_delta: float) -> bool:
 	_at += 1
 	_arranged = false
 	return false
+
+
+## Puts the second player eight metres ahead of the camera for a beacon frame, a wall
+## between the two for the wall frame, and the blind on the local player for the last.
+func _arrange_admin(shot: Dictionary) -> void:
+	var beaconing := bool(shot.get("beacon", false))
+
+	# [b]Her body is not drawn, and that is a finding rather than a choice.[/b] A player
+	# with no view switch has `set_shown(false)`, and `PlaygroundCharacter`'s rig is a
+	# Node3D under a plain-Node component, so it does not follow its player: shown, it
+	# stands at the world origin whatever the player's position (measured here, 2026-09-24:
+	# player at (1.5, 0, -7), rig at (0, 0, 0)). The earlier frames showed a body under the
+	# column only because the camera was the rig's, four metres behind an origin where
+	# both bodies stood. So these frames are the marker alone, which is what they check.
+	if beaconing and _other == null:
+		_other = _game.add_player(&"other", "Bea")
+
+	if _other != null:
+		_other.beacon = beaconing
+		var flat := _player.aim_direction()
+		flat.y = 0.0
+		flat = flat.normalized() if flat.length() > 0.01 else Vector3.FORWARD
+		# A little to the side as well as ahead: the ring is a flat band at her feet, and
+		# eight metres dead ahead from eye height it sits edge-on behind her own legs.
+		var side := flat.cross(Vector3.UP)
+		var at := _player.controller.state.position + flat * 7.0 + side * 1.5
+		_other.teleport(at, _player.controller.state.yaw + 180.0)
+
+		if bool(shot.get("wall", false)) and _wall == null:
+			var box := BoxMesh.new()
+			box.size = Vector3(6.0, 4.0, 0.4)
+			var material := StandardMaterial3D.new()
+			material.albedo_color = Color(0.45, 0.47, 0.5)
+			box.material = material
+			_wall = MeshInstance3D.new()
+			_wall.name = "Wall"
+			_wall.mesh = box
+			root.add_child(_wall)
+			_wall.global_position = _player.controller.state.position + flat * 4.0 \
+				+ Vector3.UP * 2.0
+			_wall.look_at(_wall.global_position + flat, Vector3.UP)
+		elif not bool(shot.get("wall", false)) and _wall != null:
+			_wall.queue_free()
+			_wall = null
+
+	_player.blinded = bool(shot.get("blind", false))
 
 
 func _capture(shot_name: String) -> void:

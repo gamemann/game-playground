@@ -13,6 +13,8 @@ const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
 const PlaygroundVehicleNet := preload("../game/net/playground_vehicle_net.gd")
 const PlaygroundVote := preload("../game/playground_vote.gd")
 const PlaygroundHud := preload("../game/playground_hud.gd")
+const PlaygroundModTools := preload("../game/playground_mod_tools.gd")
+const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
 
 ## game-playground over the wire: a real server, a real client, and a lossy loopback
 ## between them.
@@ -42,7 +44,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 129
+const CHECKS := 140
 
 var _passed := 0
 var _failed := 0
@@ -92,6 +94,9 @@ func _run() -> void:
 		# before the vehicle one took its 1-in-5 flake to 3 failures out of 3, at the
 		# same -0.16 m/s. Nothing here spawns a body, so run last it moves nothing.
 		await _test_weapon_request()
+		# After the weapon request for the same reason it is after everything else: this
+		# adds a second body to the shared physics space. It takes the body back out again.
+		await _test_blind_and_beacon()
 		_test_clock_wire()
 		await _test_leave()
 
@@ -1357,6 +1362,92 @@ func _test_lossy() -> void:
 	var server_at := _server_player().controller.state.position
 	_check(server_at.distance_to(after) < 2.0,
 		"and stays with the server", "%.3f m apart" % server_at.distance_to(after))
+
+
+## An administrator's blind and beacon, through the real handlers, over the wire.
+##
+## [b]The audience is the whole point of both.[/b] This client (peer 2) owns player 7; a
+## second player, 8, is added on the server with a peer of its own that has no client in
+## this process — which makes THIS client the "somebody else" for player 8. A blind on 8
+## is 8's screen and nobody else's, so this client must never be told; a blind on 7 is
+## this client's own screen, so it must be; a beacon is for everybody. Asserted on the
+## client's own copy of each player, which is what its HUD and its renderer read.
+func _test_blind_and_beacon() -> void:
+	_section("an admin's blind and beacon: who is told")
+
+	var other_peer := CLIENT_PEER + 1
+	var added := _server_bridge.add_player(other_peer, SESSION + 1, "Bea")
+	_check(added.ok, "a second player joins on a peer of their own")
+	await _steps(4)
+
+	var theirs: PlaygroundPlayer = _client_game.players.get(&"u%d" % (SESSION + 1))
+	_check(theirs != null, "and this client draws them")
+
+	var server_net := _server_player().get_node_or_null("Net") as PlaygroundPlayerNet
+	_check(
+		server_net != null
+		and server_net.find_var(&"net_blind").audience == DotNetVar.Audience.OWNER
+		and server_net.find_var(&"net_beacon").audience == DotNetVar.Audience.EVERYONE,
+		"the blind is declared owner-only and the beacon for everybody"
+	)
+
+	var handlers := PlaygroundModTools.handlers(_server_game, null)
+	var blind: Callable = handlers[DotModTools.ACTION_BLIND]
+	var beacon: Callable = handlers[DotModTools.ACTION_BEACON]
+	var them := StringName(str(SESSION + 1))
+	var me := StringName(str(SESSION))
+
+	var on_blind: DotResult = blind.call(them, {"on": true, "actor": "1"})
+	var on_beacon: DotResult = beacon.call(them, {"on": true, "actor": "1"})
+	_check(on_blind.ok and on_beacon.ok, "the server blinds and beacons player 8")
+
+	# Several snapshots' worth, so an absence below is not a snapshot that had not come.
+	await _steps(12)
+
+	var their_net := theirs.get_node_or_null("Net") as PlaygroundPlayerNet \
+		if theirs != null else null
+	_check(
+		theirs != null and not theirs.blinded
+		and their_net != null and not their_net.net_blind,
+		"this client is never told somebody else is blind",
+		"received net_blind = %s" % (str(their_net.net_blind) if their_net != null else "-")
+	)
+	_check(
+		theirs != null and theirs.beacon,
+		"but draws the beacon on them, because a beacon is for everybody"
+	)
+	_check(
+		not _client_player().blinded and not _client_player().beacon,
+		"and neither mark lands on this client's own player"
+	)
+	_check(
+		_server_player().get_node("Identity").always_relevant
+		and theirs != null and theirs.is_inside_tree(),
+		"a beaconed player is relevant to every peer, as every player here already is"
+	)
+
+	var mine: DotResult = blind.call(me, {"on": true, "actor": "1"})
+	await _steps(12)
+	_check(
+		mine.ok and _client_player().blinded,
+		"a blind on this client's OWN player reaches it, so its HUD goes dark"
+	)
+
+	var _off_me: DotResult = blind.call(me, {"on": false, "actor": "1"})
+	var _off_them: DotResult = blind.call(them, {"on": false, "actor": "1"})
+	var _unlit: DotResult = beacon.call(them, {"on": false, "actor": "1"})
+	await _steps(12)
+	_check(
+		not _client_player().blinded and theirs != null and not theirs.beacon,
+		"and turning both off reaches the client"
+	)
+
+	_server_bridge.remove_player(SESSION + 1)
+	await _steps(4)
+	_check(
+		not _client_game.players.has(&"u%d" % (SESSION + 1)),
+		"the second player leaves again, so the sections after this one see one"
+	)
 
 
 func _test_leave() -> void:

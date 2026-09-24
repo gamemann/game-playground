@@ -47,7 +47,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 347
+const CHECKS := 357
 
 var _passed := 0
 var _failed := 0
@@ -3358,6 +3358,72 @@ func _test_the_client_boots() -> void:
 			"and a spawn the spawner refuses makes the refusal noise",
 			"%d" % sink.count_of(&"refused")
 		)
+
+		# An administrator's beacon and blind, through the client's OWN frame hooks rather
+		# than the player's method: the marker and the ping are presentation, and a hook
+		# nothing in the client calls is this file's oldest bug. Stepped by hand, a quarter
+		# of a second at a time, so the count is the ripple's and not the frame rate's.
+		client.player.beacon = true
+		sink.forget()
+		for _i in range(8):
+			client._present_beacons(0.25)
+		_check(
+			sink.count_of(&"beacon") == 3,
+			"a beacon pings as it comes on and once a second after, not once a frame",
+			"%d pings in two seconds" % sink.count_of(&"beacon")
+		)
+		var marker := client.player.beacon_marker
+		_check(
+			marker != null and marker.is_inside_tree()
+			and marker.global_position.is_equal_approx(client.player.controller.state.position),
+			"its marker stands where the player is simulated"
+		)
+		_check(
+			marker != null and not marker.column_shown(),
+			"with no column on the player's own first-person view, which would smear the screen"
+		)
+		client.player.beacon = false
+		client._present_beacons(0.25)
+		_check(client.player.beacon_marker == null, "and it goes when the flag does")
+
+		# And through real frames, because the checks above call the hook by hand and would
+		# pass with `_process` never calling it — which is the shape every presentation hook
+		# in this game once had.
+		client.player.beacon = true
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_check(
+			client.player.beacon_marker != null,
+			"the client's own frame draws a beacon, not only a test calling the hook"
+		)
+		client.player.beacon = false
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_check(client.player.beacon_marker == null, "and its own frame takes it away")
+
+		client.player.blinded = true
+		client.hud.present_blind(0.5)
+		var blind := client.hud.blind_overlay
+		var viewport := client.hud.get_viewport_rect().size
+		_check(
+			blind != null and blind.visible and is_equal_approx(blind.modulate.a, 1.0),
+			"a blind comes down over the HUD's player"
+		)
+		# The whole viewport. Headless it is 64 x 64 (docs/testing.md), which is still a
+		# real size to compare against: an overlay never sized is 0 x 0 at any resolution.
+		_check(
+			blind != null and blind.get_global_rect().position.is_equal_approx(Vector2.ZERO)
+			and blind.get_global_rect().size.is_equal_approx(viewport),
+			"and covers the whole viewport",
+			"%s against %s" % [str(blind.get_global_rect()) if blind != null else "-", str(viewport)]
+		)
+		_check(
+			blind != null and blind.get_index() < client.hud.timer_hud.get_index(),
+			"under the HUD's own widgets, so the clock still says the server is going on"
+		)
+		client.player.blinded = false
+		client.hud.present_blind(0.5)
+		_check(blind != null and not blind.visible, "and lifts when the flag does")
 
 		client.presentation.fx.shake.add(1.0)
 		_check(client.presentation.fx.shake.active(), "a shake is live before a map change")

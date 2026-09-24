@@ -1,5 +1,6 @@
 extends CharacterBody3D
 
+const PlaygroundBeacon := preload("playground_beacon.gd")
 const PlaygroundCharacter := preload("playground_character.gd")
 
 ## One player: movement, view, the timer, and the tools.
@@ -81,6 +82,25 @@ var grav_gun: DotGravGun = null
 ## has to know is on this side — the tick, the sampler, the net behaviour and the HUD —
 ## and a client has no vehicle spawner at all to ask.
 var riding: bool = false
+
+## An administrator's `blind`: this player's own screen is blacked out.
+##
+## [b]Set on the server and replicated to the OWNER ONLY[/b] (`PlaygroundPlayerNet.net_blind`).
+## Nobody else's screen changes, so nobody else needs to know — and in the arena an
+## opponent who could read it would know exactly when somebody could not see them coming.
+## `PlaygroundHud` draws it.
+var blinded: bool = false
+
+## An administrator's `beacon`: a pulsing ring and a column over this player that every
+## client draws, and a ping every client hears, until it is turned off.
+##
+## Set on the server and replicated to everybody (`PlaygroundPlayerNet.net_beacon`), who
+## each draw it in [method present_beacon].
+var beacon: bool = false
+
+## The marker [member beacon] draws, while it does. Client side; built and freed by
+## [method present_beacon], and never built on a server, which calls nothing that draws.
+var beacon_marker: PlaygroundBeacon = null
 
 ## Set by the world so the timer is ticked with the same clock the movement uses.
 ## [b]Assigned through, not just stored.[/b] The controller sizes its step from its own
@@ -542,6 +562,43 @@ func fill_sample(sample: DotTimerSample) -> void:
 	sample.buttons = state.previous_buttons
 
 
+## Draws [member beacon] for one frame, and says when it pings.
+##
+## Called once a frame by whatever draws this player — `PlaygroundClient._process` for every
+## player in the world, a screenshot tool for the ones it arranges — and never on a server,
+## so a dedicated server builds no marker. Returns true when a new ripple starts, which is
+## when the caller plays the ping; a return value rather than a signal, because the one
+## caller that plays it is the one that asked.
+##
+## [param local_view] is whether this is the player whose eyes the camera is behind, which
+## hides the column (see [PlaygroundBeacon]).
+##
+## [b]Not hidden while dead, unlike the reference game's.[/b] Nothing on this node knows
+## the arena killed it: a dead player here is a body standing where it fell until dot-match's
+## respawn teleports it, and a marker on that body marks where the player is.
+##
+## Placed at the SIMULATED position, the one the client's camera follows: the render state
+## on the local player and the interpolated one on a remote player, both written into
+## `controller.state` once a frame.
+func present_beacon(delta: float, local_view: bool) -> bool:
+	if not beacon:
+		if beacon_marker != null:
+			beacon_marker.queue_free()
+			beacon_marker = null
+		return false
+
+	if beacon_marker == null:
+		beacon_marker = PlaygroundBeacon.new()
+		beacon_marker.name = "Beacon"
+		add_child(beacon_marker)
+
+	beacon_marker.local_view = local_view
+	beacon_marker.global_position = controller.state.position if controller != null \
+		else global_position
+
+	return beacon_marker.advance(delta)
+
+
 func describe() -> Dictionary:
 	return {
 		"id": String(player_id),
@@ -549,4 +606,6 @@ func describe() -> Dictionary:
 		"style": String(movement_style.id) if movement_style != null else "-",
 		"speed": "%.1f m/s" % speed(),
 		"run": str(timer.run) if timer != null else "-",
+		"blinded": blinded,
+		"beacon": beacon,
 	}

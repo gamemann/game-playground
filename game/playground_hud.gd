@@ -48,6 +48,24 @@ var clock_view: DotVoteClockView = null
 var tool_name: String = ""
 var armed_prop: StringName = &""
 
+## An administrator's `blind`, over the world and under the rest of the HUD.
+##
+## [b]Under the widgets, on purpose.[/b] A blind takes the game away, not the player's
+## bearings: the clock, the notice line and what is in their hands still say the server is
+## going on and they are in it, which is what makes it read as "an admin did this" rather
+## than as a client that stopped drawing. The menus and the chat box are above the HUD
+## altogether.
+##
+## Black rather than white. A white screen at full brightness is a thing a player can be
+## hurt by in a dark room, and taking the picture away is the whole of the point.
+var blind_overlay: ColorRect = null
+
+## Seconds a blind takes to come down and to lift. Short, so it is unmistakably on, and
+## not instant, so it reads as something done to the screen rather than a frame dropped.
+const BLIND_FADE_SEC := 0.25
+
+const BLIND_COLOUR := Color(0.01, 0.01, 0.015)
+
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -62,6 +80,21 @@ func _ready() -> void:
 	offset_bottom = 0.0
 
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# First, so every widget added below draws over it. See [member blind_overlay].
+	blind_overlay = ColorRect.new()
+	blind_overlay.name = "Blind"
+	blind_overlay.color = BLIND_COLOUR
+	# Not anchored to this HUD's rect, although this HUD is the full rect today: the
+	# reference game's blind was HUD-sized and its first rendered frame showed a sixteen-
+	# pixel frame of the world round the edge, because its HUD insets itself by the safe
+	# area. Sized to the whole viewport in `present_blind` instead, so a HUD that one day
+	# does the same cannot reopen it.
+	blind_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	blind_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	blind_overlay.modulate.a = 0.0
+	blind_overlay.visible = false
+	add_child(blind_overlay)
 
 	# THE WHOLE RECT, not a box in the corner.
 	#
@@ -157,7 +190,9 @@ func notice(text: String) -> void:
 	_notice_until = Time.get_ticks_msec() / 1000.0 + NOTICE_SECONDS
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	present_blind(delta)
+
 	if playground == null:
 		return
 
@@ -228,6 +263,33 @@ func _process(_delta: float) -> void:
 			],
 			"hold Q to spawn",
 		]))
+
+
+## Fades [member blind_overlay] toward whether the bound player is blinded.
+##
+## Read off the player rather than pushed by anybody, because the flag arrives in a
+## snapshot on a networked client and is set directly offline, and a HUD that had to be
+## told would need telling from two places. Before the `playground == null` return in
+## [method _process], so a blind still lifts on a HUD whose player has gone. Public so a
+## check can step it.
+func present_blind(delta: float) -> void:
+	if blind_overlay == null:
+		return
+
+	var player: PlaygroundPlayer = playground.players.get(player_id) \
+		if playground != null else null
+	var want := 1.0 if player != null and player.blinded else 0.0
+	blind_overlay.modulate.a = move_toward(
+		blind_overlay.modulate.a, want, maxf(delta, 0.0) / BLIND_FADE_SEC
+	)
+	blind_overlay.visible = blind_overlay.modulate.a > 0.0
+
+	if blind_overlay.visible and is_inside_tree():
+		# The whole viewport, in this HUD's own coordinates — whatever the safe area and
+		# the interface scale did to where this HUD starts.
+		var inverse := get_global_transform().affine_inverse()
+		blind_overlay.position = inverse * Vector2.ZERO
+		blind_overlay.size = inverse.basis_xform(get_viewport_rect().size)
 
 
 func _armed_name() -> String:

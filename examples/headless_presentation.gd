@@ -22,7 +22,7 @@ const PlaygroundWorldGen := preload("../game/playground_worldgen.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 87
+const CHECKS := 89
 
 var _passed := 0
 var _failed := 0
@@ -660,6 +660,20 @@ func _test_every_sound_has_a_voice() -> void:
 		if cat.find(StringName(id)) == null:
 			stray.append(String(id))
 	_check(stray.is_empty(), "and no recipe names an id that is not there", str(stray))
+
+	# An administrator's beacon: positional and far-reaching, because its whole job is to
+	# say WHERE somebody is from across a two-hundred-metre sandbox; and pitched away from
+	# the vote's warning, whose voice it shares, so a ping is never heard as a ballot.
+	var ping := cat.find(PlaygroundPresentation.BEACON_SOUND)
+	_check(
+		ping != null and ping.kind == DotAudioDef.Kind.POSITIONAL_3D and ping.max_distance >= 100.0,
+		"the beacon's ping is positional and carries across the sandbox"
+	)
+	_check(
+		ping != null and ping.pitch_max < 1.0
+		and recipes.get(PlaygroundPresentation.BEACON_SOUND) == recipes.get(PlaygroundVote.CUE_WARNING),
+		"and is the vote warning's voice pitched down, so the two are not confused"
+	)
 
 	var bank := DotAudioSynth.bank(cat, recipes)
 	_check(

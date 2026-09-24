@@ -24,7 +24,7 @@ game, drives a bot down a surf map, finishes a run, files it, ranks it, spawns p
 and checks their bodies were built from their definitions, opens the spawn menu on a
 real `DotScreenStack` and clicks a prop in it, runs the sandbox's own course and falls
 off it, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a
-script path, and changes the map underneath all of it. **347 checks, and it has now
+script path, and changes the map underneath all of it. **357 checks, and it has now
 found nine real bugs — three of them in other repositories** — which undercounts it
 since; the later ones are in the sections below. Three more were found by
 a screenshot, which no assertion could have.
@@ -38,6 +38,14 @@ menu, a crosshair and a HUD.
 dot-moderation's live tools are built in the module (`PlaygroundModTools`), because health belongs to the arena layer, which is the module's. Noclip, freeze, speed and gravity are predicted modifiers; god, buddha, hp and slay act on the arena's `DotHealth` and say "the arena is off" when `pg_arena` is — whether they mean anything is a cvar, not a build; slap shoves with or without it; respawn is the course start; teleports end the course run.
 
 The course is timed, so the timer server's rule holds here too: **an admin's help can never make a time.** Noclip abandons the run it interrupts and `PlaygroundPlayer` taints every run while a noclip, a speed step or a gravity step is on. Give and strip are refused: what a player holds here is the physics gun, the gravity gun and a loadout they chose.
+
+**Blind and beacon were refused as "no client overlay" until 2026-09-24, and are two flags now**, on game-arena's pattern (0e818b3). `PlaygroundPlayer.blinded` and `.beacon` are set by the handlers on the server and replicated as per-player state in `PlaygroundPlayerNet` — `net_blind` **owner-only**, because nobody else's screen changes and with the arena on an opponent who could read it would know when somebody could not see them; `net_beacon` to everybody. State rather than an event, so a joiner and a lost snapshot are corrected by the next snapshot. **No relevance change for the beacon**: every player here is already `always_relevant` (`PlaygroundNetBridge._build_entity`), and a beacon that turned relevance off when lifted would cut the player out of everybody's world. The client draws both: `PlaygroundHud.blind_overlay` fades a near-black rect in under the HUD's widgets, sized to the whole viewport; `PlaygroundClient._present_beacons` calls `PlaygroundPlayer.present_beacon` for every player once a frame — the server calls nothing that draws, so a dedicated server builds no marker — and `PlaygroundBeacon` is the ring, a ripple once a second and a column through walls (not in your own first-person view), with each ripple played as `PlaygroundPresentation.BEACON_SOUND`, a positional BLIP an octave under the vote warning that carries 160 m. Neither touches the timer: a blinded run is harder, not assisted.
+
+**Both outlive a respawn without being told to, and so does everything else.** A respawn here — the admin's, the course's, the arena's — is a teleport of the same body (`Playground.spawn_player`), so nothing a handler set is lost and `DotModTools.respawned` is never called. That is the right answer for blind and beacon, which are about the person; it also means a noclip and a freeze survive a respawn here where game-arena ends them with the body.
+
+`dedicated`'s **blind and beacon** types both at a real server's console and asserts the flags, the replicated field, the timed lift, the respawn and `modtools` (armed by clearing the beacon on respawn); `headless_net`'s **who is told** adds a second player on a peer with no client in the process, so this suite's client is "somebody else" for them — never told they are blind, drawing their beacon — and is told its own blind (armed by dropping `to_owner_only()`: two fired, one of them reading `net_blind = true` off the wire); `headless_playground` drives the real client's frame hooks — one ping as it comes on and one a second, the marker at the simulated position, no column in your own eyes, the blind covering the viewport under the widgets (armed by skipping the client's call and the overlay's sizing: both fired). `tools/screenshot_views.sh` renders `admin_beacon`, `admin_beacon_wall` (a wall hides the ring and not the column) and `admin_blind`.
+
+**What rendering them found, and it is not about the beacon.** Every first-person frame the tool took after `view_third_person` was from the third-person rig's camera — four metres behind the player, body hidden — because nothing made the first-person camera current again; it looked like first person until something stood in front of the player. And a **remote player's body is not drawn at all**: a player with no view switch is `set_shown(false)`, and forced visible, `PlaygroundCharacter`'s rig — a `Node3D` under a plain-`Node` component — stands at the world origin whatever the player's position. It went unseen because the only body ever rendered belonged to a player standing at the origin. The first is fixed in the tool; the second is open, and it means a networked client here draws nobody else's body — only their beacon.
 
 ## Layout
 
@@ -60,7 +68,8 @@ game/
     playground_weapon_def.gd  one weapon, as a document
     playground_weapon.gd      the base: two buttons and a tick. Extends DotPropTool
     swep_*.gd                 the shipped weapons. `extends` a PATH, deliberately
-  playground_hud.gd      the clock, the speed, the crosshair, what is in your hands
+  playground_hud.gd      the clock, the speed, the crosshair, what is in your hands, a blind
+  playground_beacon.gd   an admin's beacon: a ring, a ripple and a column through walls
   playground_geometry.gd dev-textured boxes and ramps, in code
   playground_map.gd      base for the built-in maps
   prop.tscn / entity.tscn  one scene for every prop, one for every entity
@@ -1038,12 +1047,14 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 357 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
-godot --headless --path . res://examples/headless_presentation.tscn #  87 checks
-godot --headless --path . res://examples/headless_net.tscn          # 129 checks
-godot --headless --path . res://examples/dedicated.tscn             # 193 checks
+godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
+godot --headless --path . res://examples/headless_net.tscn          # 140 checks
+godot --headless --path . res://examples/dedicated.tscn             # 202 checks, 22 sections
 ```
+
+**`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` have a CHECKS total and no section counter.
 
 **Run the check-only pass first.** A script that fails to parse makes the scene fail
 to load and the process then **hangs** rather than exiting.
@@ -1449,6 +1460,8 @@ The prop count is the spawner's own `world_count()` and the player count is the 
 `dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
 
 **Here it was not the cause, and the leak is still open.** `dedicated` exits with 351 ObjectDB instances, 268 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else.
+
+It is 358 and 274 as of 2026-09-24, from 356 and 273 the commit before, and the difference is measured rather than guessed: `playground_beacon.gd` is one more script `PlaygroundPlayer` preloads, and with it loaded lazily instead the count went back to 356 and 273 exactly. A leak that holds every loaded script grows by one script's worth whenever a script is added, which is a reason to find what holds the graph rather than to stop preloading.
 
 ## Things deliberately not here
 

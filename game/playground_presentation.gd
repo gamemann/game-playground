@@ -22,6 +22,9 @@ const CHANNEL := "playground.presentation"
 
 const SCHEMA_VERSION := 1
 const SOUND_DIR := "res://audio"
+
+## The ping an administrator's beacon makes. See [method sound_catalogue].
+const BEACON_SOUND := &"beacon"
 static var FX_DIR := PlaygroundPaths.rebase("res://scenes/fx")
 
 var settings: DotSettingsManager = null
@@ -271,6 +274,25 @@ static func sound_catalogue() -> DotAudioCatalogue:
 		cue.priority = 70
 		c.add(cue)
 
+	# An administrator's beacon: a ping once a second from the beaconed player, heard by
+	# everybody. Positional, because the beacon's whole job is to say WHERE somebody is and
+	# a flat ping would say only that somebody somewhere is beaconed. And the furthest
+	# reach in this table — a sandbox is two hundred metres across and a beacon that went
+	# quiet halfway would fail in the one case it is for. Pitched an octave under the vote's
+	# warning, which shares its voice, so a ping is never heard as a ballot closing.
+	var ping := DotAudioDef.new()
+	ping.id = BEACON_SOUND
+	ping.path = "%s/beacon.ogg" % SOUND_DIR
+	ping.kind = DotAudioDef.Kind.POSITIONAL_3D
+	ping.bus = &"SFX"
+	ping.unit_size = 20.0
+	ping.max_distance = 160.0
+	ping.max_concurrent = 4
+	ping.priority = 45
+	ping.pitch_min = 0.5
+	ping.pitch_max = 0.5
+	c.add(ping)
+
 	var wave := DotAudioDef.new()
 	wave.id = &"wave_incoming"
 	wave.path = "%s/wave.ogg" % SOUND_DIR
@@ -306,6 +328,7 @@ static func sound_recipes() -> Dictionary:
 		PlaygroundVote.CUE_END: DotAudioSynth.Voice.DIE,
 		PlaygroundVote.CUE_WARNING: DotAudioSynth.Voice.BLIP,
 		PlaygroundVote.CUE_COUNT: DotAudioSynth.Voice.STEP,
+		BEACON_SOUND: DotAudioSynth.Voice.BLIP,
 	}
 
 
@@ -613,6 +636,16 @@ func on_vote_cue(id: StringName) -> int:
 		return 0
 
 	return audio.play(id)
+
+
+## A beacon's ripple went out from [param at]. From `PlaygroundClient._process`, on every
+## client, for every beaconed player — the beaconed one included, who hears their own.
+## Returns the voice, 0 for none.
+func on_beacon(at: Vector3) -> int:
+	if audio == null:
+		return 0
+
+	return audio.play_at(BEACON_SOUND, at)
 
 
 func on_wave_incoming() -> void:

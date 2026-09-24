@@ -846,6 +846,10 @@ func _process(_delta: float) -> void:
 	if net != null and net.is_running():
 		net.interpolate_frame()
 
+	# After the interpolation, so a remote player's marker is placed where this frame
+	# draws them rather than where the last frame did.
+	_present_beacons(_delta)
+
 	# `is_inside_tree`, not just null. A camera whose parent was freed — a player who
 	# left, a map change — is a live object that is not in the scene, and writing a
 	# global transform to one is an engine error every frame rather than a crash that
@@ -872,6 +876,31 @@ func _process(_delta: float) -> void:
 		deg_to_rad(player.controller.state.yaw),
 		0.0
 	)
+
+
+## Draws every beaconed player's marker for one frame, and plays each ripple's ping.
+##
+## Every player in the world, this client's own included: somebody who has been beaconed
+## should see the ring at their feet and hear it too. Here rather than in the game's tick,
+## because the game is the SIMULATION and runs on a server that draws nothing — a marker is
+## presentation, and a dedicated server that built one would be building meshes for nobody.
+func _present_beacons(delta: float) -> void:
+	if playground == null:
+		return
+
+	for id: Variant in playground.players:
+		var body: PlaygroundPlayer = playground.players[id]
+
+		if body == null or not body.is_inside_tree():
+			continue
+
+		# The column is hidden for the one player the camera is behind, and only in first
+		# person: from behind a third-person rig the column is a mark over your own head
+		# like anybody else's, and a camera outside it sees no smear.
+		var own_eyes := body == player and body.view_mode() != &"tp"
+
+		if body.present_beacon(delta, own_eyes) and presentation != null:
+			var _voice := presentation.on_beacon(body.controller.state.position)
 
 
 ## Tells the HUD what is in the player's hands.

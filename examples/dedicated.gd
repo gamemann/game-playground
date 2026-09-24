@@ -30,9 +30,25 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## still a dedicated server as far as its console, its cvars and its modules are
 ## concerned, and those are what this is about.
 
+## Sections that ran to their last line, and the checks they ran between them.
+##
+## [b]Both, because either alone reports a healthy run with checks missing.[/b] A runtime
+## error inside a section aborts that function and not the run, so the checks after it
+## never happen and the "0 failed" at the bottom says nothing about them. The section
+## counter catches a section that stopped; the total catches the one shape it cannot — a
+## section that aborted AFTER announcing itself, which is how dot-settings reported "8
+## sections, 63 passed, 0 failed" with eight checks missing. See docs/testing.md.
+##
+## This suite had neither until 2026-09-24. Each section calls [method _section_done] as
+## its last line; an early `return` after a failed check skips it deliberately, because a
+## section that stopped early did not do what it says.
+const SECTIONS := 22
+const CHECKS := 202
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
+var _sections_done := 0
 
 var server: DotServer = null
 var game: Playground = null
@@ -88,17 +104,37 @@ func _run() -> void:
 		_test_vote()
 		_test_identity()
 		await _test_live_tools()
+		await _test_blind_and_beacon()
 		_test_disconnect_is_handled()
 		await _test_module_unloads_cleanly()
 		_test_no_message_preloads_itself()
 
 	print("")
-	print("%d passed, %d failed" % [_passed, _failed])
+	print("%d passed, %d failed, %d of %d sections ran to their last line" % [
+		_passed, _failed, _sections_done, SECTIONS
+	])
 
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
+	if _sections_done != SECTIONS:
+		print("ERROR: %d of %d sections ran to their last line." % [_sections_done, SECTIONS])
+		get_tree().quit(1)
+		return
+
+	if _passed + _failed != CHECKS:
+		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
+			_passed + _failed, CHECKS
+		])
+		get_tree().quit(1)
+		return
+
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+## The last line of every section. See [constant SECTIONS].
+func _section_done() -> void:
+	_sections_done += 1
 
 
 ## The server half of this game's own server browser.
@@ -151,6 +187,7 @@ func _test_query() -> void:
 		"the prop count is the spawner's own rather than a second tally",
 		str(snapshot.game.get("props", -1))
 	)
+	_section_done()
 
 
 func _check(ok: bool, what: String, detail: String = "") -> void:
@@ -387,6 +424,7 @@ func _test_tickrate_reaches_the_timer() -> void:
 	# debugging it will actually look at.
 	var status := _run_command("pg_status")
 	_check(_said(status, "tick rate"), "pg_status reports the tick rate", str(status))
+	_section_done()
 
 
 # --- Commands --------------------------------------------------------------
@@ -466,6 +504,7 @@ func _test_map_commands() -> void:
 		"and the console cannot rock the vote for nobody",
 		str(rocked)
 	)
+	_section_done()
 
 
 func _test_timer_commands() -> void:
@@ -488,6 +527,7 @@ func _test_timer_commands() -> void:
 			"%s refuses politely from the console" % command,
 			str(reply)
 		)
+	_section_done()
 
 
 func _test_zone_workflow() -> void:
@@ -587,6 +627,7 @@ func _test_zone_workflow() -> void:
 	_check(bonus != null, "and the zone lands on it")
 
 	_run_command("pg_zone_undo")
+	_section_done()
 
 
 func _test_prop_commands() -> void:
@@ -606,6 +647,7 @@ func _test_prop_commands() -> void:
 	var cleared := _run_command("pg_props_clear")
 	_check(_said(cleared, "removed 2"), "pg_props_clear removes them", str(cleared))
 	_check(game.props.world_count() == 0, "and the world is empty")
+	_section_done()
 
 
 func _test_permissions() -> void:
@@ -634,6 +676,7 @@ func _test_permissions() -> void:
 		clear_cmd != null and clear_cmd.permission == DotAdminFlags.GENERIC,
 		"and clearing everybody's props is an admin action"
 	)
+	_section_done()
 
 
 ## A disconnect actually reaches the module.
@@ -749,6 +792,7 @@ func _test_services() -> void:
 			kinds_ok = false
 
 	_check(kinds_ok, "every chat kind survives the wire, not just the common one")
+	_section_done()
 
 
 ## A gag, written and read back off disk.
@@ -787,6 +831,7 @@ func _test_moderation() -> void:
 		"and reads back as a voice mute rather than as a warning"
 	)
 	reloaded.queue_free()
+	_section_done()
 
 
 ## Health, weapons that hurt, and a round.
@@ -884,6 +929,7 @@ func _test_arena() -> void:
 	arena.release(&"u901")
 	_run_command("pg_arena off")
 	_check(not arena.enabled, "and the console turns it off again")
+	_section_done()
 
 
 ## NPCs the server releases.
@@ -930,6 +976,7 @@ func _test_waves() -> void:
 
 	_run_command("pg_waves off")
 	_check(not waves.is_enabled(), "the console turns them off")
+	_section_done()
 
 
 ## Statistics, and what they are worth.
@@ -1019,6 +1066,7 @@ func _test_shop() -> void:
 		shop.may_have(buyer, cheapest.id).ok,
 		"after which everything is free again even with an empty account"
 	)
+	_section_done()
 
 
 # --- Spectating -------------------------------------------------------------
@@ -1057,6 +1105,7 @@ func _test_spectating() -> void:
 		spectate.manager.rules.force_camera == 0,
 		"and loosens again when it is off"
 	)
+	_section_done()
 
 
 # --- Down rather than dead ---------------------------------------------------
@@ -1135,6 +1184,7 @@ func _test_downed() -> void:
 
 	var _off := _run_command("pg_waves off")
 	_check(not downs.enabled, "turning the waves off turns it off")
+	_section_done()
 
 
 func _test_progress() -> void:
@@ -1209,6 +1259,7 @@ func _test_progress() -> void:
 
 	var written: DotResult = await progress.achievements.flush()
 	_check(written.ok, "progress writes to disk", str(written.error))
+	_section_done()
 
 
 ## What plays next, decided by the players.
@@ -1331,6 +1382,7 @@ func _test_vote() -> void:
 	)
 
 	_test_status_clock(vote)
+	_section_done()
 
 
 ## `pg_status`'s "time left" is the vote's clock, and an extend moves it.
@@ -1463,6 +1515,7 @@ func _test_identity() -> void:
 		PlaygroundProgress.stats_schema().has(&"props"),
 		"the stats schema declares what the game reports"
 	)
+	_section_done()
 
 
 ## dot-moderation's live tools, as an operator types them.
@@ -1526,6 +1579,87 @@ func _test_live_tools() -> void:
 	_run_command("pg_arena %s" % ("on" if was_on else "off"))
 	var _released := server.release_session(session.peer_id)
 	game.remove_player(&"u77")
+	_section_done()
+
+
+## An administrator's blind and beacon, typed at the console of a real server.
+##
+## What is asserted is the flag on the player and on the entity the netcode sends, because
+## that is the whole of what the server decides; whether the owner's client — and only the
+## owner's — receives it is `headless_net`'s, and what it looks like is
+## `tools/screenshot_views.sh`'s.
+func _test_blind_and_beacon() -> void:
+	print("")
+	print("[blind and beacon]")
+
+	var player := game.add_player(&"u78", "Quin")
+	var session := DotClientSession.new()
+	session.peer_id = 7808
+	session.userid = 78
+	session.display_name = "Quin"
+	var _adopted := server.adopt_session(session)
+
+	var blinded := await _run_command_later("blind Quin")
+	_check(player.blinded, "`blind Quin` blacks their screen out", " | ".join(blinded))
+
+	# The flag reaching the replicated field is the half of this the server owns. `pull`
+	# is what the netcode's tick calls; this suite drives no net tick, so it is called here.
+	var net := player.get_node_or_null("Net")
+	if net != null:
+		net.call("pull")
+	_check(
+		net != null and bool(net.get("net_blind")),
+		"and it is on the entity the netcode sends them"
+	)
+
+	var _lift := await _run_command_later("blind Quin off")
+	_check(not player.blinded, "`blind Quin off` lifts it")
+
+	# A blind is a spell. dot-moderation lifts it through the same handler when the time
+	# is up, so what is checked is the flag, not the timer.
+	var _spell := await _run_command_later("blind Quin 0.2")
+	_check(player.blinded, "`blind Quin 0.2` blinds them for a fifth of a second")
+	await get_tree().create_timer(0.4).timeout
+	_check(not player.blinded, "and it lifts on its own when the time is up")
+
+	var lit := await _run_command_later("beacon Quin")
+	_check(player.beacon, "`beacon Quin` marks them for everybody", " | ".join(lit))
+
+	var _dark := await _run_command_later("blind Quin")
+	var _back := await _run_command_later("respawn Quin")
+	_check(
+		player.blinded and player.beacon,
+		"a respawn keeps both: they are about the person, not the body"
+	)
+
+	var described := _run_command("modtools")
+	var abilities := ""
+	var refused := ""
+	for line in described:
+		if line.begins_with("abilities"):
+			abilities = line
+		elif line.begins_with("refused"):
+			refused = line
+	_check(
+		abilities.contains("blind") and abilities.contains("beacon")
+		and not refused.contains("blind") and not refused.contains("beacon"),
+		"`modtools` lists both as abilities and refuses neither",
+		"%s / %s" % [abilities, refused]
+	)
+
+	var _dark_off := await _run_command_later("blind Quin off")
+	var _unlit := await _run_command_later("beacon Quin off")
+	var tools: DotModTools = _module().get("mod_tools")
+	_check(
+		not player.blinded and not player.beacon
+		and not tools.is_active(&"78", DotModTools.ACTION_BLIND)
+		and not tools.is_active(&"78", DotModTools.ACTION_BEACON),
+		"and both come off, with the tools' record agreeing with the world"
+	)
+
+	var _released := server.release_session(session.peer_id)
+	game.remove_player(&"u78")
+	_section_done()
 
 
 ## [method _run_command] for a coroutine handler: the live tools record each action on a
@@ -1559,6 +1693,7 @@ func _test_disconnect_is_handled() -> void:
 		not game.players.has(&"u4242"),
 		"and the disconnect took them back out again"
 	)
+	_section_done()
 
 
 func _test_module_unloads_cleanly() -> void:
@@ -1600,6 +1735,7 @@ func _test_module_unloads_cleanly() -> void:
 	_check(reloaded.ok, "and it can be loaded again")
 
 	await get_tree().process_frame
+	_section_done()
 
 
 ## Deletes any file the achievement store has written for [param player].
@@ -1667,6 +1803,7 @@ func _test_no_message_preloads_itself() -> void:
 		"and none of them preloads itself, which leaks every script at exit",
 		", ".join(offenders)
 	)
+	_section_done()
 
 
 func _extends_message(source: String) -> bool:

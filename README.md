@@ -127,10 +127,14 @@ The end-of-map vote and the option to extend the current map:
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 347 checks
-godot --headless --path . res://examples/headless_net.tscn          # 129 checks
-godot --headless --path . res://examples/dedicated.tscn             # 193 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 357 checks
+godot --headless --path . res://examples/headless_net.tscn          # 140 checks
+godot --headless --path . res://examples/dedicated.tscn             # 202 checks over 22 sections
+godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
+godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 ```
+
+An administrator's `blind <player> [on|off|seconds]` blacks out that player's own screen and nobody else's, and `beacon <player> [on|off]` puts a pulsing ring, a column through walls and a ping on every screen until it is turned off. Both outlive a respawn. `tools/screenshot_views.sh` renders both.
 
 The headless suite boots the whole game, drives a bot down the surf map, finishes and files a run, ranks it, spawns props and builds their bodies from their definitions, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a script path, opens the spawn menu on a real screen stack and clicks through all three tabs, runs the sandbox's course, falls off it, and changes the map underneath all of it. It has found nine real bugs, three of them in other repositories; a screenshot found three more that no assertion could have. See [`CLAUDE.md`](CLAUDE.md).
 

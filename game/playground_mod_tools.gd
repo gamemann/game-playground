@@ -13,6 +13,20 @@ const PlaygroundPlayer := preload("playground_player.gd")
 ## one the timer server has: an admin's help can never make a time. Noclip abandons the run
 ## in progress, `PlaygroundPlayer` taints any run made while noclipped or on a speed or
 ## gravity step, and a teleport by an admin ends the run.
+##
+## Blind and beacon are the two that are about a SCREEN rather than a body, and each is one
+## flag on [PlaygroundPlayer] that `PlaygroundPlayerNet` replicates — the blind to its owner
+## alone, the beacon to everybody — and that the client draws: `PlaygroundHud` blacks the
+## owner's screen out, `PlaygroundBeacon` rings the player on every screen and pings. The
+## server decides; nothing about either is a client's to choose. Neither touches the timer:
+## a blinded run is harder, not assisted, and a beacon is a thing other people see.
+##
+## [b]Both outlive a respawn here without being told to[/b], and so does everything else:
+## a respawn in this game — the admin's, the course's, the arena's — is a teleport of the
+## same body (`Playground.spawn_player`), so nothing a handler set on the player is lost
+## and `DotModTools.respawned` is never called. That is the right answer for blind and
+## beacon, which are about the person rather than the body, and a death is exactly what a
+## player being punished would otherwise use to end one.
 
 ## Ids are the session userid as a string; this game's player key is `u<userid>`.
 static func key_of(id: StringName) -> StringName:
@@ -108,6 +122,23 @@ static func handlers(game: Playground, arena: PlaygroundArena) -> Dictionary:
 			if amount > 0.0 and _health(arena, id) != null:
 				var _hurt := arena.hurt(&"", key_of(id), amount, 0.0)
 			return DotResult.success(null),
+
+		DotModTools.ACTION_BLIND: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			if p == null:
+				return _absent(id)
+			# The screen and nothing else. A blinded player still moves, builds and runs
+			# the course; an admin who wants them to stop as well has freeze, and one verb
+			# that did both would be a verb nobody could use for only the first.
+			p.blinded = bool(args["on"])
+			return DotResult.success(p.blinded),
+
+		DotModTools.ACTION_BEACON: func(id: StringName, args: Dictionary) -> DotResult:
+			var p := _player(game, id)
+			if p == null:
+				return _absent(id)
+			p.beacon = bool(args["on"])
+			return DotResult.success(p.beacon),
 	}
 
 
@@ -116,8 +147,6 @@ static func unsupported() -> Dictionary:
 		DotModTools.ACTION_GIVE: "what a player holds here is the physics gun, the gravity gun and a loadout they choose",
 		DotModTools.ACTION_STRIP: "a sandbox player without the physics gun has no game",
 		DotModTools.ACTION_BURN: "nothing here burns a player",
-		DotModTools.ACTION_BLIND: "the client draws no overlay a server could turn on",
-		DotModTools.ACTION_BEACON: "the client draws no marker a server could turn on",
 	}
 
 
