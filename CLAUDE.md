@@ -1051,11 +1051,11 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 357 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
-godot --headless --path . res://examples/headless_net.tscn          # 151 checks, 17 sections
-godot --headless --path . res://examples/dedicated.tscn             # 202 checks, 22 sections
+godot --headless --path . res://examples/headless_net.tscn          # 154 checks, 17 sections
+godot --headless --path . res://examples/dedicated.tscn             # 207 checks, 23 sections
 ```
 
-**`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` have a CHECKS total and no section counter.
+**`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
 
 **Run the check-only pass first.** A script that fails to parse makes the scene fail
 to load and the process then **hangs** rather than exiting.
@@ -1478,6 +1478,8 @@ The prop count is the spawner's own `world_count()` and the player count is the 
 `dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
 
 **Here it was not the cause, and the leak is still open.** `dedicated` exits with 351 ObjectDB instances, 268 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else.
+
+**Closed 2026-09-24.** The something else was scripts naming their own `class_name` inside themselves (docs/gdscript-hazards.md, "A script that names itself") across twenty-odd addons, plus RefCounted cycles in dot-npc, dot-npc-ai and dot-objective. `dedicated` now runs itself once more in a fresh process and asserts it leaves no object alive at exit, which it does.
 
 It is 358 and 274 as of 2026-09-24, from 356 and 273 the commit before, and the difference is measured rather than guessed: `playground_beacon.gd` is one more script `PlaygroundPlayer` preloads, and with it loaded lazily instead the count went back to 356 and 273 exactly. A leak that holds every loaded script grows by one script's worth whenever a script is added, which is a reason to find what holds the graph rather than to stop preloading.
 

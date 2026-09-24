@@ -42,8 +42,17 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## This suite had neither until 2026-09-24. Each section calls [method _section_done] as
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
-const SECTIONS := 22
-const CHECKS := 202
+const SECTIONS := 23
+const CHECKS := 207
+
+## Everything this run writes, and it is deleted on the way in and on the way out.
+##
+## [b]A suite that writes to `user://` is a suite whose result depends on the last run.[/b]
+## This one wrote the real punishment store, the server's ban and admin files, its audit log
+## and an identity directory at their defaults, so every run appended to them: 352
+## punishments in the store a real server enforces, and a gag against `uid-pg-test` every
+## time. The achievements half of this already failed once on an unchanged tree.
+const SERVER_DIR := "user://pg_dedicated"
 
 var _passed := 0
 var _failed := 0
@@ -83,6 +92,11 @@ func _run() -> void:
 	print("playground — dedicated server")
 	print("")
 
+	var probe: Array = [] if _is_exit_probe() else _run_exit_probe()
+
+	DotPaths.remove_tree(SERVER_DIR)
+	DirAccess.make_dir_recursive_absolute(SERVER_DIR)
+
 	await _boot()
 
 	if game != null:
@@ -109,27 +123,63 @@ func _run() -> void:
 		await _test_module_unloads_cleanly()
 		_test_no_message_preloads_itself()
 
+	if not probe.is_empty():
+		_test_exits_clean(probe)
+
+	await _shut_down()
+	DotPaths.remove_tree(SERVER_DIR)
+
+	# The copy of this suite that the exit probe runs does not run the probe itself.
+	var sections := SECTIONS - (1 if _is_exit_probe() else 0)
+	var checks := CHECKS - (EXIT_PROBE_CHECKS if _is_exit_probe() else 0)
+
 	print("")
 	print("%d passed, %d failed, %d of %d sections ran to their last line" % [
-		_passed, _failed, _sections_done, SECTIONS
+		_passed, _failed, _sections_done, sections
 	])
 
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
-	if _sections_done != SECTIONS:
-		print("ERROR: %d of %d sections ran to their last line." % [_sections_done, SECTIONS])
+	if _sections_done != sections:
+		print("ERROR: %d of %d sections ran to their last line." % [_sections_done, sections])
 		get_tree().quit(1)
 		return
 
-	if _passed + _failed != CHECKS:
+	if _passed + _failed != checks:
 		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
-			_passed + _failed, CHECKS
+			_passed + _failed, checks
 		])
 		get_tree().quit(1)
 		return
 
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+## Takes the server down before quitting, so nothing is left for the engine to tear out
+## from under itself — whatever is alive at that point is reported leaked, which reads as
+## a reference cycle in the game and is a test that stopped one line early.
+func _shut_down() -> void:
+	if server == null:
+		return
+
+	if server.modules != null:
+		server.modules.unload_all()
+
+	server.shutdown("the dedicated test is finished")
+
+	for _i in range(10):
+		await get_tree().process_frame
+
+	for node: Node in [game, platform, get_node_or_null("QueryHost"), server]:
+		if is_instance_valid(node):
+			remove_child(node)
+			node.free()
+
+	game = null
+	platform = null
+	server = null
+	await get_tree().process_frame
 
 
 ## The last line of every section. See [constant SECTIONS].
@@ -251,7 +301,7 @@ func _boot() -> void:
 	# 100, deliberately not the project's own default of 128: the whole point of the
 	# chain below is that the SERVER decides, so a test using the same number on both
 	# sides would pass with the chain disconnected.
-	var cfg_path := "user://pg_dedicated_test.cfg"
+	var cfg_path := "%s/server.cfg" % SERVER_DIR
 	var cfg := FileAccess.open(cfg_path, FileAccess.WRITE)
 
 	if cfg == null:
@@ -281,6 +331,13 @@ func _boot() -> void:
 	# that failed on a busy 27015 would look like the module being broken.
 	config.port = 28765
 	config.query_port = 28766
+	config.admins_path = "%s/admins.json" % SERVER_DIR
+	config.bans_path = "%s/bans.json" % SERVER_DIR
+	config.audit_log_path = "%s/audit.jsonl" % SERVER_DIR
+	# Off: nobody is at the keyboard, and the exit probe's copy of this suite inherits
+	# whatever stdin this one has — a reader thread blocked on a terminal is a process that
+	# never exits.
+	config.stdin_console_enabled = false
 
 	server = DotServer.new()
 	server.name = "Server"
@@ -342,7 +399,7 @@ func _boot() -> void:
 	# `_module_load`, which dot-server's module host does not await.
 	platform = PlaygroundPlatform.new()
 	platform.name = "Identity"
-	platform.directory = "user://pg_dedicated_identity"
+	platform.directory = "%s/identity" % SERVER_DIR
 	add_child(platform)
 
 	var identity: DotResult = await platform.setup()
@@ -353,6 +410,16 @@ func _boot() -> void:
 	)
 	_check(platform_module.ok, "the platform module loads", str(platform_module.error))
 
+	# Into this run's own directory. See [constant SERVER_DIR].
+	#
+	# Through the script, loaded here, rather than a `preload` at the top of this file: a
+	# preload would load the module when this scene loads, long before the host does, and
+	# the order scripts load in is what decides whether Godot 4.7.2 leaks them at exit. See
+	# [method _run_exit_probe]. This is the order a deployed server has.
+	(load("res://game/playground_module.gd") as GDScript).set(
+		"punishments_path", "%s/punishments.json" % SERVER_DIR
+	)
+
 	var loaded: DotResult = await server.modules.load_module(
 		"res://game/playground_module.gd"
 	)
@@ -362,6 +429,18 @@ func _boot() -> void:
 
 	if not loaded.ok:
 		return
+
+	# [b]The store, and that it is empty.[/b] The second is what says the first worked on
+	# THIS run: a path that is right and a directory that was not wiped is a suite carrying
+	# the last run's gag into this one.
+	var services: PlaygroundServices = _module().get("services")
+	var moderation: DotModerationManager = services.moderation if services != null else null
+	_check(services != null and services.punishments_path.begins_with(SERVER_DIR),
+		"punishments go to this run's own store, not the one a real server enforces",
+		services.punishments_path if services != null else "no services")
+	_check(moderation != null and moderation.count() == 0,
+		"and it starts empty, so nothing a previous run did is in it",
+		"%d records" % moderation.count() if moderation != null else "no moderation")
 
 	_check(
 		server.console.find_command("pg_status") != null,
@@ -1811,3 +1890,70 @@ func _extends_message(source: String) -> bool:
 		if line.begins_with("extends "):
 			return line.contains("DotNetMessage") or line.contains("dot_net_message.gd")
 	return false
+
+
+# --- Exiting clean ----------------------------------------------------------------
+
+## The flag this suite hands the copy of itself it runs. See [method _run_exit_probe].
+const EXIT_PROBE_FLAG := "--exit-probe"
+
+## What the exit probe adds to a run — one section, these checks — and the copy does not.
+const EXIT_PROBE_CHECKS := 3
+
+
+func _is_exit_probe() -> bool:
+	return EXIT_PROBE_FLAG in OS.get_cmdline_user_args()
+
+
+## Runs this same suite in a fresh process: `[exit code, everything it printed]`.
+##
+## [b]A leak is reported after `quit()`, by the engine, where nothing in the process that
+## leaked can read it.[/b] "N ObjectDB instances were leaked at exit" is printed once the
+## scene tree is gone, so the only process that can check a run's exit is another one. On
+## Godot 4.7.2 a script that names itself, loaded after its base, cuts the engine's exit
+## teardown short and every script loaded before it is reported leaked — hundreds of lines
+## a passing run printed for weeks, which is why this is a check now and not a warning.
+##
+## [b]First, before this run opens a port[/b], so the two never contend for a socket — and
+## so this run is always the second one against the same `user://`, which is the other
+## thing no single run can see.
+func _run_exit_probe() -> Array:
+	print("(running this suite once more in a fresh process, to read what it leaves at exit)")
+	var scene := scene_file_path if scene_file_path != "" else "res://examples/dedicated.tscn"
+	var out: Array = []
+	var code := OS.execute(OS.get_executable_path(), [
+		"--headless", "--path", ProjectSettings.globalize_path("res://"),
+		scene, "--", EXIT_PROBE_FLAG,
+	], out, true)
+	var text := ""
+	for chunk: Variant in out:
+		text += str(chunk)
+	return [code, text]
+
+
+func _test_exits_clean(probe: Array) -> void:
+	print("")
+	print("exiting clean, as a second process saw it")
+
+	var code: int = probe[0]
+	var text: String = probe[1]
+
+	_check(code == 0, "this suite, run again in a fresh process, passes",
+		"exit %d; its last lines:\n%s" % [code, _last_lines(text, 25)] if code != 0 else "")
+	_check(not text.contains("leaked at exit"), "and leaves no object alive at exit",
+		_line_with(text, "leaked at exit"))
+	_check(not text.contains("still in use at exit"), "and no resource",
+		_line_with(text, "still in use at exit"))
+	_section_done()
+
+
+func _line_with(text: String, needle: String) -> String:
+	for line in text.split("\n"):
+		if line.contains(needle):
+			return line.strip_edges()
+	return ""
+
+
+func _last_lines(text: String, count: int) -> String:
+	var lines := text.strip_edges().split("\n")
+	return "\n".join(lines.slice(maxi(0, lines.size() - count)))
