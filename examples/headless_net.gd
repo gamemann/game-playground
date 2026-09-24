@@ -46,9 +46,17 @@ const CLIENT_ENGINE_TICK_RATE := 60
 
 const CHECKS := 140
 
+## Sections entered against sections that ran to their last line, and against this. A
+## runtime error inside a section aborts that function and nothing says so; a section that
+## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
+## total above is the other half — see docs/testing.md.
+const SECTIONS := 16
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
+var _entered := 0
+var _completed := 0
 
 var _server_game: Playground = null
 var _client_game: Playground = null
@@ -105,9 +113,17 @@ func _run() -> void:
 
 func _report() -> void:
 	print("")
-	print("%d passed, %d failed" % [_passed, _failed])
+	print("%d passed, %d failed, %d of %d sections ran to their last line" % [
+		_passed, _failed, _completed, _entered
+	])
 	for line in _failures:
 		print("  " + line)
+	if _entered != SECTIONS or _completed != _entered:
+		print("ERROR: %d sections entered and %d completed, %d expected. One aborted or was skipped." % [
+			_entered, _completed, SECTIONS
+		])
+		get_tree().quit(1)
+		return
 	# The total the section counter cannot be. A runtime error inside a section aborts
 	# that function, and the counter is satisfied because the section had already
 	# announced itself. See docs/testing.md.
@@ -131,8 +147,14 @@ func _check(ok: bool, what: String, detail: String = "") -> void:
 
 
 func _section(name: String) -> void:
+	_entered += 1
 	print("")
 	print(name)
+
+
+## A section reached its last line. See [constant SECTIONS].
+func _done() -> void:
+	_completed += 1
 
 
 # --- The wire, on its own --------------------------------------------------
@@ -158,6 +180,7 @@ func _test_command_wire() -> void:
 	_check(absf(got.move.yaw - 42.5) < 1.0, "the yaw arrives", "%.2f" % got.move.yaw)
 	_check(got.move.buttons == 5, "and the buttons", str(got.move.buttons))
 	_check(sent._equals(got) or true, "an input compares against another")
+	_done()
 
 
 ## Every encoder against its own decoder.
@@ -352,6 +375,7 @@ func _test_event_wire() -> void:
 		not bool(short_chat["ok"]),
 		"and a truncated chat line is reported as exhausted rather than as an empty one"
 	)
+	_done()
 
 
 # --- Bringing both halves up -----------------------------------------------
@@ -527,6 +551,7 @@ func _build() -> bool:
 		"and so does the client's, which predicts and interpolates instead"
 	)
 
+	_done()
 	return attached.ok and client_attached.ok
 
 
@@ -649,6 +674,7 @@ func _test_clock_wire() -> void:
 	_client_bridge.clock_view = DotVoteClockView.new()
 	remove_child(vote)
 	vote.free()
+	_done()
 
 
 func _flush() -> void:
@@ -783,6 +809,7 @@ func _test_handshake() -> void:
 
 	_check(_client_net.stats.rtt_percentile(0.5) > 0.0,
 		"the client fed the clock an RTT sample, which nothing in dot-net does for it")
+	_done()
 
 
 func _test_prediction() -> void:
@@ -804,6 +831,7 @@ func _test_prediction() -> void:
 	# measured the error. Both read as a predictor that snapped every packet.
 	var rate: float = _client_net.predictor.correction_rate()
 	_check(rate < 0.35, "the correction rate is low", "%.3f" % rate)
+	_done()
 
 
 # --- Props, which is what makes this a sandbox -----------------------------
@@ -878,6 +906,7 @@ func _test_prop_replication() -> void:
 	# every position written into it and jitters against gravity.
 	var body := client_node as RigidBody3D
 	_check(body == null or body.freeze, "the mirrored body does not simulate itself too")
+	_done()
 
 
 ## The client's props are children of its world; the one carrying a net behaviour is
@@ -949,6 +978,7 @@ func _test_prop_request() -> void:
 		int(_server_bridge.describe()["props"]) == after,
 		"an unknown prop id spawns nothing"
 	)
+	_done()
 
 
 ## The physics gun, over the wire.
@@ -1023,6 +1053,7 @@ func _test_tools() -> void:
 
 	_server_game.props.remove(crate.instance_id, DotPropSpawner.REASON_ADMIN)
 	await _exchange_steps(4)
+	_done()
 
 
 ## Points [param command] at [param target] from [param player]'s eye.
@@ -1119,6 +1150,7 @@ func _test_weapon_request() -> void:
 
 	refuse[0] = false
 	_server_bridge.charge_fn = Callable()
+	_done()
 
 
 func _test_prop_removal() -> void:
@@ -1141,6 +1173,7 @@ func _test_prop_removal() -> void:
 		int(_client_bridge.describe()["props"]) == server_after,
 		"and the client stopped drawing it"
 	)
+	_done()
 
 
 ## A vehicle spawned, driven and ridden with a real socket between the two ends.
@@ -1318,6 +1351,7 @@ func _test_vehicle_over_the_wire() -> void:
 	await _steps(6)
 
 	_check(_find_vehicle_node(_client_game) == null, "and removing it removes the mirror")
+	_done()
 
 
 func _find_vehicle_node(game: Playground) -> PlaygroundVehicle:
@@ -1345,6 +1379,7 @@ func _test_timer() -> void:
 		"counted at one rate on both ends, which is what makes a time comparable",
 		"%d vs %d" % [_client_game.timers.tick_rate, _server_game.timers.tick_rate]
 	)
+	_done()
 
 
 func _test_lossy() -> void:
@@ -1362,6 +1397,7 @@ func _test_lossy() -> void:
 	var server_at := _server_player().controller.state.position
 	_check(server_at.distance_to(after) < 2.0,
 		"and stays with the server", "%.3f m apart" % server_at.distance_to(after))
+	_done()
 
 
 ## An administrator's blind and beacon, through the real handlers, over the wire.
@@ -1448,6 +1484,7 @@ func _test_blind_and_beacon() -> void:
 		not _client_game.players.has(&"u%d" % (SESSION + 1)),
 		"the second player leaves again, so the sections after this one see one"
 	)
+	_done()
 
 
 func _test_leave() -> void:
@@ -1460,3 +1497,4 @@ func _test_leave() -> void:
 	_check(_server_player() == null, "the server drops the player")
 	_check(int(_server_bridge.describe()["players"]) == 0, "and their entity")
 	_check(_client_player() == null, "and the client is told")
+	_done()

@@ -49,9 +49,17 @@ const PgLobby := preload("res://maps/pg_lobby.gd")
 
 const CHECKS := 357
 
+## Sections entered against sections that ran to their last line, and against this. A
+## runtime error inside a section aborts that function and nothing says so; a section that
+## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
+## total above is the other half — see docs/testing.md.
+const SECTIONS := 21
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
+var _entered := 0
+var _completed := 0
 
 var playground: Playground = null
 
@@ -106,10 +114,19 @@ func _run() -> void:
 	await _test_the_client_boots()
 
 	print("")
-	print("%d passed, %d failed" % [_passed, _failed])
+	print("%d passed, %d failed, %d of %d sections ran to their last line" % [
+		_passed, _failed, _completed, _entered
+	])
 
 	for line in _failures:
 		print("  FAIL  %s" % line)
+
+	if _entered != SECTIONS or _completed != _entered:
+		print("ERROR: %d sections entered and %d completed, %d expected. One aborted or was skipped." % [
+			_entered, _completed, SECTIONS
+		])
+		get_tree().quit(1)
+		return
 
 	# The total the section counter cannot be. A runtime error inside a section aborts
 	# that function, and the counter is satisfied because the section had already
@@ -121,6 +138,16 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+func _section(title: String) -> void:
+	_entered += 1
+	print(title)
+
+
+## A section reached its last line. See [constant SECTIONS].
+func _done() -> void:
+	_completed += 1
 
 
 func _check(ok: bool, what: String, detail: String = "") -> void:
@@ -161,7 +188,7 @@ func _drive(
 # --- Boot ------------------------------------------------------------------
 
 func _test_boots() -> void:
-	print("booting")
+	_section("booting")
 
 	_check(playground.maps != null, "the map session exists")
 	_check(playground.timers != null, "the timer manager exists")
@@ -234,10 +261,11 @@ func _test_boots() -> void:
 		) < 1.0,
 		"and the player is at the map's spawn"
 	)
+	_done()
 
 
 func _test_tick_rate_comes_from_the_engine() -> void:
-	print("the tick rate comes from the engine, which is what a server sets")
+	_section("the tick rate comes from the engine, which is what a server sets")
 
 	# The chain: an operator writes `sv_tickrate` in server.cfg; dot-server writes
 	# `Engine.physics_ticks_per_second`; the playground reads it; the timer manager
@@ -276,10 +304,11 @@ func _test_tick_rate_comes_from_the_engine() -> void:
 		"%d" % record.tick_rate
 	)
 	_check_near(record.time, 1.0, 0.01, "and its time is that rate's worth of ticks")
+	_done()
 
 
 func _test_zone_file_matches_the_map() -> void:
-	print("the shipped zone file matches the geometry")
+	_section("the shipped zone file matches the geometry")
 
 	# A map's zones and its geometry are built from the same constants here, and a
 	# written-out copy of them lives in maps/ to demonstrate the file route that a
@@ -308,12 +337,13 @@ func _test_zone_file_matches_the_map() -> void:
 			(loaded.value as DotTimerZoneSet).fingerprint(), built.fingerprint()
 		]
 	)
+	_done()
 
 
 # --- A run -----------------------------------------------------------------
 
 func _test_surf_run() -> void:
-	print("a surf run, start to finish")
+	_section("a surf run, start to finish")
 
 	var player: PlaygroundPlayer = playground.players[&"bot"]
 
@@ -445,10 +475,11 @@ func _test_surf_run() -> void:
 			"and the movement statistics were folded into it",
 			str(finished[0].stats.keys())
 		)
+	_done()
 
 
 func _test_styles() -> void:
-	print("styles move both halves together")
+	_section("styles move both halves together")
 
 	var player: PlaygroundPlayer = playground.players[&"bot"]
 
@@ -501,10 +532,11 @@ func _test_styles() -> void:
 		player.controller.tunables.gravity, 20.0, 0.01,
 		"and switching back restores it rather than halving it again"
 	)
+	_done()
 
 
 func _test_leaderboards() -> void:
-	print("records reach the leaderboards")
+	_section("records reach the leaderboards")
 
 	var scope := {
 		"map": "pg_surf_intro",
@@ -571,12 +603,13 @@ func _test_leaderboards() -> void:
 		"while the same scope in a different order is the same board",
 		"%d vs %d" % [(same.value as Array).size(), rows.size()]
 	)
+	_done()
 
 
 # --- Props -----------------------------------------------------------------
 
 func _test_checkpoints() -> void:
-	print("practice checkpoints, through the game")
+	_section("practice checkpoints, through the game")
 
 	var player: PlaygroundPlayer = playground.players[&"bot"]
 	var checkpoints := playground.timers.checkpoints_for(&"bot")
@@ -626,10 +659,11 @@ func _test_checkpoints() -> void:
 			"putting them back where they saved it",
 			"%.2f m away" % player.controller.state.position.distance_to(somewhere)
 		)
+	_done()
 
 
 func _test_props() -> void:
-	print("props")
+	_section("props")
 
 	var player: PlaygroundPlayer = playground.players[&"bot"]
 
@@ -686,12 +720,13 @@ func _test_props() -> void:
 	await get_tree().process_frame
 
 	_check(not is_instance_valid(node), "and the node is actually freed")
+	_done()
 
 
 # --- Changing maps ---------------------------------------------------------
 
 func _test_map_change() -> void:
-	print("changing map under a live player")
+	_section("changing map under a live player")
 
 	var player: PlaygroundPlayer = playground.players[&"bot"]
 
@@ -766,10 +801,11 @@ func _test_map_change() -> void:
 			player.controller.stats.measured_jumps
 		]
 	)
+	_done()
 
 
 func _test_map_time_limit() -> void:
-	print("a map that ends on its own")
+	_section("a map that ends on its own")
 
 	# A server that never changes map is not a server. The session says the map is
 	# over; the playground decides what happens next — which here is the rotation.
@@ -850,6 +886,7 @@ func _test_map_time_limit() -> void:
 
 	playground.maps.time_limit.duration = 0.0
 	playground.maps.time_limit.start()
+	_done()
 
 
 ## Every prop this build ships is one scene, and the definition is what differs.
@@ -861,7 +898,7 @@ func _test_map_time_limit() -> void:
 ## Nothing errored, and the two numbers were only ever compared by a player wondering
 ## why.
 func _test_props_are_built_from_their_definitions() -> void:
-	print("props built from their definitions")
+	_section("props built from their definitions")
 
 	var at := Vector3(0.0, 40.0, 0.0)
 
@@ -947,6 +984,7 @@ func _test_props_are_built_from_their_definitions() -> void:
 		"; ".join(catalogue.problems()))
 
 	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_done()
 
 
 ## Bonus 2: the spiral, and the two things about it that a count cannot check.
@@ -1452,7 +1490,7 @@ func _test_a_hunter_decides(playground: Playground) -> void:
 ## mounted dot-cloud pack's `class_name` globals are not registered in the host, so an
 ## entity named by class could only ever ship inside the build.
 func _test_entities_run_their_scripts() -> void:
-	print("entities that run their own scripts")
+	_section("entities that run their own scripts")
 
 	# On the sandbox, deliberately. The previous tests leave the game on whichever map
 	# they finished with, and an NPC walking about on the bhop map's blocks-with-gaps
@@ -1614,11 +1652,12 @@ func _test_entities_run_their_scripts() -> void:
 	await get_tree().process_frame
 
 	_check(playground.entities.is_empty(), "clearing the world empties the tick list")
+	_done()
 
 
 ## Weapons: a script loaded by path, held rather than spawned.
 func _test_weapons() -> void:
-	print("weapons")
+	_section("weapons")
 
 	var defs := PlaygroundWeapons.built_in()
 
@@ -1755,6 +1794,7 @@ func _test_weapons() -> void:
 	_check(playground.props.player_count(&"bot") == 0, "and the budget goes with them")
 
 	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_done()
 
 
 ## The spawn menu, driven the way a player drives it.
@@ -1766,7 +1806,7 @@ func _test_weapons() -> void:
 ## family's `set_anchors_preset` bug — so the sizes are checked, not just the
 ## contents.
 func _test_spawn_menu() -> void:
-	print("the spawn menu")
+	_section("the spawn menu")
 
 	var menu := PlaygroundSpawnMenu.new()
 	menu.catalogue = playground.props.catalogue
@@ -1974,6 +2014,7 @@ func _test_spawn_menu() -> void:
 	_check(popped.ok and not stack.any_open(), "the menu closes")
 
 	stack.queue_free()
+	_done()
 
 
 # --- The sandbox, and the course in the corner of it ------------------------
@@ -1986,7 +2027,7 @@ func _test_spawn_menu() -> void:
 ## split and a reset volume, which is what proves the timer is not a surf-and-bhop
 ## thing: nothing about a jump course is a movement genre.
 func _test_the_sandbox_and_its_course() -> void:
-	print("the sandbox and its course")
+	_section("the sandbox and its course")
 
 	var changed: DotResult = await playground.change_map(&"pg_lobby")
 	_check(changed.ok, "the sandbox loads")
@@ -2167,6 +2208,7 @@ func _test_the_sandbox_and_its_course() -> void:
 		playground.props.world_count() == 0,
 		"and their props go with them"
 	)
+	_done()
 
 
 ## A bot climbs bonus 2 from its pad to the cap on top of the pillar.
@@ -2287,7 +2329,7 @@ func _walk_the_tower(player: PlaygroundPlayer) -> void:
 ## been strafing can cross it, which is what that route is for.
 func _test_the_narrows() -> void:
 	print("")
-	print("the narrows — pg_bhop_intro's bonus route")
+	_section("the narrows — pg_bhop_intro's bonus route")
 
 	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
 	_check(loaded.ok, "the bhop map loads",
@@ -2430,6 +2472,7 @@ func _test_the_narrows() -> void:
 	)
 
 	playground.remove_player(&"bot")
+	_done()
 
 
 ## Whether the bot should be holding jump at [param z] on the narrows.
@@ -2467,7 +2510,7 @@ static func _jumping_at(z: float) -> bool:
 ## on a face nobody can stand on there is no ground to leave.
 func _test_the_plunge() -> void:
 	print("")
-	print("the plunge — pg_surf_intro's bonus route")
+	_section("the plunge — pg_surf_intro's bonus route")
 
 	var loaded: DotResult = await playground.change_map(&"pg_surf_intro")
 	_check(loaded.ok, "the surf map loads again",
@@ -2610,6 +2653,7 @@ func _test_the_plunge() -> void:
 	)
 
 	playground.remove_player(&"bot")
+	_done()
 
 
 # --- The client -------------------------------------------------------------
@@ -2638,7 +2682,7 @@ func _test_the_plunge() -> void:
 ## prop budget, on an undo stack, adopted rather than spawned, with its wheels built by
 ## the game after the body was created by somebody else.
 func _test_vehicles() -> void:
-	print("vehicles")
+	_section("vehicles")
 
 	var changed: DotResult = await playground.change_map(&"pg_lobby")
 	_check(changed.ok, "the sandbox loads")
@@ -2855,6 +2899,7 @@ func _test_vehicles() -> void:
 	)
 
 	playground.remove_player(&"rider")
+	_done()
 
 
 
@@ -2875,7 +2920,7 @@ func _test_vehicles() -> void:
 ## a second thing that can disagree with the geometry.
 func _test_the_jump_course() -> void:
 	print("")
-	print("the jump course — pg_lobby's bonus 1, run end to end")
+	_section("the jump course — pg_lobby's bonus 1, run end to end")
 
 	var loaded: DotResult = await playground.change_map(&"pg_lobby")
 	_check(loaded.ok, "the lobby loads",
@@ -3008,6 +3053,7 @@ func _test_the_jump_course() -> void:
 	)
 
 	playground.remove_player(&"bot")
+	_done()
 
 
 ## Whether the bot should be holding jump at [param z] on the jump course.
@@ -3046,7 +3092,7 @@ static func _jumping_on_the_course(z: float) -> bool:
 ## per-zone check while being a route nobody can finish.
 func _test_the_switchback() -> void:
 	print("")
-	print("the switchback — pg_bhop_intro's bonus 2, run end to end")
+	_section("the switchback — pg_bhop_intro's bonus 2, run end to end")
 
 	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
 	_check(loaded.ok, "the bhop map loads",
@@ -3138,6 +3184,7 @@ func _test_the_switchback() -> void:
 	)
 
 	playground.remove_player(&"bot")
+	_done()
 
 
 ## A spawn's yaw, read after the simulation has run rather than before it.
@@ -3197,7 +3244,7 @@ func _the_spawn_yaw_survives_a_tick(
 
 
 func _test_the_client_boots() -> void:
-	print("the client boots")
+	_section("the client boots")
 
 	var client := PlaygroundClient.new()
 	client.name = "Client"
@@ -3437,6 +3484,7 @@ func _test_the_client_boots() -> void:
 
 	await get_tree().process_frame
 	await get_tree().process_frame
+	_done()
 
 
 
