@@ -32,6 +32,11 @@ const TORSO_FRACTION := 0.46
 var _built_for: StringName = &""
 var _parts: Node3D = null
 
+## Whether the body is posed sitting. See [method set_seated].
+var _seated_pose := false
+var _legs_height := 0.0
+var _leg_radius := 0.0
+
 
 ## Builds a body the size the character definition says, under an adopted rig.
 ##
@@ -62,7 +67,11 @@ func build_for(def: DotPlayerCharDef, colour: Color) -> void:
 		rig.name = "Rig"
 		add_child(rig)
 
-	_seat_rig()
+	# Onto the player, which is what places it. dot-player-char does this itself now — a rig
+	# kept under the visual, a plain Node, inherited no transform and stood at the world
+	# origin for every player — and this is only for the one path above where this class
+	# made the rig before the visual's own `_ready` could.
+	var _seated := seat()
 
 	_parts = Node3D.new()
 	_parts.name = "Body"
@@ -100,6 +109,10 @@ func build_for(def: DotPlayerCharDef, colour: Color) -> void:
 		colour.lightened(0.5)
 	)
 
+	_legs_height = legs_height
+	_leg_radius = radius * 0.85
+	_apply_pose()
+
 	rig.adopt(_parts, _model_def(def))
 
 	DotLog.debug(CHANNEL, "body built", {
@@ -107,57 +120,80 @@ func build_for(def: DotPlayerCharDef, colour: Color) -> void:
 	})
 
 
-## Turns the body to face [param yaw], in radians.
-##
-## On the rig rather than on this node, for the reason the body is parented to it: a
-## component has no transform. Without this a third-person camera orbiting a player shows
-## a character who never turns, which reads as the model being broken.
-## Moves the rig onto the body this visual belongs to.
-##
-## [b]The rig was at the world origin, for every player, from the day it was built.[/b]
-## `DotPlayerModelVisual` makes the rig its own child, and a visual is a
-## `DotPlayerComponent` — a plain `Node`. A `Node3D` whose parent is not a `Node3D` does not
-## inherit anybody's transform: it is placed in world space, so every body in the sandbox
-## stood at (0, 0, 0) wherever its player was. A networked client showed it plainly: the
-## other player's beacon over there, and their body here, at the centre of the map.
-##
-## So the rig goes on the nearest `Node3D` above — the `PlaygroundPlayer`, which is the
-## body the controller moves — and the visual keeps its reference, so `set_shown`,
-## `attachment`, `weapon_mount` and `face` all still reach it. Done here because this game
-## is the only one in the family that draws through `DotPlayerModelVisual`; the addon still
-## makes the same parenting for the next game that does, which is written down in this
-## repository's CLAUDE.md rather than changed from here.
-func _seat_rig() -> void:
-	if rig == null or rig.get_parent() is Node3D:
-		return
-
-	var body := _body_node()
-
-	if body == null:
-		return
-
-	rig.reparent(body, false)
-	rig.transform = Transform3D.IDENTITY
-
-
-func _body_node() -> Node3D:
-	var at := get_parent()
-
-	while at != null and not (at is Node3D):
-		at = at.get_parent()
-
-	return at as Node3D
-
-
 ## Whether the rig is where the body is. Read by the suites.
 func is_on_body() -> bool:
-	var body := _body_node()
-	return rig != null and body != null and rig.get_parent() == body
+	return is_seated()
 
 
+## Turns the body to face [param yaw], in radians.
+##
+## On the rig rather than on this node: a component has no transform. Without this a
+## third-person camera orbiting a player shows a character who never turns, which reads as
+## the model being broken.
 func face(yaw: float) -> void:
 	if rig != null:
 		rig.rotation.y = yaw
+
+
+## Turns the body to sit the way [param basis] faces, in world space: the vehicle's, for a
+## rider. Global rather than local because a rider's node is carried inside the vehicle on
+## the machine that runs the ride and is not on any other, and the body has to face the car's
+## way on both.
+func face_basis(basis: Basis) -> void:
+	if rig != null and rig.is_inside_tree():
+		rig.global_basis = basis.orthonormalized()
+
+
+## Sits the body down, or stands it up.
+##
+## [b]A rider was drawn as a standing 1.8 m figure.[/b] dot-vehicle carries the rider's node
+## to the seat — its origin is where the rider sits — and the body hangs off that node, so a
+## passenger in the open buggy stood bolt upright through the seat with their legs through
+## the floor and their head two metres above it. The body is primitives, and dot-player-char's
+## locomotion set has no sitting clip to play, so the pose is the parts moved: the legs laid
+## forward at seat height, the torso on the seat, the head and the facing mark with it. The
+## seat offset is the SEAT, not the floor, which is why the torso starts at zero here.
+##
+## Not hidden, which is what mg-buses-from-hell does with a driver — there the bus IS the
+## driver, and a body inside a closed cab would never be seen. The buggy is open and the
+## hover sled is a bench, so a hidden rider is a car driving itself.
+func set_seated(seated: bool) -> void:
+	if _seated_pose == seated:
+		return
+	_seated_pose = seated
+	_apply_pose()
+
+
+func is_seated_pose() -> bool:
+	return _seated_pose
+
+
+func _apply_pose() -> void:
+	if _parts == null or not is_instance_valid(_parts):
+		return
+
+	var drop := _legs_height if _seated_pose else 0.0
+
+	for part: Node in _parts.get_children():
+		var node := part as Node3D
+		if node == null:
+			continue
+
+		if not node.has_meta(&"standing_y"):
+			node.set_meta(&"standing_y", node.position.y)
+
+		var standing_y := float(node.get_meta(&"standing_y"))
+
+		if node.name == &"Legs":
+			if _seated_pose:
+				# Laid forward (-Z) along the seat, at the height of a thigh on a cushion.
+				node.rotation = Vector3(PI * 0.5, 0.0, 0.0)
+				node.position = Vector3(0.0, _leg_radius, -_legs_height * 0.5)
+			else:
+				node.rotation = Vector3.ZERO
+				node.position = Vector3(0.0, standing_y, 0.0)
+		else:
+			node.position.y = standing_y - drop
 
 
 ## Whether the body is currently drawn. For a suite, and for a HUD that says so.

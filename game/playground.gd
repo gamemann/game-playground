@@ -816,7 +816,7 @@ func _on_seated(
 	if player == null:
 		return
 
-	player.set_riding(true)
+	player.set_riding(true, vehicle.node as Node3D)
 
 	# The run goes on a track that is run, and it is not optional there: a timed course
 	# driven in a car is not a run anybody can compare with one that was walked, and

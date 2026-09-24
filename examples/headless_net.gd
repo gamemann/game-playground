@@ -16,6 +16,7 @@ const PlaygroundHud := preload("../game/playground_hud.gd")
 const PlaygroundModTools := preload("../game/playground_mod_tools.gd")
 const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
 const PlaygroundClient := preload("../game/playground_client.gd")
+const PlaygroundCharacter := preload("../game/playground_character.gd")
 
 ## game-playground over the wire: a real server, a real client, and a lossy loopback
 ## between them.
@@ -45,7 +46,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 151
+const CHECKS := 154
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1257,6 +1258,38 @@ func _test_vehicle_over_the_wire() -> void:
 		"a predicted controller under a rider fights every snapshot"
 	)
 
+	# Sat down, not standing. A rider's node is carried to the seat, and the body hanging off
+	# it was a standing 1.8 m figure — legs through the floor of the car, head two metres over
+	# it. The client learns it from the same SEAT event, and the vehicle with it, so the body
+	# faces the way the car does rather than where the rider happens to look.
+	var rider := _client_player()
+	# Looking out of the side, a quarter turn off the car's heading: otherwise the rider's
+	# look and the car's heading agree, and "faces the car" cannot be told from "faces where
+	# they look" — which is how this check first passed with the vehicle never sent.
+	if rider != null and mirror != null:
+		rider.controller.state.yaw = rad_to_deg(mirror.global_rotation.y) + 90.0
+	var _drawn := PlaygroundClient.present_frame(_client_net, _client_game, 0.0)
+	var rider_body: PlaygroundCharacter = rider.character if rider != null else null
+	var head := (
+		rider_body.rig.get_node_or_null("Body/Head") as Node3D
+		if rider_body != null and rider_body.rig != null else null
+	)
+	_check(
+		rider_body != null and rider_body.is_seated_pose() and head != null
+			and head.position.y < 1.2,
+		"and the client sits their body down in the seat",
+		"head %.2f m above the seat" % (head.position.y if head != null else -1.0)
+	)
+	var facing_dot := (
+		rider_body.rig.global_basis.z.normalized().dot(mirror.global_basis.z.normalized())
+		if rider_body != null and mirror != null else -2.0
+	)
+	_check(
+		facing_dot > 0.99,
+		"facing the way the car faces",
+		"dot %.3f" % facing_dot
+	)
+
 	var before := vehicle.position()
 	var mirror_before := mirror.global_position if mirror != null else Vector3.ZERO
 
@@ -1343,6 +1376,12 @@ func _test_vehicle_over_the_wire() -> void:
 	_check(
 		_client_player() != null and not _client_player().riding,
 		"and the client is predicting them again"
+	)
+	_check(
+		rider_body != null and not rider_body.is_seated_pose() and head != null
+			and head.position.y > 1.4,
+		"and standing up again",
+		"head %.2f m" % (head.position.y if head != null else -1.0)
 	)
 	_check(
 		driver.global_position.distance_to(vehicle.position()) > 0.9,

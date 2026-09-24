@@ -885,7 +885,7 @@ func _process(_delta: float) -> void:
 ## [b]And the bodies after it[/b], because a remote player's node is moved by that call and
 ## the body hangs off the node. Until 2026-09-24 there was no body to move — it was hidden
 ## as if it were the local player's own and parked at the world origin (see
-## `PlaygroundPlayer.body_shown` and `PlaygroundCharacter._seat_rig`), so on a networked
+## `PlaygroundPlayer.body_shown`, and dot-player-char's visual seating), so on a networked
 ## client every other person in the sandbox was a beacon with nobody under it.
 ##
 ## [param alpha] is how far through the current tick the frame is; -1 asks the engine,

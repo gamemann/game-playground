@@ -1335,7 +1335,12 @@ func _apply_seat(reader: DotNetReader) -> void:
 	if behaviour == null or behaviour.player == null:
 		return
 
-	behaviour.player.set_riding(bool(info["seated"]))
+	# The vehicle too, when this client has it, so the body sits facing the car's way.
+	var vehicle_net: PlaygroundPropNet = _prop_nets.get(int(info["vehicle_net_id"]))
+	var vehicle_node: Node3D = null
+	if vehicle_net != null and is_instance_valid(vehicle_net.prop):
+		vehicle_node = vehicle_net.prop as Node3D
+	behaviour.player.set_riding(bool(info["seated"]), vehicle_node)
 	seat_changed.emit(int(info["player_id"]), bool(info["seated"]))
 
 

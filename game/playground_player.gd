@@ -83,6 +83,11 @@ var grav_gun: DotGravGun = null
 ## and a client has no vehicle spawner at all to ask.
 var riding: bool = false
 
+## The vehicle this player is riding in, when it is known: the body sits facing the way it
+## does. Null when not riding, and null on a client that has not been told which vehicle —
+## the body then faces where the rider is looking, which is the best it has.
+var ride_node: Node3D = null
+
 ## An administrator's `blind`: this player's own screen is blacked out.
 ##
 ## [b]Set on the server and replicated to the OWNER ONLY[/b] (`PlaygroundPlayerNet.net_blind`).
@@ -239,6 +244,7 @@ func build_character(def: DotPlayerCharDef, colour: Color) -> void:
 		add_child(character)
 
 	character.build_for(def, colour)
+	character.set_seated(riding)
 
 	if anim == null:
 		anim = DotPlayerAnimDriver.new()
@@ -283,7 +289,16 @@ func refresh_body() -> void:
 ## slid across the floor sideways.
 func face_body() -> void:
 	if character != null and controller != null:
-		character.face(deg_to_rad(controller.state.yaw))
+		_face(controller.state.yaw)
+
+
+## A rider's body faces the vehicle, whoever is looking where. Everybody else's faces where
+## they look.
+func _face(yaw_degrees: float) -> void:
+	if riding and ride_node != null and is_instance_valid(ride_node) and ride_node.is_inside_tree():
+		character.face_basis(ride_node.global_basis)
+	else:
+		character.face(deg_to_rad(yaw_degrees))
 
 
 ## Advances the locomotion state from the movement that just happened.
@@ -311,7 +326,7 @@ func drive_character(delta: float) -> void:
 		# rotation it was built with and a third-person camera orbiting a player shows a
 		# character who never turns — which reads as the model being broken rather than
 		# as a missing line.
-		character.face(deg_to_rad(state.yaw))
+		_face(state.yaw)
 
 
 ## Switches between the first- and third-person controllers.
@@ -547,7 +562,14 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 ## Both halves matter and the second is the one that is easy to leave out: a player put
 ## back down after a drive whose velocity was whatever it was when they got in launches
 ## across the map on their first step.
-func set_riding(value: bool) -> void:
+func set_riding(value: bool, vehicle_node: Node3D = null) -> void:
+	# Before the early return: a client told twice about one ride may learn the vehicle
+	# only the second time.
+	ride_node = vehicle_node if value else null
+
+	if character != null:
+		character.set_seated(value)
+
 	if riding == value:
 		return
 
