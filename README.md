@@ -128,7 +128,7 @@ The end-of-map vote and the option to extend the current map:
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 357 checks
-godot --headless --path . res://examples/headless_net.tscn          # 140 checks
+godot --headless --path . res://examples/headless_net.tscn          # 151 checks
 godot --headless --path . res://examples/dedicated.tscn             # 202 checks over 22 sections
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks

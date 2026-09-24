@@ -212,6 +212,10 @@ func build_view_switch() -> bool:
 	controller_switch.default_controller = &"fp"
 	add_child(controller_switch)
 
+	# This is the moment a client learns the player is its own, so the body built for them
+	# as somebody else's is hidden now: they are looking out of it.
+	refresh_body()
+
 	return true
 
 
@@ -248,9 +252,38 @@ func build_character(def: DotPlayerCharDef, colour: Color) -> void:
 		anim.anim_set = DotPlayerAnimSet.locomotion()
 		add_child(anim)
 
-	# First person hides the body the moment it is built: a player looking through their
-	# own eyes must not see the inside of their own head.
-	character.set_shown(view_mode() == &"tp")
+	refresh_body()
+
+
+## Whether this player's body is drawn: always, except by the person looking out of it in
+## first person.
+##
+## [b]It used to be `view_mode() == &"tp"` for everybody, and that hid every other player on
+## every client.[/b] A view mode is a fact about the LOCAL player — only a player that
+## samples input has a switch at all — so every remote player answered "fp" and was built
+## with its body hidden. It was invisible offline because offline there is nobody else,
+## and in the one frame anybody had looked at, the body in it was the local player's own.
+func body_shown() -> bool:
+	return not samples_input or view_mode() == &"tp"
+
+
+## Puts [method body_shown] onto the body. Called whenever either half of it can change: the
+## body being built, the view switch being built (which is when a client learns this player
+## is its own), and the view being switched.
+func refresh_body() -> void:
+	if character != null:
+		character.set_shown(body_shown())
+
+
+## Turns the body to face where this player is looking, from the state as it is NOW.
+##
+## Once a frame from the client, for every player. [method drive_character] does the same
+## once a tick, but only where the game ticks every player — the authority; a client ticks
+## only its own, so a remote player's body kept whatever way it faced when it was built and
+## slid across the floor sideways.
+func face_body() -> void:
+	if character != null and controller != null:
+		character.face(deg_to_rad(controller.state.yaw))
 
 
 ## Advances the locomotion state from the movement that just happened.
@@ -297,8 +330,7 @@ func set_view_mode(third_person: bool) -> StringName:
 
 	# The body is shown in third person and hidden in first, which is the whole reason
 	# `DotPlayerCharVisual.set_shown` exists.
-	if character != null:
-		character.set_shown(now == &"tp")
+	refresh_body()
 
 	return now
 

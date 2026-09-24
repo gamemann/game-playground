@@ -15,6 +15,7 @@ const PlaygroundVote := preload("../game/playground_vote.gd")
 const PlaygroundHud := preload("../game/playground_hud.gd")
 const PlaygroundModTools := preload("../game/playground_mod_tools.gd")
 const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
+const PlaygroundClient := preload("../game/playground_client.gd")
 
 ## game-playground over the wire: a real server, a real client, and a lossy loopback
 ## between them.
@@ -44,13 +45,13 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 140
+const CHECKS := 151
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 16
+const SECTIONS := 17
 
 var _passed := 0
 var _failed := 0
@@ -105,6 +106,9 @@ func _run() -> void:
 		# After the weapon request for the same reason it is after everything else: this
 		# adds a second body to the shared physics space. It takes the body back out again.
 		await _test_blind_and_beacon()
+		# After the blind and beacon, for the reason that one gives: it adds a body to the
+		# shared world and takes it back out.
+		await _test_somebody_else_is_drawn()
 		_test_clock_wire()
 		await _test_leave()
 
@@ -1483,6 +1487,161 @@ func _test_blind_and_beacon() -> void:
 	_check(
 		not _client_game.players.has(&"u%d" % (SESSION + 1)),
 		"the second player leaves again, so the sections after this one see one"
+	)
+	_done()
+
+
+## Frames drawn per tick in [method _test_somebody_else_is_drawn], each at its own fraction
+## through the tick, which is what a screen faster than the tick rate does.
+const FRAMES_PER_TICK := 4
+
+
+## Another player has a body on this client, it stands where the server has them, and it
+## moves every frame rather than every snapshot.
+##
+## [b]On a networked client nobody else had a body until 2026-09-24, for two reasons at
+## once[/b], and every section above passed throughout because each reads the simulation
+## and none reads the screen: the body was hidden (the "first person hides your own body"
+## rule was applied to every player, and a remote one's view mode reads "fp"), and it was
+## at the world origin (the rig hung off a plain `Node`, which a `Node3D` does not inherit a
+## transform through). The lobby's spawn IS the origin, which is why a body standing on the
+## spawn pad looked right — so this runs them well away from it before asking.
+##
+## Driven through `PlaygroundClient.present_frame`, the function the real client's
+## `_process` calls, so a client that stops interpolating or stops placing bodies fails
+## here rather than in a screenshot.
+func _test_somebody_else_is_drawn() -> void:
+	_section("somebody else has a body, where the server has them, moving every frame")
+
+	var session := SESSION + 2
+	var added := _server_bridge.add_player(CLIENT_PEER + 2, session, "Bea")
+	_check(added.ok, "a second player joins on a peer of their own")
+	await _steps(6)
+
+	var server_bea: PlaygroundPlayer = _server_game.players.get(&"u%d" % session)
+	var theirs: PlaygroundPlayer = _client_game.players.get(&"u%d" % session)
+	var mine := _client_player()
+
+	if server_bea == null or theirs == null or mine == null:
+		_check(false, "both ends have them, and this client has its own player")
+		return
+
+	# What the real client has done by now and this suite's hand-driven halves have not: its
+	# manager is RUNNING, which `present_frame` asks before it interpolates, and it has told
+	# its own player that it is the local one, which is when a first-person body is hidden
+	# (`PlaygroundClient._build_view_switch`, in the same two lines).
+	if not _client_net.is_running():
+		var _started := _client_net.start()
+	mine.samples_input = true
+	var _switch := mine.build_view_switch()
+
+	var shown := PlaygroundClient.present_frame(_client_net, _client_game, 0.0)
+
+	_check(
+		theirs.character != null and theirs.character.is_body_visible()
+		and theirs.character.rig.is_visible_in_tree(),
+		"the client draws a body for them",
+		"character %s, shown %s" % [
+			str(theirs.character != null),
+			str(theirs.character.is_body_visible()) if theirs.character != null else "-",
+		]
+	)
+	_check(
+		mine.character == null or not mine.character.is_body_visible(),
+		"and none round its own camera, which is in first person"
+	)
+	_check(shown == 1, "so exactly one body is drawn on this client", "%d" % shown)
+	_check(
+		theirs.character != null and theirs.character.is_on_body(),
+		"the body hangs off the player's own node, which is what places it"
+	)
+
+	# Running, with the client drawing FRAMES_PER_TICK frames between ticks. Driven the way a
+	# peer drives them: the command their input would have carried, applied by the server.
+	var bea_net := server_bea.get_node("Net") as PlaygroundPlayerNet
+	var run := DotFpsCommand.new()
+	run.move = Vector2(0.0, 1.0)
+	run.yaw = 90.0
+	bea_net.last_move = run
+
+	var server_track: Array[Vector3] = []
+	var drawn: Array[Vector3] = []
+
+	for i in range(160):
+		await _step()
+		server_track.append(server_bea.controller.state.position)
+
+		for f in range(FRAMES_PER_TICK):
+			var _n := PlaygroundClient.present_frame(
+				_client_net, _client_game, float(f) / float(FRAMES_PER_TICK)
+			)
+			if theirs.character != null and i >= 60:
+				drawn.append(theirs.character.rig.global_position)
+
+	bea_net.last_move = DotFpsCommand.new()
+
+	var from := server_track[0]
+	var to := server_track[server_track.size() - 1]
+	_check(
+		Vector2(to.x, to.z).distance_to(Vector2(from.x, from.z)) > 3.0,
+		"the server runs them off the spawn pad",
+		"%.2f m" % Vector2(to.x, to.z).distance_to(Vector2(from.x, from.z))
+	)
+
+	# Tracking: every frame's body is within a hand of SOME position the server really had
+	# them at. Not the latest one, because a remote player is drawn an interpolation delay in
+	# the past on purpose; the nearest point on the server's own track is the fair test.
+	var worst := 0.0
+	for at in drawn:
+		var nearest := INF
+		for p in server_track:
+			nearest = minf(nearest, at.distance_to(p))
+		worst = maxf(worst, nearest)
+
+	_check(
+		not drawn.is_empty() and worst < 0.25,
+		"and every frame draws the body on the path the server ran them along",
+		"worst %.3f m off it, over %d frames" % [worst, drawn.size()]
+	)
+
+	var last: Vector3 = drawn[drawn.size() - 1] if not drawn.is_empty() else Vector3.ZERO
+	_check(
+		Vector2(last.x, last.z).length() > 3.0,
+		"so the body followed them away from the world origin, where it used to stay",
+		"last drawn %s" % str(last)
+	)
+
+	# Smoothness: at a steady running speed each frame should advance the body by about the
+	# same distance. A client that draws only when a snapshot lands moves it on one frame in
+	# several and not at all on the rest — the judder the family measured as a 47% change in
+	# apparent speed.
+	var mean := 0.0
+	var largest := 0.0
+	var smallest := INF
+	for j in range(1, drawn.size()):
+		var d := drawn[j].distance_to(drawn[j - 1])
+		mean += d
+		largest = maxf(largest, d)
+		smallest = minf(smallest, d)
+	mean /= float(maxi(drawn.size() - 1, 1))
+
+	_check(
+		mean > 0.001 and largest < mean * 1.5 and smallest > mean * 0.5,
+		"and it moves by an even step on every frame, not in snapshot-sized jumps",
+		"per frame %.4f m mean, %.4f..%.4f" % [mean, smallest, largest]
+	)
+	_check(
+		theirs.character != null
+		and absf(wrapf(theirs.character.rig.rotation.y - deg_to_rad(90.0), -PI, PI)) < 0.05,
+		"and it faces the way the server says they are looking",
+		"%.1f deg" % (rad_to_deg(theirs.character.rig.rotation.y) if theirs.character != null else 0.0)
+	)
+
+	_server_bridge.remove_player(session)
+	await _steps(4)
+	_check(
+		not _client_game.players.has(&"u%d" % session),
+		"and they leave again, so the sections after this one see one player"
 	)
 	_done()
 

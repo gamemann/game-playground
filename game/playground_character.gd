@@ -62,6 +62,8 @@ func build_for(def: DotPlayerCharDef, colour: Color) -> void:
 		rig.name = "Rig"
 		add_child(rig)
 
+	_seat_rig()
+
 	_parts = Node3D.new()
 	_parts.name = "Body"
 	rig.add_child(_parts)
@@ -110,6 +112,49 @@ func build_for(def: DotPlayerCharDef, colour: Color) -> void:
 ## On the rig rather than on this node, for the reason the body is parented to it: a
 ## component has no transform. Without this a third-person camera orbiting a player shows
 ## a character who never turns, which reads as the model being broken.
+## Moves the rig onto the body this visual belongs to.
+##
+## [b]The rig was at the world origin, for every player, from the day it was built.[/b]
+## `DotPlayerModelVisual` makes the rig its own child, and a visual is a
+## `DotPlayerComponent` — a plain `Node`. A `Node3D` whose parent is not a `Node3D` does not
+## inherit anybody's transform: it is placed in world space, so every body in the sandbox
+## stood at (0, 0, 0) wherever its player was. A networked client showed it plainly: the
+## other player's beacon over there, and their body here, at the centre of the map.
+##
+## So the rig goes on the nearest `Node3D` above — the `PlaygroundPlayer`, which is the
+## body the controller moves — and the visual keeps its reference, so `set_shown`,
+## `attachment`, `weapon_mount` and `face` all still reach it. Done here because this game
+## is the only one in the family that draws through `DotPlayerModelVisual`; the addon still
+## makes the same parenting for the next game that does, which is written down in this
+## repository's CLAUDE.md rather than changed from here.
+func _seat_rig() -> void:
+	if rig == null or rig.get_parent() is Node3D:
+		return
+
+	var body := _body_node()
+
+	if body == null:
+		return
+
+	rig.reparent(body, false)
+	rig.transform = Transform3D.IDENTITY
+
+
+func _body_node() -> Node3D:
+	var at := get_parent()
+
+	while at != null and not (at is Node3D):
+		at = at.get_parent()
+
+	return at as Node3D
+
+
+## Whether the rig is where the body is. Read by the suites.
+func is_on_body() -> bool:
+	var body := _body_node()
+	return rig != null and body != null and rig.get_parent() == body
+
+
 func face(yaw: float) -> void:
 	if rig != null:
 		rig.rotation.y = yaw

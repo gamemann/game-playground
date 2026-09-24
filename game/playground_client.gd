@@ -839,12 +839,7 @@ func _process(_delta: float) -> void:
 			if camera != null and camera.is_inside_tree() else Vector3.FORWARD
 		presentation.present(_delta, eye, forward)
 
-	# [b]Once a frame, not once a tick.[/b] The interpolator blends two snapshots
-	# perfectly and is then useless if it is only ever asked at a tick boundary: remote
-	# players and every replicated prop would step at the snapshot rate however smoothly
-	# they were interpolated. dot-net shipped exactly that.
-	if net != null and net.is_running():
-		net.interpolate_frame()
+	var _bodies := present_frame(net, playground)
 
 	# After the interpolation, so a remote player's marker is placed where this frame
 	# draws them rather than where the last frame did.
@@ -876,6 +871,46 @@ func _process(_delta: float) -> void:
 		deg_to_rad(player.controller.state.yaw),
 		0.0
 	)
+
+
+## What a frame draws that a tick does not: the netcode's interpolation, then every
+## player's body turned the way they are looking. Returns how many bodies are shown. Static
+## so the net suite drives exactly this rather than a copy of it.
+##
+## [b]Once a frame, not once a tick.[/b] The interpolator blends two snapshots perfectly and
+## is then useless if it is only ever asked at a tick boundary: remote players and every
+## replicated prop would step at the snapshot rate however smoothly they were interpolated.
+## dot-net shipped exactly that.
+##
+## [b]And the bodies after it[/b], because a remote player's node is moved by that call and
+## the body hangs off the node. Until 2026-09-24 there was no body to move — it was hidden
+## as if it were the local player's own and parked at the world origin (see
+## `PlaygroundPlayer.body_shown` and `PlaygroundCharacter._seat_rig`), so on a networked
+## client every other person in the sandbox was a beacon with nobody under it.
+##
+## [param alpha] is how far through the current tick the frame is; -1 asks the engine,
+## which is what a real frame wants and what a suite's frames cannot.
+static func present_frame(p_net: DotNetManager, p_game: Playground, alpha: float = -1.0) -> int:
+	if p_net != null and p_net.is_running():
+		p_net.interpolate_frame(alpha)
+
+	if p_game == null:
+		return 0
+
+	var shown := 0
+
+	for id: Variant in p_game.players:
+		var body: PlaygroundPlayer = p_game.players[id]
+
+		if body == null or not is_instance_valid(body) or not body.is_inside_tree():
+			continue
+
+		body.face_body()
+
+		if body.character != null and body.character.is_body_visible():
+			shown += 1
+
+	return shown
 
 
 ## Draws every beaconed player's marker for one frame, and plays each ripple's ping.

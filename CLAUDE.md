@@ -45,7 +45,7 @@ The course is timed, so the timer server's rule holds here too: **an admin's hel
 
 `dedicated`'s **blind and beacon** types both at a real server's console and asserts the flags, the replicated field, the timed lift, the respawn and `modtools` (armed by clearing the beacon on respawn); `headless_net`'s **who is told** adds a second player on a peer with no client in the process, so this suite's client is "somebody else" for them — never told they are blind, drawing their beacon — and is told its own blind (armed by dropping `to_owner_only()`: two fired, one of them reading `net_blind = true` off the wire); `headless_playground` drives the real client's frame hooks — one ping as it comes on and one a second, the marker at the simulated position, no column in your own eyes, the blind covering the viewport under the widgets (armed by skipping the client's call and the overlay's sizing: both fired). `tools/screenshot_views.sh` renders `admin_beacon`, `admin_beacon_wall` (a wall hides the ring and not the column) and `admin_blind`.
 
-**What rendering them found, and it is not about the beacon.** Every first-person frame the tool took after `view_third_person` was from the third-person rig's camera — four metres behind the player, body hidden — because nothing made the first-person camera current again; it looked like first person until something stood in front of the player. And a **remote player's body is not drawn at all**: a player with no view switch is `set_shown(false)`, and forced visible, `PlaygroundCharacter`'s rig — a `Node3D` under a plain-`Node` component — stands at the world origin whatever the player's position. It went unseen because the only body ever rendered belonged to a player standing at the origin. The first is fixed in the tool; the second is open, and it means a networked client here draws nobody else's body — only their beacon.
+**What rendering them found, and it is not about the beacon.** Every first-person frame the tool took after `view_third_person` was from the third-person rig's camera — four metres behind the player, body hidden — because nothing made the first-person camera current again; it looked like first person until something stood in front of the player. And a **remote player's body is not drawn at all**: a player with no view switch is `set_shown(false)`, and forced visible, `PlaygroundCharacter`'s rig — a `Node3D` under a plain-`Node` component — stands at the world origin whatever the player's position. It went unseen because the only body ever rendered belonged to a player standing at the origin. The first is fixed in the tool; the second was fixed the same day — see "Somebody else's body, on a connected client" below — and `admin_beacon` now shows the body inside its ring.
 
 ## Layout
 
@@ -80,6 +80,7 @@ maps/
   *.zones.json           generated from the maps, and checked against them
 tools/
   export_zones.gd        writes those files. Run it after changing a map
+  screenshot_net.gd/.sh  a CONNECTED client watching another player, with a jitter probe
 examples/
   headless_playground.gd the integration suite
   dedicated.gd           a real DotServer, the module, and its commands
@@ -1050,7 +1051,7 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 357 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
-godot --headless --path . res://examples/headless_net.tscn          # 140 checks
+godot --headless --path . res://examples/headless_net.tscn          # 151 checks, 17 sections
 godot --headless --path . res://examples/dedicated.tscn             # 202 checks, 22 sections
 ```
 
@@ -1426,6 +1427,23 @@ Two things that cost a frame each to find:
 `tools/screenshot_views.sh` renders both views. It is not optional after touching either
 controller: every check on the switch is a check on an *id*, and an id is equally happy
 when the camera is inside the character's head.
+
+## Somebody else's body, on a connected client
+
+**Until 2026-09-24 a networked client drew nobody else.** Two bugs, either enough on its own, and invisible to every suite because each reads the simulation and none reads the screen:
+
+- **Hidden as if it were your own.** `build_character` and `set_view_mode` showed a body only when `view_mode() == &"tp"`, and a view mode is a fact about the LOCAL player — only a player that samples input has a switch — so every remote player read "fp" and was built hidden. `PlaygroundPlayer.body_shown()` is `not samples_input or view_mode() == &"tp"`, applied by `refresh_body()` when the body is built, when the view switch is built (the moment a client learns a player is its own) and on F5.
+- **Parked at the world origin.** `DotPlayerModelVisual` makes its rig its own child, and the visual is a `DotPlayerComponent` — a plain `Node`. A `Node3D` under a plain `Node` inherits no transform, so every body stood at (0, 0, 0) whatever its player did. It was never seen because the lobby's spawn IS the origin: the local third-person frame showed a body in the right place by coincidence. `PlaygroundCharacter._seat_rig` reparents the rig onto the `PlaygroundPlayer`. **The addon still does this for the next game that draws through it**; it wants fixing in dot-player-char (put the rig on the nearest `Node3D` ancestor, or document that a visual must sit directly under one), which is not done from here.
+
+And a remote body kept whatever way it faced when built, because `drive_character` runs only where the game ticks every player. `PlaygroundClient.present_frame` — static, so `headless_net` drives exactly it — interpolates and then turns every body with `face_body()`, once a frame.
+
+`headless_net`'s **somebody else has a body** section adds a second player on a peer of their own, does what the real client does (starts its manager, marks its own player local), and asserts a body for them and none round this client's own first-person camera, the rig on the player's node, then over 160 ticks at four frames a tick: every frame on the path the server ran them along, away from the origin, an even step per frame, and facing the server's yaw. Armed three ways: the old shown rule (two fired), no `_seat_rig` (four fired, the body drawn at `(0, 0, 0)`), and no interpolation in `present_frame` (the even-step check, 0.0000..0.2188 m against a 0.0137 mean).
+
+`tools/screenshot_net.sh` renders a connected client — server and client in one process over the same loopback — watching another player run across its view: four consecutive frames and a probe of each frame's movement over its own delta. Measured under lavapipe at ~120 fps against 128 ticks: interpolated, 0 of 730 frames standing still and 6% more than 20% off the median; `--no-interp`, 623 of 733 standing still.
+
+**Found by the probe and not fixed here: dot-net's interpolation delay is in the wrong unit.** `DotNetInterpolator._delay_ticks` is documented, adapted and reported in SNAPSHOTS (`interpolation_buffer`, `delay_ms() = _delay_ticks * snapshot_interval()`), and `sample()` subtracts it from a timeline in TICKS. At 128 ticks and 20 snapshots the render time is a sixth as far back as intended, past the newest snapshot, so every remote entity in the family is extrapolated rather than interpolated: `stalls` and `extrapolations` both read 1,684 over a six-second run. Scaling by `tick_rate / snapshot_rate` in `sample()` takes both to 0; the frame-evenness figure does not move (a straight run extrapolates perfectly), so the cost is at every change of direction rather than on a straight. It is dot-net's to fix, with every game's net suite re-run after.
+
+**Not looked at: a rider.** A seated player's node is carried into the vehicle's seat, and the body is a standing 1.8 m figure; whether it pokes through a roof has not been rendered.
 
 ## The chat box, and the channels it offers
 
