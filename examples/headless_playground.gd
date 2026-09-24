@@ -47,7 +47,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 359
+const CHECKS := 361
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -308,36 +308,69 @@ func _test_tick_rate_comes_from_the_engine() -> void:
 
 
 func _test_zone_file_matches_the_map() -> void:
-	_section("the shipped zone file matches the geometry")
+	_section("the shipped zone files match the geometry")
 
 	# A map's zones and its geometry are built from the same constants here, and a
 	# written-out copy of them lives in maps/ to demonstrate the file route that a
 	# DELIVERED map has to use. This is the check that the two have not drifted —
 	# because a zone file drawn against geometry that has since moved is a
 	# leaderboard nobody can compare, and nothing else would ever notice.
-	var path := "res://maps/pg_surf_intro.zones.json"
+	#
+	# [b]Every map that builds zones, discovered, and not `pg_surf_intro` alone.[/b]
+	# This asked one map's file for as long as it existed, so `pg_lobby`'s and
+	# `pg_bhop_intro`'s could drift from their maps with nothing said — game-g2gfast's
+	# `_test_zone_files_match` carried the same one-map-short list until it discovered.
+	var ids := _zone_map_ids()
+	_check(ids.size() == 3, "three maps build zones", str(ids))
 
-	if not FileAccess.file_exists(path):
-		_check(false, "the shipped zone file exists", path)
-		return
+	for id in ids:
+		var loaded := DotTimerZoneSet.load_json("res://maps/%s.zones.json" % id)
+		var built: DotTimerZoneSet = (load("res://maps/%s.gd" % id) as GDScript).build_zones()
+		var shipped: DotTimerZoneSet = loaded.value if loaded.ok else null
 
-	var loaded := DotTimerZoneSet.load_json(path)
-	_check(loaded.ok, "the shipped zone file parses",
-		loaded.error.message if not loaded.ok else "")
+		_check(
+			shipped != null and shipped.fingerprint() == built.fingerprint(),
+			"%s's shipped file matches what the map builds" % id,
+			loaded.error.message if not loaded.ok
+				else "%s vs %s" % [shipped.fingerprint(), built.fingerprint()]
+		)
 
-	if not loaded.ok:
-		return
-
-	var built := preload("res://maps/pg_surf_intro.gd").build_zones()
-
-	_check(
-		(loaded.value as DotTimerZoneSet).fingerprint() == built.fingerprint(),
-		"and matches what the map builds",
-		"%s vs %s" % [
-			(loaded.value as DotTimerZoneSet).fingerprint(), built.fingerprint()
-		]
-	)
+		# `[track-zone-1]`: every route on every map, per track — a start, a finish, a
+		# spawn and a pit of its own. Asked of the SHIPPED file as well as the map,
+		# because a pitless declaration lives in `meta`, which the fingerprint ignores:
+		# a file exported before one was added matches and is still incomplete.
+		var incomplete := built.route_problems()
+		if shipped != null:
+			incomplete.append_array(shipped.route_problems())
+		_check(
+			shipped != null and incomplete.is_empty(),
+			"%s's every route has a start, a finish, a spawn and a pit" % id,
+			", ".join(incomplete)
+		)
 	_done()
+
+
+## The maps that build their own zones: a script in res://maps with `build_zones`.
+##
+## The question `tools/export_zones.gd` answers with a list, asked the other way, so
+## that a map added to one and not the other is a failure rather than a file nobody
+## wrote. `pg_generated` has no zones and is not in it.
+func _zone_map_ids() -> Array[String]:
+	var out: Array[String] = []
+
+	for file in DirAccess.get_files_at("res://maps"):
+		if not file.ends_with(".gd"):
+			continue
+
+		var script := load("res://maps/" + file) as GDScript
+
+		for method in script.get_script_method_list():
+			if method.name == "build_zones":
+				out.append(file.get_basename())
+				break
+
+	out.sort()
+	return out
 
 
 # --- A run -----------------------------------------------------------------
@@ -1011,8 +1044,9 @@ func _test_the_tower(playground: Playground, zones: DotTimerZoneSet) -> void:
 		"and two splits"
 	)
 	_check(
-		zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size() == 1,
-		"and somewhere to land when you come off it"
+		zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"and a spawn and somewhere to land when you come off it, like every route here",
+		", ".join(zones.route_problems())
 	)
 
 	# [b]Every jump on the spiral, measured box to box against the CLIMBING reach.[/b]
@@ -2369,8 +2403,9 @@ func _test_the_narrows() -> void:
 		"and three splits"
 	)
 	_check(
-		zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size() == 1,
-		"and a respawn volume, which no bonus track in this family had until one was run"
+		zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"and a spawn and a respawn volume, which no bonus track in this family had until one was run",
+		", ".join(zones.route_problems())
 	)
 
 	# The course narrows, which is the whole difficulty. Asserted against the map's own
@@ -2529,21 +2564,16 @@ func _test_the_plunge() -> void:
 		str(zones.playable_tracks())
 	)
 
-	# Asked of THIS track rather than of whichever one happened to be current — see
+	# Asked per track rather than of whichever one happened to be current — see
 	# `[track-zone-1]`. A zone carries a track, so a set that is complete for track 0
-	# and partial for track 1 passes `problems()` while being an unfinishable route,
-	# and this family has already shipped that exact hole twice.
-	for kind in [
-		DotTimerZone.Kind.START,
-		DotTimerZone.Kind.END,
-		DotTimerZone.Kind.SPAWN,
-		DotTimerZone.Kind.RESPAWN,
-	]:
-		_check(
-			zones.of_kind(kind, track).size() == 1,
-			"the plunge has its own %s zone" % DotTimerZone.Kind.keys()[kind].to_lower(),
-			"%d" % zones.of_kind(kind, track).size()
-		)
+	# and partial for track 1 passes `problems()` while being an unfinishable route.
+	# This was four checks walking this track's kinds by name; it is dot-timer's
+	# `route_problems()` now, which asks the same of every route.
+	_check(
+		zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"the plunge has its own start, finish, spawn and pit",
+		", ".join(zones.route_problems())
+	)
 
 	_check(
 		zones.of_kind(DotTimerZone.Kind.STAGE, track).size()

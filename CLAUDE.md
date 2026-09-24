@@ -994,7 +994,7 @@ Its zone set is complete **for its own track**, and asked about as such. A `DotT
 carries a track, so a set that is complete for track 0 and partial for track 1 passes
 `DotTimerZoneSet.problems()` — which is a per-zone check — while being an unfinishable
 route, and this family has already shipped that exact hole twice. The check here walks
-START, END, SPAWN and RESPAWN on the bonus track by name.
+START, END, SPAWN and RESPAWN on the bonus track by name. (Since `[track-zone-1]` it is dot-timer's `DotTimerZoneSet.route_problems()`, which asks that of every route, and `_test_zone_file_matches_the_map` asks it of every map that builds zones and of its shipped file — which also stopped checking `pg_surf_intro` alone. `pg_lobby`'s circuit is the one route with no pit, and says so in its zones' `meta.pitless_tracks`: the road runs inside the plate's 10 m walls.)
 
 **One number that is easy to get wrong and silent when you do.** The slab is dropped by
 half its thickness measured *vertically*, not perpendicular; the two differ by
@@ -1048,7 +1048,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 359 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 361 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_net.tscn          # 154 checks, 17 sections

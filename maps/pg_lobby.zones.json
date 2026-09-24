@@ -3,6 +3,9 @@
   "map": "pg_lobby",
   "meta": {
     "author": "playground",
+    "pitless_tracks": [
+      3
+    ],
     "tier": 1
   },
   "next_id": 20,

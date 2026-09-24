@@ -572,6 +572,12 @@ static func build_zones() -> DotTimerZoneSet:
 	zones.meta["tier"] = 1
 	zones.meta["author"] = "playground"
 
+	# The circuit is the one route here with no pit, and says so rather than being
+	# excused by a test: the road runs inside the plate's walls (82 m out plus half its
+	# width and a kerb, against walls at 100 m and 10 m tall), so there is nothing a car
+	# can leave it by. See `DotTimerZoneSet.route_problems`.
+	zones.meta[DotTimerZoneSet.PITLESS_TRACKS_KEY] = [CIRCUIT_TRACK]
+
 	# Where an ordinary sandbox player appears: the middle of the plate, on the main
 	# track, with nothing to time them.
 	var lobby_spawn := DotTimerZone.make(
