@@ -276,6 +276,11 @@ func _ready() -> void:
 	add_child(hud)
 	if link == null:
 		hud.bind(playground, player_id)
+	# The vote's clock, handed over HERE rather than where the bridge is built: the netcode
+	# comes up before the HUD exists, so the hand-over there found no HUD and every
+	# connected client kept counting its own map session's clock through every extend.
+	if bridge != null:
+		hud.clock_view = bridge.clock_view
 	_sync_hud()
 
 	# After the HUD, because for a CanvasItem tree order is draw order and a menu
@@ -384,11 +389,7 @@ func _build_netcode() -> DotResult:
 		if hud != null:
 			hud.notice(text)
 	)
-	# The map's time left, from the server's vote. The bridge holds it and adopts every
-	# CLOCK into the same object, so the HUD is handed it once; until the first arrives
-	# it is unknown and the HUD says what it said before.
-	if hud != null:
-		hud.clock_view = bridge.clock_view
+	# The map's time left is handed to the HUD where the HUD is built, below.
 	# The map vote's cue and countdown. The ballot itself arrives as chat; this is what
 	# chat cannot carry.
 	bridge.vote_cue_received.connect(func(info: Dictionary) -> void:

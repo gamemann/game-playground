@@ -47,7 +47,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 357
+const CHECKS := 358
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -3378,6 +3378,29 @@ func _test_the_client_boots() -> void:
 
 	networked.link.free()
 	networked.free()
+
+	# [b]A connected client's HUD holds the vote's clock.[/b] The netcode comes up before
+	# the HUD in `_ready`, and the hand-over used to sit with the netcode, where it found
+	# no HUD — so every connected client counted its own map session's clock through
+	# every extend while `headless_net`, which checks the bridge and not the client, said
+	# the clock arrived. Booted for real here, with a bare node for a link: the bridge
+	# needs one and the client asks every method of it before calling.
+	var connected := PlaygroundClient.new()
+	connected.name = "ConnectedClient"
+	connected.link = Node.new()
+	add_child(connected)
+	for _i in range(4):
+		await get_tree().process_frame
+	_check(
+		connected.hud != null and connected.bridge != null
+			and connected.hud.clock_view == connected.bridge.clock_view,
+		"a connected client's HUD draws the clock its bridge adopts from the server",
+		"hud %s, bridge %s" % [connected.hud != null, connected.bridge != null]
+	)
+	var stub_link: Node = connected.link
+	connected.queue_free()
+	stub_link.queue_free()
+	await get_tree().process_frame
 
 	# [b]The client makes a noise when something happens, through the game and not
 	# through the hooks.[/b] headless_presentation calls `on_prop_spawned` itself, which
