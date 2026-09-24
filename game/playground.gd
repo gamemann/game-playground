@@ -122,6 +122,18 @@ var maps: DotMapSession = null
 ## and both acting was a map the players voted to extend being ended on the old clock, by
 ## a rotation nobody asked.
 var rotation_ends_maps: bool = true
+
+## The clock that ends a map, as [method DotVoteClockView.state_of] describes it. Set by
+## [code]PlaygroundModule[/code] to its vote's [code]clock_state[/code]; unset on a sandbox
+## with no vote, where the map session's own clock is the one that ends a map.
+##
+## [b]A Callable rather than the vote, because the game does not know the vote exists[/b]
+## — the module builds it, over this game. It is read by [method time_left_text], which is
+## what `pg_status` and [method describe] say: both read the map session's clock after the
+## vote had taken the map's end over, so an operator was shown a limit an extend had
+## already moved, and under the deployed `trigger: rtv_only` with no duration, thirty
+## minutes the server did not have.
+var clock_fn: Callable = Callable()
 var timers: DotTimerManager = null
 var props: DotPropSpawner = null
 
@@ -1629,7 +1641,7 @@ func describe() -> Dictionary:
 		"players": players.size(),
 		"props": props.world_count() if props != null else 0,
 		"tick_rate": tick_rate,
-		"time_left": maps.time_limit.formatted_remaining() if maps != null else "-",
+		"time_left": time_left_text(),
 		"timers": timers.describe() if timers != null else {},
 	}
 
@@ -1647,14 +1659,33 @@ func describe_lines() -> PackedStringArray:
 		"" if timers == null or timers.tick_rate_matches_engine()
 			else " (DISAGREES with the engine's %d)" % Engine.physics_ticks_per_second,
 	])
-	out.append("time left    %s" % (
-		maps.time_limit.formatted_remaining() if maps != null else "-"
-	))
+	out.append("time left    %s" % time_left_text())
 
 	for id in players:
 		out.append("  %s" % str((players[id] as PlaygroundPlayer).describe()))
 
 	return out
+
+
+## The map's time left as an operator should read it: the vote's clock when there is a
+## vote — "no limit" when that vote has none, "stopped" while a ballot holds it or it has
+## run out — and the map session's otherwise.
+##
+## "no limit" here where the HUD shows nothing: a status line is read when somebody asks,
+## and an absent row reads as a diagnostic that forgot to say, not as a clock that is off.
+func time_left_text() -> String:
+	if clock_fn.is_valid():
+		var state: Dictionary = clock_fn.call()
+
+		if not bool(state.get("has_clock", false)):
+			return "no limit"
+
+		var total := int(state.get("seconds_left", 0))
+		return "%d:%02d%s" % [
+			total / 60, total % 60, "" if bool(state.get("running", false)) else " (stopped)"
+		]
+
+	return maps.time_limit.formatted_remaining() if maps != null else "-"
 
 
 func _exit_tree() -> void:

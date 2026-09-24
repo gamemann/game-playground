@@ -596,6 +596,10 @@ func _build_extras() -> DotResult:
 	# `Playground.rotation_ends_maps`.
 	game.rotation_ends_maps = false
 
+	# And the clock `pg_status` reports, for the same reason: the session's is no longer
+	# the one that ends the map.
+	game.clock_fn = vote.clock_state
+
 	var commanded := vote.install_commands(self)
 	DotLog.result(CHANNEL, "the vote's commands", commanded)
 
