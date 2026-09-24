@@ -46,7 +46,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 154
+const CHECKS := 156
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -889,22 +889,55 @@ func _test_prop_replication() -> void:
 	if client_node == null:
 		return
 
+	# [b]Measured against the server's drop, not a fixed number of exchanges.[/b] This
+	# was `_steps(64)` and then "has the mirror fallen 0.5 m", and it was reported failing
+	# about one run in three with the mirror HIGHER than it started (23.99 -> 25.02). The
+	# two ends tick at different rates, so a fixed count asks the client at a point in the
+	# fall that differs from run to run; the server's crate is now watched until it has
+	# really fallen a metre, and the client is then asked whether its copy is where the
+	# server's is. [b]Not the cause, measured:[/b] the server's crate and the client's
+	# mirror are in different `World3D`s (two space RIDs), so they cannot touch; a crate
+	# pushed UP is the server's, or the interpolation's, and the print and the separate
+	# server check below say which the next time it happens. 12 of 12 old-form runs
+	# passed on 2026-09-24, so the 25.02 was not reproduced.
+	var server_node := _server_prop_node()
+	_check(server_node != null, "the server has a body for it")
+
+	if server_node == null:
+		return
+
 	var at_first := client_node.global_position
-	await _steps(64)
+	var server_first := server_node.global_position
+	var waited := 0
+
+	while server_node.global_position.y > server_first.y - 1.0 and waited < 512:
+		await _steps(1)
+		waited += 1
+
+	# A few more exchanges, so the client's interpolation has the last snapshots.
+	await _steps(8)
+
+	var server_last := server_node.global_position
 	var at_last := client_node.global_position
 
+	print("    the crate: server %.2f -> %.2f in %d steps, client %.2f -> %.2f" % [
+		server_first.y, server_last.y, waited, at_first.y, at_last.y,
+	])
+
+	_check(server_last.y < server_first.y - 1.0,
+		"the server's physics drops it a metre",
+		"%.2f -> %.2f in %d steps" % [server_first.y, server_last.y, waited])
 	_check(at_last.y < at_first.y - 0.5,
 		"and it falls on the client because the server's physics moved it",
 		"%.2f -> %.2f" % [at_first.y, at_last.y])
 	_check(at_last.distance_to(at_first) > 0.5,
 		"which is movement the client did not simulate for itself")
-
-	var server_node := _server_prop_node()
+	# Within 0.5 m: the client draws an interpolated past, some ticks behind the server,
+	# and a crate falling at ~5 m/s covers 0.5 m in about thirteen of the server's ticks.
 	_check(
-		server_node != null and server_node.global_position.distance_to(at_last) < 1.0,
+		server_last.distance_to(at_last) < 0.5,
 		"where the server has it",
-		"%.3f m apart" % server_node.global_position.distance_to(at_last)
-			if server_node != null else "no server prop"
+		"%.3f m apart" % server_last.distance_to(at_last)
 	)
 
 	# A mirrored rigid body must not simulate locally as well: an unfrozen one fights

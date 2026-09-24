@@ -720,6 +720,8 @@ times, five runs each:
 | between the vehicle and the timer | 3 / 5 | the lossy link's distance |
 | after everything that reads physics | **5 / 5** | — |
 
+**The two ends do not share a physics space for props, measured.** On 2026-09-24 a crate's server body and its client mirror reported different `World3D`s (two space RIDs), and forcing the mirror 0.3 m into the server's crate moved nothing. Whatever makes the ordering matter, it is not a prop's two copies touching. `[pg-net-2]` (the crate "falling" 23.99 -> 25.02 about one run in three) did not reproduce in 12 runs that night; the check now waits for the server's crate to drop a metre and then asks whether the client's copy is within 0.5 m of it, and prints both ends' heights so the next failure says which end moved. The client bridge also freezes a mirror before it enters the tree: until its first interpolated draw it was a live body falling under the client's own physics, and with drawing switched off that alone passed "it falls on the client because the server's physics moved it" at exactly the server's height.
+
 So: **add a test here at the END of the connected-player sequence**, and treat a vehicle
 or lossy failure after inserting one as a schedule change rather than a code change until
 proved otherwise. The old advice in this slot was "run it again before believing it",
@@ -1061,7 +1063,7 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 379 checks, 22 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
-godot --headless --path . res://examples/headless_net.tscn          # 154 checks, 17 sections
+godot --headless --path . res://examples/headless_net.tscn          # 156 checks, 17 sections
 godot --headless --path . res://examples/dedicated.tscn             # 209 checks, 23 sections
 ```
 

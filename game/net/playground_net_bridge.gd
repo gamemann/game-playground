@@ -1267,6 +1267,15 @@ func _apply_prop(reader: DotNetReader) -> void:
 	if body == null:
 		return
 
+	# [b]Frozen before it enters the tree, not on its first draw.[/b]
+	# `PlaygroundPropNet._draw` freezes a mirror too, but only once an interpolated
+	# frame arrives — and until then the mirror was a live rigid body falling under the
+	# client's own physics, which is exactly the movement `headless_net`'s "it falls on
+	# the client because the server's physics moved it" exists to rule out.
+	var rigid := body as RigidBody3D
+	if rigid != null:
+		rigid.freeze = true
+
 	var world := game.world if game.world != null else game
 	world.add_child(body)
 	body.global_position = info["position"]
