@@ -47,7 +47,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 358
+const CHECKS := 359
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -3797,6 +3797,20 @@ func _drive_the_circuit() -> void:
 		driver.timer.run == null or not driver.timer.run.is_running(),
 		"and getting out of the car ends it"
 	)
+
+	# Out of the car, upright: a ride writes the car's whole basis onto the body, and
+	# facing afterwards wrote only the yaw, so whatever pitch and roll the car had at the
+	# moment of getting out stayed on the rig for good. Tilted by hand here, as a car on a
+	# bank would leave it.
+	var body: Variant = driver.get("character")
+	var upright := false
+	if body != null and body.get("rig") != null and (body.get("rig") as Node3D).is_inside_tree():
+		body.call("face_basis", Basis.from_euler(Vector3(0.3, 1.0, -0.2)))
+		body.call("face", 0.5)
+		var r: Vector3 = (body.get("rig") as Node3D).rotation
+		upright = is_zero_approx(r.x) and is_zero_approx(r.z) and is_equal_approx(r.y, 0.5)
+	_check(upright, "and the body stands upright again, with none of the car's tilt",
+		"no body drawn for the bot" if body == null else "")
 
 
 ## Where [param at] is round the lap, searched forward from [param from].

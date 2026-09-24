@@ -132,7 +132,10 @@ func is_on_body() -> bool:
 ## the model being broken.
 func face(yaw: float) -> void:
 	if rig != null:
-		rig.rotation.y = yaw
+		# The whole rotation, not only its yaw: a ride leaves the car's pitch and roll on the
+		# rig through `face_basis`, and writing `.y` alone kept them after getting out — a
+		# player standing tilted for good.
+		rig.rotation = Vector3(0.0, yaw, 0.0)
 
 
 ## Turns the body to sit the way [param basis] faces, in world space: the vehicle's, for a

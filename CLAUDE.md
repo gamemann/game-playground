@@ -24,7 +24,7 @@ game, drives a bot down a surf map, finishes a run, files it, ranks it, spawns p
 and checks their bodies were built from their definitions, opens the spawn menu on a
 real `DotScreenStack` and clicks a prop in it, runs the sandbox's own course and falls
 off it, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a
-script path, and changes the map underneath all of it. **358 checks, and it has now
+script path, and changes the map underneath all of it. **359 checks, and it has now
 found nine real bugs — three of them in other repositories** — which undercounts it
 since; the later ones are in the sections below. Three more were found by
 a screenshot, which no assertion could have.
@@ -1048,7 +1048,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 358 checks
+godot --headless --path . res://examples/headless_playground.tscn   # 359 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_net.tscn          # 154 checks, 17 sections
