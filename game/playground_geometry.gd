@@ -49,17 +49,73 @@ static func box(
 	box_mesh.size = size
 	mesh.mesh = box_mesh
 
-	var material := StandardMaterial3D.new()
-	material.albedo_color = colour
-	# Unshaded, because this project ships no lights either and a lit grey box in an
-	# unlit scene is a black box.
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mesh.material_override = material
+	mesh.material_override = _material(colour)
 
 	body.add_child(mesh)
 	parent.add_child(body)
 
 	return body
+
+
+## One material per colour, shared by every box of that colour.
+static var _materials: Dictionary = {}
+
+## The grid every surface is drawn with, built once.
+static var _grid: ImageTexture = null
+
+## Pixels per metre of the grid texture, and how dark its lines are against the colour.
+const GRID_PIXELS := 64
+const GRID_LINE := 0.72
+
+
+## The material a box of [param colour] is drawn with: the colour, multiplied by a
+## one-metre grid laid in WORLD space.
+##
+## [b]Flat colour said nothing about size, and a map is mostly a question of size.[/b]
+## These materials were a bare unshaded colour until 2026-09-25, so every face of a box
+## drew the same flat shade: a 3 m block beside a 60 m ramp read as two tiles, a gap
+## could not be judged from any angle, and the edges between two faces of one box
+## vanished. A world-space grid fixes all three without lights — the lines are a metre
+## apart on everything, so a gap is counted in squares, and they bend at every edge.
+## World-triplanar rather than UV, because a box's own UVs stretch one texture over its
+## whole face, which is the scale problem again.
+static func _material(colour: Color) -> StandardMaterial3D:
+	if _materials.has(colour):
+		return _materials[colour]
+
+	var material := StandardMaterial3D.new()
+	material.albedo_color = colour
+	# Unshaded, because this project ships no lights either and a lit grey box in an
+	# unlit scene is a black box.
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_texture = _grid_texture()
+	material.uv1_triplanar = true
+	material.uv1_world_triplanar = true
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	_materials[colour] = material
+	return material
+
+
+## A white metre with a darker line round it, and a fainter one across the middle.
+static func _grid_texture() -> ImageTexture:
+	if _grid != null:
+		return _grid
+
+	var image := Image.create(GRID_PIXELS, GRID_PIXELS, false, Image.FORMAT_RGB8)
+	image.fill(Color.WHITE)
+	var line := Color(GRID_LINE, GRID_LINE, GRID_LINE)
+	var half := Color(0.88, 0.88, 0.88)
+
+	for i in range(GRID_PIXELS):
+		for w in range(2):
+			image.set_pixel(i, w, line)
+			image.set_pixel(w, i, line)
+		image.set_pixel(i, GRID_PIXELS / 2, half)
+		image.set_pixel(GRID_PIXELS / 2, i, half)
+
+	image.generate_mipmaps()
+	_grid = ImageTexture.create_from_image(image)
+	return _grid
 
 
 ## A ramp: a long thin box, tilted by [param angle_degrees] about [param axis].
