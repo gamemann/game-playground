@@ -72,7 +72,7 @@ Saving a checkpoint is free. *Restoring* one costs you the run, and the HUD says
 ## The maps
 
 - **pg_lobby** is the sandbox. A 200-metre plate to build on, a staircase, a walkable ramp and one steep enough to learn to surf on, and out in one corner a twelve-platform jump course with a start line, two splits and a finish. The course is on **bonus 1**, a spiral tower is on **bonus 2**, a driving circuit round the plate is on **bonus 3** and the main track has no timer at all, so building is never timed and the minigame is one **T** away. It is also what says the timer is not a surf-and-bhop thing: nothing about a jump course is a movement genre.
-- **pg_surf_intro** is two ramps meeting in a valley. Drop in, hold a strafe, keep your speed to the bottom.
+- **pg_surf_intro** is two ramps meeting in a valley. Drop in, hold a strafe, keep your speed to the bottom. Bonus 1, the plunge, is one 52-degree face you slide down; bonus 2, the cascade, is eleven jumps down a slalom of blocks.
 - **pg_bhop_intro** is blocks with gaps that widen. The later ones need the speed you kept from the earlier ones. **The narrows** on bonus 1 keeps the gap and takes the blocks away sideways; **the switchback** on bonus 2 climbs a hillside in three legs joined by two turning blocks, so every leg ends in a quarter turn you have to jump out of; **the ascent** on bonus 3 climbs 8 m in four sections of a jump onto a block and a walk up a ramp too tall to jump, each ramp steeper than the last, from 16 degrees to 40.
 
 ## Setting up
@@ -137,9 +137,9 @@ It is networked the way every inventory should be and few are: the client moves 
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 382 checks
-godot --headless --path . res://examples/headless_net.tscn          # 255 checks over 27 sections
-godot --headless --path . res://examples/dedicated.tscn             # 214 checks over 24 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 415 checks
+godot --headless --path . res://examples/headless_net.tscn          # 256 checks over 27 sections
+godot --headless --path . res://examples/dedicated.tscn             # 217 checks over 24 sections
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 ```

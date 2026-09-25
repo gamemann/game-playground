@@ -74,10 +74,11 @@ game/
   playground_beacon.gd   an admin's beacon: a ring, a ripple and a column through walls
   playground_geometry.gd dev-textured boxes and ramps, in code
   playground_map.gd      base for the built-in maps
+  playground_map_survey.gd  slots, unreached ground and traps, swept over a built map's boxes
   prop.tscn / entity.tscn  one scene for every prop, one for every entity
 maps/
   pg_lobby.gd            the sandbox, and a jump course on bonus 1
-  pg_surf_intro.gd       two ramps and a valley, and the plunge on bonus 1
+  pg_surf_intro.gd       two ramps and a valley, the plunge on bonus 1, the cascade on bonus 2
   pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3
   *.zones.json           generated from the maps, and checked against them
 tools/
@@ -1018,6 +1019,32 @@ half its thickness measured *vertically*, not perpendicular; the two differ by
 meets the face, which is over the controller's step height — so a player runs at the
 slide and stops dead, with nothing in any count to say why.
 
+## `pg_surf_intro`'s cascade: the first route that jumps down
+
+Bonus 2 on `pg_surf_intro` (`CASCADE_TRACK`), west of the main run at x = -60, mirroring the plunge: an 8 m pad level with the other two starts at 40 m, ten 3 m blocks each 1.25 m under the last and alternating 2.5 m either side of the line, and a finish pad at 26 m. **Every other bhop route here climbs or stays level, which makes a jump's reach shorter than a flat one; a drop makes it longer** — `jump_reach(-1.25)` is 5.80 m against 4.75 flat — so a player who learned the climbing courses overshoots. Every block-to-block jump is a diagonal across the line, so each landing is also a decision about where to face.
+
+**One description.** `PgSurfIntro.cascade_route()` is the boxes; the geometry, the zones (spawn, start on the pad, two split slabs across the whole staircase at route blocks 4 and 8, a finish, a reset 3 m under the lowest block) and the suite read it. Gaps along Z grow 2.0 -> 3.8 m; the tightest jump is the last block-to-block diagonal, 4.14 m of air against 5.80 (71%). A split slab cannot be skipped: the block after a split block is over 8 m from the one before it. The three start pads' backstops are one list now, `PgSurfIntro.backstops()`.
+
+`headless_playground`'s **the cascade** drives it with `_drive_route`: through both splits in ~1,600 ticks, no respawns. Armed with the last gap at 6.5 m: the reach check fails and the bot stops at box 6 with two respawns. `tools/screenshot.sh pg_surf_intro` renders `pg_surf_intro_cascade` (from the west, 45 degrees down: the profile) and `pg_surf_intro_cascade_start` (over the backstop, down the staircase). **Rendering it found that the maps had no scale at all**: flat unshaded colour made a 3 m block beside a 220 m ramp two tiles, and the first profile angle showed the route as a scatter of them in front of the main run's ramp. The world-space grid fixed the first; the angle the second.
+
+## Every hand-built map is surveyed (`[gate-sweep-2]`)
+
+`PlaygroundMapSurvey` reads a built map's boxes (every `StaticBody3D` with a `BoxShape3D`, rotated or not), rasterises them into 0.25 m columns of solid spans, and asks three things: **slots** — two boxes facing across less than 0.8 m (the family's player width) over more than a step's height; **unreached** — standable ground (face within 46 degrees, 1.8 m of headroom, nothing in the hull's neighbouring columns) that no spawn leads to by walking, dropping, sliding down a face nobody stands on, or a jump inside `jump_reach(rise)`; and **trapped** — ground a spawn leads to from which no spawn, finish zone, respawn zone or fall into one is reachable. Reimplemented from a description of game-arena's `arena_map_survey.gd`, not copied.
+
+**Unreached is allowed only where the map says so**, in `PlaygroundMap.survey_declared()` — `{box, why}` per area: the lobby's wall tops and the crest strip of the movement corner's 55-degree ramp (its end face, tilted 35 degrees, 16 m up); the surf map's three backstop tops; and `pg_bhop_intro`'s main run past block 8, whose gaps outgrow a running jump and are crossed with carried bhop speed, which the survey does not model. **None of the three maps had a real problem**: no slot, no trap, nothing unreached that was not one of those.
+
+What it does not model, on purpose, and each errs toward reporting: a jump is judged box edge to box edge from above and not swept through the air; there is no carried speed; a tilted box is its world AABB for the slot sweep. `pg_generated` is not surveyed: it is not hand-built and `PlaygroundWorldGen`'s validator floods it on every seed.
+
+`headless_playground`'s **the hand-built maps, surveyed** first asks the survey about a fixture with one of each thing in it (a 0.5 m slot, a platform 5 m up, a cellar dropped into) and asserts each is found and that a declaration and a reset quiet them — so a clean map is known to have been looked at — then asserts four things per map and prints cells, regions and time (~4.6 s for the lobby's 640,000 cells, under a second for the others). Armed on the real maps: the lobby with no declarations and a box 0.5 m beside the surf map's backstop each fail their check.
+
+## A client's prop mirror is on the props layer (`[prop-mirror-layer-1]`)
+
+`PlaygroundNetBridge._apply_prop` classifies the mirror with `Playground.layer_for(def, frozen)`, the same answer the server's `_classify_spawned` uses (a crate: layer 8, mask 196719). It kept the scene's 1/1 until 2026-09-25, which made a crate world geometry to a client that now predicts its own player against its own copy of the world. **Still missing:** the PROP event carries no frozen or held state, so a mirror is classified as an unfrozen spawn, and a prop frozen or grabbed later is reclassified on the server only — `Kind.HELD` (below, "not here") is where that would travel. `headless_net`'s prop section asserts the mirror's layer and mask equal the server body's (armed: 1/1 against 8/196719).
+
+## A map change clears `return` (`[modtools-return-1]`)
+
+`PlaygroundModule` calls `DotModTools.clear_history()` from `DotMapSession.changed`. Every entry is a point on the map just freed, so `return Pat` after `map <id>` put Pat where they had stood on the previous map. `dedicated`'s live-tools section moves Pat, changes the map, asserts `return` has nowhere to put them, and changes it back (armed: Pat returned to a pg_surf_intro spot on pg_bhop_intro).
+
 ## Maps are content, not projects
 
 Three maps, one game. See [dot-map's CLAUDE.md](../dot-map/CLAUDE.md) for why a
@@ -1064,11 +1091,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 382 checks, 22 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 415 checks, 24 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
-godot --headless --path . res://examples/headless_net.tscn          # 255 checks, 27 sections
-godot --headless --path . res://examples/dedicated.tscn             # 214 checks, 24 sections
+godot --headless --path . res://examples/headless_net.tscn          # 256 checks, 27 sections
+godot --headless --path . res://examples/dedicated.tscn             # 217 checks, 24 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
@@ -1605,6 +1632,6 @@ Before it was closed it stood at 358 and 274, growing by one script's worth when
   which is a versioning problem rather than a physics one.
 - **Real maps.** These three are test fixtures that happen to be playable. A real map
   is authored in the editor and zoned with `DotTimerZonePainter`.
-- **Sound, art, animation.** The maps are unshaded grey boxes on purpose.
+- **Sound, art, animation.** The maps are unshaded boxes on purpose, drawn with a generated world-space one-metre grid (`PlaygroundGeometry._material`, 2026-09-25) so a gap can be counted in squares — flat colour gave a rendered map no scale at all.
 - **Replay playback.** dot-timer records and stores them; drawing a ghost is a game's
   own decision and every game's is different.
