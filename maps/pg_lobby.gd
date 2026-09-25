@@ -309,6 +309,46 @@ func _build() -> void:
 	_build_circuit()
 
 
+## The movement corner's steep ramp: past `max_slope_angle`, so it is only ever surfed.
+const STEEP_RAMP_AT := Vector3(24.0, 8.0, 20.0)
+const STEEP_RAMP_SIZE := Vector3(20.0, 0.8, 30.0)
+const STEEP_RAMP_ANGLE := 55.0
+
+
+## What `PlaygroundMapSurvey` may find unreached here, and why.
+##
+## - [b]The tops of the four walls.[/b] 9 m up, 1 m wide: they keep props in.
+## - [b]The crest of the steep ramp.[/b] A 55-degree slab's upper edge is a strip of its
+##   0.8 m end face tilted 35 degrees from level — standable, 16 m up, at the top of a face
+##   nobody can climb. Only a noclip gets there.
+func survey_declared() -> Array:
+	var top := WALL_HEIGHT * 0.4 + WALL_HEIGHT * 0.5
+	var half := SIZE * 0.5
+	var out: Array = []
+
+	for side in [-1.0, 1.0]:
+		out.append({
+			"box": AABB(Vector3(side * half - 0.5, top - 0.5, -half - 0.5), Vector3(1.0, 1.0, SIZE + 1.0)),
+			"why": "the top of the plate's wall, 9 m up: it keeps props in",
+		})
+		out.append({
+			"box": AABB(Vector3(-half - 0.5, top - 0.5, side * half - 0.5), Vector3(SIZE + 1.0, 1.0, 1.0)),
+			"why": "the top of the plate's wall, 9 m up: it keeps props in",
+		})
+
+	var ramp := Transform3D(
+		Basis(Vector3.FORWARD, deg_to_rad(STEEP_RAMP_ANGLE)), STEEP_RAMP_AT
+	)
+	var bounds := ramp * AABB(-STEEP_RAMP_SIZE * 0.5, STEEP_RAMP_SIZE)
+	out.append({
+		"box": AABB(Vector3(bounds.position.x, bounds.end.y - 1.0, bounds.position.z),
+			Vector3(bounds.size.x, 1.0, bounds.size.z)),
+		"why": "the crest of the movement corner's steep ramp, 16 m up a face nobody can climb",
+	})
+
+	return out
+
+
 ## A staircase and two ramps, so the movement is visible without leaving the sandbox.
 ##
 ## Kept from when this map was only a lobby. The staircase is what makes stair
@@ -333,11 +373,7 @@ func _build_movement_corner() -> void:
 	)
 
 	PlaygroundGeometry.ramp(
-		self,
-		Vector3(24.0, 8.0, 20.0),
-		Vector3(20.0, 0.8, 30.0),
-		55.0,
-		Vector3.FORWARD
+		self, STEEP_RAMP_AT, STEEP_RAMP_SIZE, STEEP_RAMP_ANGLE, Vector3.FORWARD
 	)
 
 

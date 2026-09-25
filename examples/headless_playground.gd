@@ -6,6 +6,7 @@ const PlaygroundClient := preload("../game/playground_client.gd")
 const PlaygroundConfig := preload("../game/playground_config.gd")
 const PlaygroundEntity := preload("../game/entities/playground_entity.gd")
 const PlaygroundIcons := preload("../game/playground_icons.gd")
+const PlaygroundMapSurvey := preload("../game/playground_map_survey.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
 const PlaygroundProp := preload("../game/playground_prop.gd")
 const PlaygroundSpawnMenu := preload("../game/playground_spawn_menu.gd")
@@ -47,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 399
+const CHECKS := 415
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 23
+const SECTIONS := 24
 
 var _passed := 0
 var _failed := 0
@@ -113,6 +114,7 @@ func _run() -> void:
 	await _test_the_switchback()
 	await _test_the_ascent()
 	await _test_the_cascade()
+	await _test_the_maps_are_surveyed()
 	await _test_the_client_boots()
 
 	print("")
@@ -3552,6 +3554,113 @@ func _test_the_cascade() -> void:
 
 	playground.remove_player(&"bot")
 	_done()
+
+
+# --- The survey ---------------------------------------------------------------
+
+## Every hand-built map, swept for closed slots, standable ground no spawn reaches, and
+## ground a spawn reaches that leads nowhere (`[gate-sweep-2]`). `pg_generated` is not in
+## it: it is not hand-built, and `PlaygroundWorldGen`'s own validator floods it from its
+## spawn on every seed.
+##
+## [b]The survey is asked about a fixture first, so a sweep that finds nothing is known to
+## be looking.[/b] Three maps passing clean says nothing about a detector that cannot fire;
+## the fixture has one of each thing it looks for, and each is asserted found.
+func _test_the_maps_are_surveyed() -> void:
+	print("")
+	_section("the hand-built maps, surveyed for slots, unreached ground and traps")
+
+	_the_survey_sees_what_it_looks_for()
+
+	for id in _zone_map_ids():
+		var script := load("res://maps/%s.gd" % id) as GDScript
+		var map: Node3D = script.new()
+		map._build()
+
+		var zones: DotTimerZoneSet = script.build_zones()
+		var spawns: Array[Vector3] = [map.fallback_spawn]
+		for zone in zones.zones:
+			if zone.kind == DotTimerZone.Kind.SPAWN:
+				spawns.append(zone.destination)
+
+		var declared: Array = map.survey_declared()
+		var started := Time.get_ticks_msec()
+		var found: Dictionary = PlaygroundMapSurvey.survey(map, zones, spawns, declared)
+		map.free()
+
+		print("    %s: %d standable cells in %d regions, %d spawns, %d declared, %d falls into nothing, %d ms" % [
+			id, int(found["cells"]), int(found["regions"]), spawns.size(), declared.size(),
+			int(found["void_falls"]), Time.get_ticks_msec() - started,
+		])
+
+		_check((found["spawnless"] as Array).is_empty(),
+			"%s: every spawn stands on standable ground" % id,
+			", ".join(found["spawnless"]))
+		_check((found["slots"] as Array).is_empty(),
+			"%s: no two boxes leave a slot narrower than a player" % id,
+			"; ".join(found["slots"]))
+		_check((found["unreached"] as Array).is_empty(),
+			"%s: nothing standable is out of reach of every spawn, but what it declares" % id,
+			"; ".join(found["unreached"]))
+		_check((found["trapped"] as Array).is_empty(),
+			"%s: and nowhere a spawn reaches is a place with no way out" % id,
+			"; ".join(found["trapped"]))
+
+	_done()
+
+
+## A floor with one of everything on it: a 0.5 m slot between two walls, a platform 5 m
+## up, and a cellar a player drops into and cannot climb out of.
+func _the_survey_sees_what_it_looks_for() -> void:
+	var boxes: Array = [
+		PlaygroundMapSurvey.solid(Vector3(0.0, -0.5, 0.0), Vector3(20.0, 1.0, 20.0)),
+		# The slot: two walls 0.5 m apart.
+		PlaygroundMapSurvey.solid(Vector3(-5.0, 1.5, -6.0), Vector3(2.0, 3.0, 1.0)),
+		PlaygroundMapSurvey.solid(Vector3(-2.5, 1.5, -6.0), Vector3(2.0, 3.0, 1.0)),
+		# Out of reach: 5 m up, 4 m across, nothing to climb.
+		PlaygroundMapSurvey.solid(Vector3(-6.0, 5.0, 6.0), Vector3(4.0, 0.5, 4.0)),
+		# The cellar: 3 m under the floor's east edge, walled in on its other three sides.
+		PlaygroundMapSurvey.solid(Vector3(13.0, -3.5, 0.0), Vector3(6.0, 1.0, 6.0)),
+		PlaygroundMapSurvey.solid(Vector3(16.5, 0.0, 0.0), Vector3(1.0, 8.0, 8.0)),
+		PlaygroundMapSurvey.solid(Vector3(13.0, 0.0, 3.5), Vector3(6.0, 8.0, 1.0)),
+		PlaygroundMapSurvey.solid(Vector3(13.0, 0.0, -3.5), Vector3(6.0, 8.0, 1.0)),
+	]
+	var solids: Array[PlaygroundMapSurvey.Solid] = []
+	for box: Variant in boxes:
+		solids.append(box)
+
+	# The walls' own tops are out of reach too, which is right and is not what this asks
+	# about, so the fixture declares them the way a map declares its walls.
+	var walls: Array = []
+	for i in [1, 2, 5, 6, 7]:
+		var wall: PlaygroundMapSurvey.Solid = solids[i]
+		walls.append({"box": wall.bounds.grow(0.1), "why": "a fixture wall's top"})
+
+	var spawns: Array[Vector3] = [Vector3(0.0, 1.0, 0.0)]
+	var none := DotTimerZoneSet.new()
+	var found: Dictionary = PlaygroundMapSurvey.survey_solids(solids, none, spawns, walls)
+
+	_check((found["slots"] as Array).size() == 1,
+		"the survey finds the fixture's one slot", "; ".join(found["slots"]))
+	_check((found["unreached"] as Array).size() == 1
+			and str((found["unreached"] as Array)[0]).contains(", 5.2, "),
+		"and the platform nobody can reach", "; ".join(found["unreached"]))
+	_check((found["trapped"] as Array).size() == 1
+			and str((found["trapped"] as Array)[0]).contains("-3.0"),
+		"and the cellar nobody can leave", "; ".join(found["trapped"]))
+
+	# Declared, the platform is not reported; a reset in the cellar is a way out of it.
+	var declared: Array = walls.duplicate()
+	declared.append({"box": AABB(Vector3(-8.0, 4.0, 4.0), Vector3(4.0, 2.0, 4.0)), "why": "fixture"})
+	var reset := DotTimerZoneSet.new()
+	var pit := DotTimerZone.make(DotTimerZone.Kind.RESPAWN)
+	pit.set_box(Vector3(10.0, -3.5, -3.0), Vector3(16.0, 0.0, 3.0))
+	reset.add(pit)
+	var quiet: Dictionary = PlaygroundMapSurvey.survey_solids(solids, reset, spawns, declared)
+
+	_check((quiet["unreached"] as Array).is_empty() and (quiet["trapped"] as Array).is_empty(),
+		"and neither once the platform is declared and the cellar has a reset",
+		"unreached %s; trapped %s" % [str(quiet["unreached"]), str(quiet["trapped"])])
 
 
 func _the_spawn_yaw_survives_a_tick(

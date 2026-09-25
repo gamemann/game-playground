@@ -133,6 +133,19 @@ func spawn_yaw_for(track: int) -> float:
 	return 0.0
 
 
+## Standable places on this map that no spawn is MEANT to reach, each as
+## `{box: AABB, why: String}`.
+##
+## Read by `PlaygroundMapSurvey` (`headless_playground`'s survey section), which fails on
+## any standable area it cannot reach from a spawn unless it is declared here. The top of
+## a wall, a backstop, the crest of a face nobody can climb: places only a noclip goes,
+## said once where the geometry is rather than discovered by a player who got there some
+## other way. [b]A declaration is a claim, and the reason is the part worth reading[/b] —
+## "the survey complained" is not one.
+func survey_declared() -> Array:
+	return []
+
+
 ## Whether [param track] is meant to be driven rather than run.
 ##
 ## [b]Default false, which is every map that existed before there were cars.[/b]

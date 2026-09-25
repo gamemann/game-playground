@@ -324,6 +324,32 @@ static func gap_at(index: int) -> float:
 	return lerpf(FIRST_GAP, LAST_GAP, float(index) / float(maxi(BLOCKS - 1, 1)))
 
 
+## What `PlaygroundMapSurvey` may find unreached here: the main run from the first block
+## whose gap is wider than a RUNNING jump, to the finish.
+##
+## [b]That is the route working, not a hole in it.[/b] The gaps widen from 3 m to 7 m and
+## a standing-start running jump crosses 4.75; everything past that is reached only with
+## speed carried from the blocks before, which is what the map is teaching. The survey
+## models a running jump and no carried speed, so it cannot see those blocks — and a route
+## a bot drives end to end is the stronger evidence for them anyway.
+func survey_declared() -> Array:
+	var first := BLOCKS
+	for i in range(1, BLOCKS):
+		if gap_at(i - 1) > jump_reach(0.0):
+			first = i
+			break
+
+	var near := block_near_z(first)
+	var far := end_z() - 18.0
+	return [{
+		"box": AABB(
+			Vector3(-BLOCK_WIDTH * 0.5, BLOCK_Y - 1.0, far),
+			Vector3(BLOCK_WIDTH, 2.0, near - far)
+		),
+		"why": "the main run past block %d: gaps wider than a running jump, crossed with bhop speed" % first,
+	}]
+
+
 ## The Z of the near (high-Z) edge of block [param index] on the main run.
 ##
 ## The same walk [method _build] does, so a split line placed from this cannot land

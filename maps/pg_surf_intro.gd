@@ -173,19 +173,18 @@ func _build() -> void:
 	fallback_spawn = Vector3(0.0, START_Y + 1.0, START_Z + 6.0)
 
 	# The start platform, and a lip so a player who walks backwards does not simply
-	# fall off the map before starting.
+	# fall off the map before starting. Every route's lip is in `backstops()`.
 	PlaygroundGeometry.box(
 		self,
 		Vector3(0.0, START_Y - 0.5, START_Z + 6.0),
 		PAD_SIZE,
 		PlaygroundGeometry.COLOUR_START
 	)
-	PlaygroundGeometry.box(
-		self,
-		Vector3(0.0, START_Y + 1.0, START_Z + 15.0),
-		Vector3(18.0, 4.0, 1.0),
-		PlaygroundGeometry.COLOUR_PLATFORM
-	)
+
+	for lip in backstops():
+		PlaygroundGeometry.box(
+			self, lip.get_center(), lip.size, PlaygroundGeometry.COLOUR_PLATFORM
+		)
 
 	# The two ramps. Each is a long slab tilted about Z so it falls toward the
 	# valley, and the pair are placed so their inner edges meet along the centre
@@ -250,18 +249,12 @@ func _build() -> void:
 ## Bonus 1. Built from its own constants, like the main run, and from the same
 ## helpers — so the zones below and the geometry here cannot drift apart.
 func _build_the_plunge() -> void:
-	# The start pad, and the same backstop the main platform has.
+	# The start pad. Its backstop is built with the main platform's, from `backstops()`.
 	PlaygroundGeometry.box(
 		self,
 		Vector3(CHUTE_X, CHUTE_TOP_Y - 0.5, START_Z + CHUTE_PAD_LENGTH * 0.5),
 		Vector3(CHUTE_WIDTH, 1.0, CHUTE_PAD_LENGTH),
 		PlaygroundGeometry.COLOUR_START
-	)
-	PlaygroundGeometry.box(
-		self,
-		Vector3(CHUTE_X, CHUTE_TOP_Y + 1.0, START_Z + CHUTE_PAD_LENGTH + 0.5),
-		Vector3(CHUTE_WIDTH, 4.0, 1.0),
-		PlaygroundGeometry.COLOUR_PLATFORM
 	)
 
 	# The face itself. ONE rotation, about X, so the slab stays a plane a player
@@ -329,14 +322,36 @@ func _build_the_cascade() -> void:
 
 		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
 
-	# The same backstop the other two start pads have, behind the pad's back edge.
-	var pad: AABB = route[0]
-	PlaygroundGeometry.box(
-		self,
-		Vector3(CASCADE_X, CASCADE_TOP_Y + 1.0, pad.end.z + 0.5),
-		Vector3(CASCADE_PAD.x, 4.0, 1.0),
-		PlaygroundGeometry.COLOUR_PLATFORM
-	)
+
+## Every start pad's backstop — the main run's, the plunge's and the cascade's — as a
+## box: a 4 m wall behind the back edge, 3 m above the pad, so a player who walks
+## backwards does not fall off the map before starting.
+static func backstops() -> Array[AABB]:
+	var cascade_pad: AABB = cascade_route()[0]
+	return [
+		standable(Vector3(0.0, START_Y + 1.0, START_Z + 15.0), Vector3(18.0, 4.0, 1.0)),
+		standable(
+			Vector3(CHUTE_X, CHUTE_TOP_Y + 1.0, START_Z + CHUTE_PAD_LENGTH + 0.5),
+			Vector3(CHUTE_WIDTH, 4.0, 1.0)
+		),
+		standable(
+			Vector3(CASCADE_X, CASCADE_TOP_Y + 1.0, cascade_pad.end.z + 0.5),
+			Vector3(CASCADE_PAD.x, 4.0, 1.0)
+		),
+	]
+
+
+## What `PlaygroundMapSurvey` may find unreached here: the tops of the three backstops,
+## 3 m over their pads. A lip is there to be run into, not stood on.
+func survey_declared() -> Array:
+	var out: Array = []
+	for lip in backstops():
+		out.append({
+			"box": AABB(Vector3(lip.position.x, lip.end.y - 0.5, lip.position.z),
+				Vector3(lip.size.x, 1.0, lip.size.z)),
+			"why": "a start pad's backstop, 3 m over the pad: run into, never stood on",
+		})
+	return out
 
 
 ## The clear air along Z before the box jump [param index] lands on, counted from 0.
