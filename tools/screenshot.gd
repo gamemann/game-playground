@@ -173,6 +173,26 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(96.0, 50.0, 30.0),
 				"at": Vector3(60.0, 9.0, -30.0),
 			},
+			# Bonus 2, the cascade: eleven jumps down a slalom of blocks at x = -60,
+			# from 40 m to 26 m over 70 m of Z. Square beside it from the west, a little
+			# above its middle, because the thing this frame has to show is the PROFILE
+			# — every block lower than the last — from above at forty-five degrees, so the
+			# block tops read too. [b]The first angle was from above and
+			# behind the pad[/b], which put the main run's 220 m ramp across the whole
+			# background and made the staircase a scatter of tiles in front of it.
+			{
+				"name": "pg_surf_intro_cascade",
+				"from": Vector3(-94.0, 62.0, -28.0),
+				"at": Vector3(-60.0, 30.0, -28.0),
+			},
+			# From over the backstop and above a player's head: the staircase falling
+			# away in front of them, which is the first thing a player on bonus 2 sees.
+			# Over the backstop, not behind it — from behind it the frame is a wall.
+			{
+				"name": "pg_surf_intro_cascade_start",
+				"from": Vector3(-60.0, 48.0, 16.0),
+				"at": Vector3(-60.0, 30.0, -30.0),
+			},
 		]
 
 	if id != "pg_lobby":

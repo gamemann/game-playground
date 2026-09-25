@@ -2,7 +2,8 @@ extends "../game/playground_map.gd"
 
 const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 
-## `pg_surf_intro` — two routes. A valley between two ramps, and a face you fall down.
+## `pg_surf_intro` — three routes. A valley between two ramps, a face you fall down,
+## and a staircase you jump down.
 ##
 ## [b]The main run is the shape every surf map is made of, reduced to its
 ## minimum[/b]: two slabs tilted past `max_slope_angle` so a player on one is never
@@ -104,6 +105,68 @@ const CHUTE_PAD_LENGTH := 20.0
 const CHUTE_SPLITS := [0.34, 0.68]
 
 
+# --- Bonus 2: the cascade ----------------------------------------------------
+#
+# The map's third route and its first made of JUMPS: a staircase of floating blocks
+# falling down the hillside west of the main run, each one 1.25 m under the last and
+# offset to the other side of the line, so every jump is a drop AND a turn.
+#
+# [b]It asks the question neither other route here asks, and none on `pg_bhop_intro`
+# does either.[/b] Every bhop route in this game climbs or stays level, which makes a
+# jump's reach SHORTER than a flat one; a drop makes it longer — 5.8 m onto a block
+# 1.25 m down against 4.75 m flat — and a player who has learned the climbing courses
+# overshoots here, straight past the next block and off its far side. And a player who
+# lands facing where they came from, rather than where the next block is, falls off
+# the side instead: the slalom is what makes each landing a decision.
+#
+# Every number below is read by `_build_the_cascade`, `cascade_route` and
+# `_add_the_cascade`, and nothing else describes where a block is — the rule the
+# switchback follows, for its reason.
+
+## The track it runs on.
+const CASCADE_TRACK := DotTimerTrack.BONUS_FIRST + 1
+
+## Where the route runs, west of the main run: its ramps reach out to x = -17, so the
+## cascade's blocks — which sway 2.5 m either side of this line — are forty metres
+## clear of them, and it mirrors the plunge on the other side of the valley.
+const CASCADE_X := -60.0
+
+## The start pad's centre in Z, and the height of its top surface: level with the main
+## start and the plunge's, so all three routes begin at the same height.
+const CASCADE_Z := 8.0
+const CASCADE_TOP_Y := START_Y
+
+const CASCADE_PAD := Vector3(8.0, 1.0, 8.0)
+
+## Square, so the block is the same target from whichever diagonal a jump arrives on.
+const CASCADE_BLOCK := Vector3(3.0, 0.5, 3.0)
+
+## How far each block is under the one before. Well over `step_height`, so no block is
+## a stair, and small enough that the landing does not become the whole of the jump.
+const CASCADE_DROP := 1.25
+
+## Each block's offset either side of [constant CASCADE_X], alternating. 2.5 m against a
+## 3 m block puts consecutive blocks 2 m of air apart across the line as well as along
+## it, so every jump is a diagonal the player has to face before taking.
+const CASCADE_SWAY := 2.5
+
+## How many blocks between the pad and the finish.
+const CASCADE_BLOCKS := 10
+
+## The clear air along Z before the first block and before the finish pad. Grows evenly.
+##
+## [b]Sized against [method jump_reach] for a drop.[/b] Every jump falls
+## [constant CASCADE_DROP], so the reach is `jump_reach(-1.25)` = 5.80 m, and the
+## tightest jump — the last block-to-block diagonal, 3.62 m along and 2 m across, 4.14 m
+## of air box to box — is 71% of it: the switchback's band, past a standing jump and
+## inside a running one. The finish pad sits on the line, so the jump onto it is straight.
+const CASCADE_FIRST_GAP := 2.0
+const CASCADE_LAST_GAP := 3.8
+
+## The route indices of the blocks the splits are drawn across.
+const CASCADE_SPLIT_BLOCKS := [4, 8]
+
+
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
 
@@ -181,6 +244,7 @@ func _build() -> void:
 	)
 
 	_build_the_plunge()
+	_build_the_cascade()
 
 
 ## Bonus 1. Built from its own constants, like the main run, and from the same
@@ -245,6 +309,72 @@ func _build_the_plunge() -> void:
 		Vector3(CHUTE_WIDTH, 1.0, CHUTE_PAD_LENGTH),
 		PlaygroundGeometry.COLOUR_END
 	)
+
+
+## Bonus 2, built from [method cascade_route] and nothing else. The blocks the splits
+## are drawn across are the ramp colour, so a player can see where a section ends.
+func _build_the_cascade() -> void:
+	var route := cascade_route()
+
+	for i in range(route.size()):
+		var box: AABB = route[i]
+		var colour := PlaygroundGeometry.COLOUR_PLATFORM
+
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif i == route.size() - 1:
+			colour = PlaygroundGeometry.COLOUR_END
+		elif CASCADE_SPLIT_BLOCKS.has(i):
+			colour = PlaygroundGeometry.COLOUR_RAMP
+
+		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
+
+	# The same backstop the other two start pads have, behind the pad's back edge.
+	var pad: AABB = route[0]
+	PlaygroundGeometry.box(
+		self,
+		Vector3(CASCADE_X, CASCADE_TOP_Y + 1.0, pad.end.z + 0.5),
+		Vector3(CASCADE_PAD.x, 4.0, 1.0),
+		PlaygroundGeometry.COLOUR_PLATFORM
+	)
+
+
+## The clear air along Z before the box jump [param index] lands on, counted from 0.
+static func cascade_gap(index: int) -> float:
+	return lerpf(
+		CASCADE_FIRST_GAP, CASCADE_LAST_GAP, float(index) / float(CASCADE_BLOCKS)
+	)
+
+
+## Bonus 2 as the boxes a player lands on, start pad to finish pad, in order.
+##
+## [b]This is the whole description of the route.[/b] The geometry is built from it, the
+## splits are drawn across two of its blocks, and `headless_playground` reads every
+## jump's gap and drop off it and drives a bot along it. The pad and the finish sit on
+## the line; the blocks between alternate sides of it, west first.
+static func cascade_route() -> Array[AABB]:
+	var route: Array[AABB] = []
+	var z := CASCADE_Z
+
+	route.append(standable(
+		Vector3(CASCADE_X, CASCADE_TOP_Y - CASCADE_PAD.y * 0.5, z), CASCADE_PAD
+	))
+
+	var size := CASCADE_PAD
+
+	for i in range(CASCADE_BLOCKS + 1):
+		var last := i == CASCADE_BLOCKS
+		var next := CASCADE_PAD if last else CASCADE_BLOCK
+		var x := CASCADE_X if last else CASCADE_X + CASCADE_SWAY * (-1.0 if i % 2 == 0 else 1.0)
+		var top := CASCADE_TOP_Y - CASCADE_DROP * float(i + 1)
+
+		# Walked edge to edge along -Z, like the switchback: spacing by centres would make
+		# the clear air a player jumps differ from the number written above.
+		z -= size.z * 0.5 + cascade_gap(i) + next.z * 0.5
+		size = next
+		route.append(standable(Vector3(x, top - next.y * 0.5, z), next))
+
+	return route
 
 
 ## How far the plunge falls, in metres. Follows from the pitch and the run, so
@@ -342,6 +472,7 @@ static func build_zones() -> DotTimerZoneSet:
 	zones.add(spawn)
 
 	_add_plunge_zones(zones)
+	_add_the_cascade(zones)
 
 	return zones
 
@@ -410,5 +541,71 @@ static func _add_plunge_zones(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(CHUTE_X - half - 10.0, chute_bottom_y() - 40.0, chute_end_z() - 40.0),
 		Vector3(CHUTE_X + half + 10.0, chute_bottom_y() - 12.0, START_Z + 40.0)
+	)
+	zones.add(reset)
+
+
+## Bonus 2's zones: a spawn, a start, a split across each of [constant
+## CASCADE_SPLIT_BLOCKS], a finish, and a reset under the whole staircase.
+##
+## [b]The splits are slabs across the route, not boxes on a block.[/b] The route only
+## ever descends along -Z, so a slab the full width of the staircase at a block's Z is
+## crossed by every way down it — and the block after it is over 8 m of air from the
+## block before it, past any jump, so nobody reaches the next section without passing through it.
+static func _add_the_cascade(zones: DotTimerZoneSet) -> void:
+	var track := CASCADE_TRACK
+	var route := cascade_route()
+	var pad: AABB = route[0]
+
+	# On the pad, a stride back from its leading edge, facing down the route. Yaw 0 is
+	# -Z, which is the way it runs; see `_add_plunge_zones` for why it is written.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(pad.get_center().x, pad.end.y + 1.0, pad.position.z + 2.0)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	# The whole pad and the air above it: the run begins at the first jump.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	var low := pad.position
+	var high := pad.end
+
+	for box in route:
+		low = low.min(box.position)
+		high = high.max(box.end)
+
+	for n in range(CASCADE_SPLIT_BLOCKS.size()):
+		var block: AABB = route[int(CASCADE_SPLIT_BLOCKS[n])]
+		var z := block.get_center().z
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n + 1)
+		stage.set_box(
+			Vector3(low.x - 2.0, block.end.y - 3.0, z - 1.0),
+			Vector3(high.x + 2.0, block.end.y + 6.0, z + 1.0)
+		)
+		zones.add(stage)
+
+	# The finish pad and the air above it, deep for `thin_zones`' reason.
+	var last: AABB = route[route.size() - 1]
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(last.position.x, last.end.y - 1.0, last.position.z),
+		Vector3(last.end.x, last.end.y + 5.0, last.end.z)
+	)
+	zones.add(finish)
+
+	# Under the lowest block by three metres, five thick, the whole staircase wide and
+	# ten metres beyond it on every side. Everything on the route is above it, so every
+	# fall passes through it; a player falling from the top block reaches it at about
+	# 20 m/s, 16 cm a tick, well inside five metres.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(low.x - 10.0, low.y - 8.0, low.z - 10.0),
+		Vector3(high.x + 10.0, low.y - 3.0, high.z + 10.0)
 	)
 	zones.add(reset)

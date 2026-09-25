@@ -47,13 +47,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 382
+const CHECKS := 399
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 22
+const SECTIONS := 23
 
 var _passed := 0
 var _failed := 0
@@ -112,6 +112,7 @@ func _run() -> void:
 	await _test_the_jump_course()
 	await _test_the_switchback()
 	await _test_the_ascent()
+	await _test_the_cascade()
 	await _test_the_client_boots()
 
 	print("")
@@ -240,9 +241,9 @@ func _test_boots() -> void:
 		", ".join(zones.problems()))
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
-			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST]
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK]
 		),
-		"and both of its tracks can be run",
+		"and all three of its tracks can be run",
 		str(zones.playable_tracks())
 	)
 
@@ -2591,9 +2592,9 @@ func _test_the_plunge() -> void:
 		", ".join(zones.problems()))
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
-			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST]
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK]
 		),
-		"and the surf map has two routes now rather than one",
+		"and the surf map has three routes now rather than one",
 		str(zones.playable_tracks())
 	)
 
@@ -3422,6 +3423,137 @@ func _test_the_ascent() -> void:
 ## read `yaw 0.0, the spawn says 90.0` once the bot had been standing on a map for a
 ## while, and passed on a freshly-added one only because its controller had not started
 ## ticking yet.
+# --- The cascade ------------------------------------------------------------
+
+## `pg_surf_intro`'s bonus 2, driven start to finish.
+##
+## [b]The first route in this game that jumps DOWN.[/b] Every other bhop route climbs or
+## stays level, so this is the first time `_check_route_reach` is asked about a jump
+## whose reach is longer than a flat one, and the first time `_drive_route` lands from a
+## fall. Every block is offset to the other side of the line, so every jump but the pad's
+## and the finish's is a diagonal the bot has to face before taking.
+func _test_the_cascade() -> void:
+	print("")
+	_section("the cascade — pg_surf_intro's bonus 2, jumped down end to end")
+
+	var loaded: DotResult = await playground.change_map(&"pg_surf_intro")
+	_check(loaded.ok, "the surf map loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgSurfIntro.CASCADE_TRACK
+	var zones := PgSurfIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2},
+		"bonus 2 has a start, a finish, a spawn, a respawn and two splits, on its own track",
+		str(kinds)
+	)
+	_check(
+		playground.tracks_on_this_map() == [
+			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track,
+		],
+		"and the game sees three tracks on the map without being told",
+		str(playground.tracks_on_this_map())
+	)
+
+	var route := PgSurfIntro.cascade_route()
+	_check_route_reach(route, "the cascade")
+
+	# What makes it this route and not a fourth copy of the switchback: every jump
+	# lands lower, and every jump between two blocks is across the line as well as
+	# along it, so the bot cannot hold one yaw down it.
+	var shape := PackedStringArray()
+	for i in range(1, route.size()):
+		if route[i].end.y >= route[i - 1].end.y:
+			shape.append("#%d does not drop" % i)
+		if i > 1 and i < route.size() - 1 \
+				and absf(route[i].get_center().x - route[i - 1].get_center().x) < 1.0:
+			shape.append("#%d does not turn" % i)
+	_check(shape.is_empty(),
+		"every jump drops, and every block-to-block jump is a diagonal",
+		", ".join(shape))
+
+	# The reset is under everything, or a fall onto nothing is a fall for ever.
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	var lowest := INF
+	for box in route:
+		lowest = minf(lowest, box.position.y)
+	_check(
+		reset.to.y < lowest,
+		"and its reset is under the lowest block",
+		"reset top %.2f, lowest block bottom %.2f" % [reset.to.y, lowest]
+	)
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	_check(player.timer.set_track(track), "the cascade's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	var first := route[1].get_center()
+	var toward := Vector3(
+		first.x - player.global_position.x, 0.0, first.z - player.global_position.z
+	).normalized()
+	_check(
+		player.aim_direction().dot(toward) > 0.9,
+		"facing the first block",
+		"dot %.2f; yaw %.1f, the spawn says %.1f"
+			% [player.aim_direction().dot(toward), player.controller.state.yaw,
+				spawn.destination_yaw]
+	)
+
+	# Eleven jumps at under a second each.
+	var drive: Dictionary = await _drive_route(player, route, 3000)
+
+	print("    the cascade: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 2")
+	_check(
+		drive["splits"] == [1, 2],
+		"it drops through both splits, in order",
+		str(drive["splits"])
+	)
+	_check(
+		drive["finished"],
+		"and reaches the finish pad: the cascade run end to end",
+		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.x, player.global_position.y,
+				player.global_position.z, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
 func _the_spawn_yaw_survives_a_tick(
 	player: PlaygroundPlayer, spawn: DotTimerZone
 ) -> void:
