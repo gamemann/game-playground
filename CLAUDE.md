@@ -1093,7 +1093,7 @@ done
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 415 checks, 24 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
-godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
+godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
 godot --headless --path . res://examples/headless_net.tscn          # 256 checks, 27 sections
 godot --headless --path . res://examples/dedicated.tscn             # 217 checks, 24 sections
 ```
@@ -1434,6 +1434,8 @@ The trust model is `HOST_AUTHORITATIVE` rather than sandboxed, which is the othe
 disagreement: a sandbox is a place where a friend hosting *should* be able to hand out
 money and spawn a hundred crates, because that is the game. What must not leave is anything
 persistent, and `reporting_allowed()` is the one place that is asked.
+
+**And it meets over HTTP now, awaited end to end (`[p2p-await-games]`).** Every party check used the loopback signaller, which answers inside the call, so a caller that forgot `await` passed against it. `headless_presentation`'s **a party that meets over HTTP** stands up a four-route rendezvous on a local TCP port (`RendezvousStub`, answering four frames after each request), hosts with one `PlaygroundParty` and joins with another through `DotP2PSession` and `DotP2PSignallerHttp`, and asserts each answer is the one the stub sent and arrived only after it answered, that the joiner learns who is there and does not elect itself, and that a 403 leaves the party closed with a reason. Armed on the one link the compiler cannot see — `DotP2PSession` calls its signaller through the base type — by dropping that `await`: join returned in 0 frames and three checks fired. Dropping the `await` in `PlaygroundParty` itself is a parse error, so that link is guarded at compile time. The stub's first version lost every byte it read: a `PackedByteArray` read out of a Dictionary is a copy, so appending to it appended to nothing.
 
 ## Escape opens a menu now, and used to toggle the cursor
 

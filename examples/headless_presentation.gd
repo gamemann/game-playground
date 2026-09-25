@@ -22,7 +22,7 @@ const PlaygroundWorldGen := preload("../game/playground_worldgen.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 89
+const CHECKS := 99
 
 var _passed := 0
 var _failed := 0
@@ -50,6 +50,7 @@ func _run() -> void:
 	_test_sounds_and_effects()
 	_test_console()
 	_test_party_does_not_migrate()
+	await _test_party_over_http()
 	await _test_escape_menu()
 	_test_chat_box()
 
@@ -479,6 +480,211 @@ func _test_party_does_not_migrate() -> void:
 	party.queue_free()
 	_done()
 
+
+# --- 8b ---------------------------------------------------------------------
+
+## A stand-in rendezvous: the four routes `DotP2PSignallerHttp` speaks, on a real socket,
+## answering each request [member delay] frames after it arrives.
+##
+## [b]The delay is the point.[/b] Every other party check here uses the loopback
+## signaller, which answers inside the call — and a coroutine that never suspends is
+## indistinguishable from a function, so a caller that forgot `await` passes against it.
+## A rendezvous that answers frames later is the shape the real one has.
+class RendezvousStub:
+	extends Node
+
+	var port := 0
+	var delay := 4
+	## An HTTP status to answer everything with instead of 200, to see a refusal arrive.
+	var refuse := 0
+	## What arrived, in order: `{route, body}`.
+	var seen: Array[Dictionary] = []
+	## Per route, the ids that announced themselves, so a join answers with who is here.
+	var present: Array[String] = []
+
+	var _server := TCPServer.new()
+	var _open: Array[Dictionary] = []
+
+	func start() -> bool:
+		for candidate in range(38700, 38760):
+			if _server.listen(candidate, "127.0.0.1") == OK:
+				port = candidate
+				return true
+		return false
+
+	func _exit_tree() -> void:
+		_server.stop()
+
+	func _process(_delta: float) -> void:
+		while _server.is_connection_available():
+			_open.append({"peer": _server.take_connection(), "bytes": PackedByteArray(), "wait": -1})
+
+		for c in _open.duplicate():
+			var peer: StreamPeerTCP = c["peer"]
+			peer.poll()
+			var available := peer.get_available_bytes()
+			if available > 0:
+				var got := peer.get_data(available)
+				if int(got[0]) == OK:
+					# Written back: a packed array is a value, so appending to the one read
+					# out of the dictionary appends to a copy and the bytes are lost.
+					var buffer: PackedByteArray = c["bytes"]
+					buffer.append_array(got[1] as PackedByteArray)
+					c["bytes"] = buffer
+
+			if int(c["wait"]) < 0:
+				var text := (c["bytes"] as PackedByteArray).get_string_from_utf8()
+				var split := text.find("\r\n\r\n")
+				if split < 0:
+					continue
+				var length := 0
+				for line in text.substr(0, split).split("\r\n"):
+					if line.to_lower().begins_with("content-length:"):
+						length = line.get_slice(":", 1).strip_edges().to_int()
+				if (c["bytes"] as PackedByteArray).size() < split + 4 + length:
+					continue
+				var first := text.get_slice("\r\n", 0)
+				var target := first.get_slice(" ", 1)
+				var route := target.get_slice("?", 0).get_file()
+				var body: Variant = JSON.parse_string(text.substr(split + 4)) if length > 0 else {}
+				c["route"] = route
+				c["body"] = body if body is Dictionary else {}
+				seen.append({"route": route, "body": c["body"]})
+				c["wait"] = delay
+				continue
+
+			if int(c["wait"]) > 0:
+				c["wait"] = int(c["wait"]) - 1
+				continue
+
+			var answer := _answer(str(c["route"]), c["body"] as Dictionary)
+			var status := "200 OK" if refuse == 0 else "%d Refused" % refuse
+			var payload := JSON.stringify(answer).to_utf8_buffer()
+			var head := "HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % [status, payload.size()]
+			peer.put_data(head.to_utf8_buffer())
+			peer.put_data(payload)
+			peer.disconnect_from_host()
+			_open.erase(c)
+
+	func _answer(route: String, body: Dictionary) -> Dictionary:
+		match route:
+			"host":
+				present.append(str(body.get("id", "")))
+				return {}
+			"join":
+				var here := present.duplicate()
+				present.append(str(body.get("id", "")))
+				return {"peers": here}
+			"poll":
+				return {"messages": [], "cursor": 0}
+		return {}
+
+
+## `[p2p-await-games]`: a party over the HTTP rendezvous, host and join, each awaited
+## end to end — through `PlaygroundParty`, `DotP2PSession` and `DotP2PSignallerHttp` to a
+## socket and back.
+##
+## [b]What "awaited" is asserted as.[/b] The answer the caller gets back is the one the
+## stub sent, and it arrives at least [member RendezvousStub.delay] frames after the call:
+## a link in the chain that dropped its `await` hands its caller null (GDScript refuses a
+## coroutine called as a function at runtime) or returns before the stub has answered,
+## and either fails here. Armed 2026-09-25 by taking the `await` off `DotP2PSession.join`'s
+## call to its signaller (typed as the base, so nothing at compile time can see it): a
+## runtime "async function without await", join back in 0 frames, three checks fire. The
+## same edit in `PlaygroundParty` is a parse error instead — the compiler guards that link.
+func _test_party_over_http() -> void:
+	_section("A party that meets over HTTP waits for the answer")
+
+	var stub := RendezvousStub.new()
+	stub.name = "Rendezvous"
+	add_child(stub)
+	var listening := stub.start()
+	_check(listening, "a stand-in rendezvous listens on a local port", str(stub.port))
+
+	if not listening:
+		stub.queue_free()
+		_done()
+		return
+
+	var url := "http://127.0.0.1:%d/p2p" % stub.port
+	var ada := PlaygroundParty.new()
+	ada.name = "PartyAda"
+	ada.signalling_url = url
+	add_child(ada)
+	var bob := PlaygroundParty.new()
+	bob.name = "PartyBob"
+	bob.signalling_url = url
+	add_child(bob)
+
+	_check(
+		ada.setup().ok and bob.setup().ok
+			and ada.session.signaller is DotP2PSignallerHttp
+			and bob.session.signaller is DotP2PSignallerHttp,
+		"two parties set up with a URL, and both meet over HTTP rather than the loopback"
+	)
+
+	var opened: Array[String] = []
+	ada.open.connect(func(code: String) -> void: opened.append(code))
+
+	var before := Engine.get_process_frames()
+	var hosted: DotResult = await ada.host("Ada")
+	var took := Engine.get_process_frames() - before
+	var code := str(hosted.value) if hosted != null and hosted.ok else ""
+
+	_check(
+		hosted != null and hosted.ok and DotP2PLobby.is_code_shaped(code, ada.session.config.code_length),
+		"host() hands back a join code",
+		str(hosted.error.message) if hosted != null and not hosted.ok else "null"
+	)
+	_check(took >= stub.delay,
+		"only once the rendezvous has answered: %d frames, the stub waits %d" % [took, stub.delay])
+	_check(
+		stub.seen.size() >= 1 and stub.seen[0]["route"] == "host"
+			and str((stub.seen[0]["body"] as Dictionary).get("code", "")) == code
+			and str(((stub.seen[0]["body"] as Dictionary).get("info", {}) as Dictionary).get("name", "")) == "Ada",
+		"and it is the code the rendezvous was told, under the host's name",
+		str(stub.seen)
+	)
+	_check(ada.active() and ada.session.is_host() and opened == [code],
+		"the party is open, hosted, and says so once",
+		"state %s, opened %s" % [ada.session.state(), str(opened)])
+
+	before = Engine.get_process_frames()
+	var joined: DotResult = await bob.join(code.to_lower(), "Bob")
+	took = Engine.get_process_frames() - before
+
+	_check(joined != null and joined.ok and took >= stub.delay,
+		"join() waits for the rendezvous too (%d frames) and succeeds" % took,
+		str(joined.error.message) if joined != null and not joined.ok else "null")
+	_check(
+		stub.seen.size() >= 2 and stub.seen[1]["route"] == "join"
+			and str((stub.seen[1]["body"] as Dictionary).get("code", "")) == code,
+		"under the code as the host has it, not as it was typed",
+		str(stub.seen)
+	)
+	_check(
+		bob.session.lobby.has(ada.session.local_id) and not bob.session.is_host(),
+		"and the joiner learns who is already there from the answer, and does not elect itself",
+		str(bob.session.lobby.member_ids())
+	)
+
+	# A refusal arrives as a failure the caller can read, not as null and not as success.
+	bob.leave()
+	var carol := PlaygroundParty.new()
+	carol.name = "PartyCarol"
+	carol.signalling_url = url
+	add_child(carol)
+	var _set := carol.setup()
+	stub.refuse = 403
+	var refused: DotResult = await carol.host("Carol")
+	_check(refused != null and not refused.ok and not carol.active(),
+		"and a rendezvous that refuses leaves the party closed with a reason",
+		"null" if refused == null else ("ok" if refused.ok else refused.error.message))
+
+	ada.leave()
+	for node: Node in [ada, bob, carol, stub]:
+		node.queue_free()
+	_done()
 
 func _test_chat_box() -> void:
 	_section("A sandbox where you can be talked to and can talk back")
