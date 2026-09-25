@@ -43,7 +43,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 24
-const CHECKS := 214
+const CHECKS := 217
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -1677,6 +1677,36 @@ func _test_live_tools() -> void:
 	var given := await _run_command_later("give Pat rifle")
 	_check(_said(given, "physics gun"), "`give` says what a player holds here instead",
 		" | ".join(given))
+
+	# `return` after a map change. Moved once by a moderator, so `return` has somewhere to
+	# put them — a position on THIS map, which the change is about to free. Then the map
+	# changes and `return` must have nowhere to put them, rather than a point on a map that
+	# is gone (armed 2026-09-25: without the clear it returned Pat to the old map's spot).
+	var tools: DotModTools = _module().get("mod_tools")
+	var here := player.global_position
+	var _moved: DotResult = await tools.teleport(&"", &"77", here + Vector3(6.0, 0.0, 0.0))
+	_check(tools.can_return(&"77"),
+		"a moderator moves Pat, so `return` has somewhere to put them")
+
+	var was_map := game.maps.current.id
+	var other := &"pg_bhop_intro" if was_map != &"pg_bhop_intro" else &"pg_surf_intro"
+	_run_command("map %s" % other)
+	for _i in range(10):
+		await get_tree().process_frame
+
+	var returned: DotResult = await tools.return_player(&"", &"77")
+	_check(
+		game.maps.current.id == other and not tools.can_return(&"77") and not returned.ok,
+		"and after a map change `return` has nowhere to put them",
+		"map %s; it put them at %s, a spot on the previous map"
+			% [game.maps.current.id, str(returned.value) if returned.ok else "-"]
+	)
+
+	_run_command("map %s" % was_map)
+	for _i in range(10):
+		await get_tree().process_frame
+	_check(game.maps.current.id == was_map, "and the map goes back for the sections after this",
+		String(game.maps.current.id))
 
 	_run_command("pg_arena %s" % ("on" if was_on else "off"))
 	var _released := server.release_session(session.peer_id)

@@ -425,6 +425,8 @@ func _module_unload() -> void:
 			game.maps.map_over.disconnect(_on_map_over)
 		if game.run_filed.is_connected(_on_run_filed):
 			game.run_filed.disconnect(_on_run_filed)
+		if game.maps.changed.is_connected(_on_map_changed_for_mod_tools):
+			game.maps.changed.disconnect(_on_map_changed_for_mod_tools)
 
 		# Every player this module put in the game comes back out. A module that
 		# unloaded and left them would leave the game holding players whose sessions
@@ -1054,10 +1056,25 @@ func _build_mod_tools() -> void:
 
 	add_child(mod_tools)
 
+	# [b]A map change clears the return history, for everybody.[/b] Every position in it
+	# is a point in the map that was just freed, so `return <player>` after a change put
+	# them where they had stood on a different map — in mid-air over the lobby's plate, or
+	# a hundred metres under a surf start. A respawn keeps the history on purpose (a
+	# teleport of the same body on the same map leaves a return meaningful); a map change
+	# is the one case where none of it can be, which game-hungario (6462f79) and the lobby
+	# (cb822cd) each found for themselves. `DotMapSession.changed` because it is the one
+	# signal every change ends at, whoever asked for it — see the vote's connection.
+	game.maps.changed.connect(_on_map_changed_for_mod_tools)
+
 	mod_commands = DotModToolCommands.install(self, mod_tools, server)
 	mod_commands.alive_fn = func(id: StringName) -> bool:
 		var health := arena.health_of(PlaygroundModTools.key_of(id)) if arena != null else null
 		return health == null or health.alive
+
+
+func _on_map_changed_for_mod_tools(_map: DotMapDef, _world: Node) -> void:
+	if mod_tools != null:
+		mod_tools.clear_history()
 
 
 func _on_client_disconnected(session: DotClientSession, _reason: String = "") -> void:
