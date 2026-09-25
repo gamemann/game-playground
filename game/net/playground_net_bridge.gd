@@ -3,6 +3,7 @@ extends Node
 const Playground := preload("../playground.gd")
 const PlaygroundEvent := preload("playground_event.gd")
 const PlaygroundEvents := preload("playground_events.gd")
+const PlaygroundInventoryNet := preload("playground_inventory_net.gd")
 const PlaygroundNetCommand := preload("playground_net_command.gd")
 const PlaygroundNetLink := preload("playground_net_link.gd")
 const PlaygroundPlayer := preload("../playground_player.gd")
@@ -95,6 +96,11 @@ signal vote_cue_received(state: Dictionary)
 ## side.
 signal clock_received(state: Dictionary)
 
+## An inventory op this client predicted was refused, and has been rolled back. Client
+## side; the HUD says why, because a drag that springs back with no reason reads as a
+## broken grid.
+signal inventory_refused(reason: String)
+
 var game: Playground = null
 var net: DotNetManager = null
 var link: PlaygroundNetLink = null
@@ -121,6 +127,20 @@ var clock_fn: Callable = Callable()
 ## The map's time left as the server last described it. Client side; what the HUD draws.
 ## Never adopted means never told, which the HUD answers with the local clock.
 var clock_view: DotVoteClockView = DotVoteClockView.new()
+
+## dot-inventory's half of the wire. See [PlaygroundInventoryNet]; null when the game has
+## no inventory.
+var inventory_net: PlaygroundInventoryNet = null
+
+## [code](session_id: int) -> String[/code]: who a session IS, for a bag that should outlast
+## the connection. Server side. Empty or unset means the bag is the session's and goes with
+## it — which is right on a LAN, where nothing identifies anybody twice. The module sets it
+## to the same key the statistics are filed under.
+var inventory_key_fn: Callable = Callable():
+	set(value):
+		inventory_key_fn = value
+		if inventory_net != null:
+			inventory_net.bag_key_fn = value
 
 var _entities: Node = null
 var _behaviours: Dictionary = {}
@@ -201,6 +221,8 @@ func attach(p_game: Playground, p_net: DotNetManager, link_parent: Node) -> DotR
 
 	link = PlaygroundNetLink.attached_to(link_parent, self, net.is_server)
 
+	_attach_inventory()
+
 	# Both ends: the server's tick is server_tick, and the client's is client_tick,
 	# which simulates what it predicts and leaves the rest to interpolation. A client
 	# game still running its own loop would simulate the local player twice a tick and
@@ -221,6 +243,36 @@ func attach(p_game: Playground, p_net: DotNetManager, link_parent: Node) -> DotR
 		game.run_filed.connect(_on_run_filed)
 
 	return DotResult.success(true)
+
+
+## Builds the inventory's half of the wire, when the game has an inventory.
+##
+## [b]Through [method _tell] and never [method _broadcast], and the callables are why that
+## cannot drift.[/b] [PlaygroundInventoryNet] is given a way to reach ONE peer and no way to
+## reach everybody, so a bag cannot be broadcast by a later edit that picks the wrong helper.
+func _attach_inventory() -> void:
+	if game.inventory == null:
+		return
+
+	inventory_net = PlaygroundInventoryNet.new()
+	inventory_net.name = "Inventory"
+	add_child(inventory_net)
+
+	if net.is_server:
+		inventory_net.bind_server(game.inventory)
+		inventory_net.tell_fn = func(peer_id: int, body: PackedByteArray) -> void:
+			_tell(peer_id, PlaygroundEvents.Kind.INVENTORY, body)
+		inventory_net.notice_fn = func(peer_id: int, text: String) -> void:
+			_tell(peer_id, PlaygroundEvents.Kind.NOTICE,
+				PlaygroundEvents.write_notice(player_for_peer(peer_id), text))
+		inventory_net.charge_fn = _charge
+		inventory_net.bag_key_fn = inventory_key_fn
+	else:
+		inventory_net.bind_client(game.inventory)
+		inventory_net.ask_fn = func(body: PackedByteArray) -> void:
+			_ask(PlaygroundEvents.Ask.INVENTORY, body)
+		inventory_net.refused.connect(func(reason: String) -> void:
+			inventory_refused.emit(reason))
 
 
 ## How every dot-net message reaches a peer.
@@ -318,6 +370,10 @@ func remove_player(session_id: int) -> void:
 	# Releasing first empties _behaviours, so that handler finds nothing and this
 	# function stays the one place a leaving player is announced.
 	_release_entity(session_id)
+
+	if inventory_net != null:
+		inventory_net.release(peer_id, session_id)
+
 	game.remove_player(_player_key(session_id))
 
 	if net != null and peer_id > 0:
@@ -561,6 +617,11 @@ func ensure_game_ticked(tick: int) -> void:
 	for instance_id in _prop_nets:
 		(_prop_nets[instance_id] as PlaygroundPropNet).pull()
 
+	# Every bag the server changed this tick, to its owner, once. After the game ticked,
+	# because a spawn from the bag happens inside it.
+	if inventory_net != null:
+		inventory_net.flush()
+
 
 ## Runs one player's physics gun or gravity gun from the buttons their command carried.
 ##
@@ -653,6 +714,9 @@ func client_tick(tick: int, command: DotFpsCommand) -> void:
 	# The client game ticks once: predicted players simulate through their behaviours,
 	# and every timer — including remote players' — is fed afterwards. Props are not
 	# simulated here at all; they are drawn from snapshots.
+	if inventory_net != null:
+		inventory_net.poll()
+
 	if _client_ticked_for != tick:
 		_client_ticked_for = tick
 		for identity in net.registry.predicted():
@@ -766,6 +830,12 @@ func _admit(peer_id: int) -> void:
 			behaviour.net_position
 		))
 
+	# And their own bag, whole — to them and to nobody else. A player who reconnects is
+	# somebody with a bag already, and a client that waited for the next change to learn
+	# what it is carrying would show an empty grid until it bought something.
+	if inventory_net != null:
+		inventory_net.admit(peer_id, session_id)
+
 
 func _join_body(session_id: int) -> PackedByteArray:
 	var behaviour: PlaygroundPlayerNet = _behaviours.get(session_id)
@@ -868,6 +938,18 @@ func ask_rtv() -> void:
 	_ask(PlaygroundEvents.Ask.RTV, PackedByteArray())
 
 
+## Buys one of [param item_id] into this client's bag. Client side.
+func ask_buy(item_id: StringName) -> void:
+	if inventory_net != null and not net.is_server:
+		inventory_net.ask_buy(item_id)
+
+
+## This client's own bag, to predict ops on — `apply` sends them — or null before the
+## server has said whose it is. Client side.
+func inventory_manager() -> DotInvManager:
+	return inventory_net.local_manager() if inventory_net != null and not net.is_server else null
+
+
 func ask_style(style_id: StringName) -> void:
 	_ask(PlaygroundEvents.Ask.STYLE, PlaygroundEvents.write_index(_style_index(style_id)))
 
@@ -940,6 +1022,9 @@ func _on_request(message: DotNetMessage) -> void:
 		PlaygroundEvents.Ask.STYLE:
 			if game.set_player_style(id, _style_id(PlaygroundEvents.read_index(reader))):
 				_broadcast(PlaygroundEvents.Kind.JOIN, _join_body(session_id))
+		PlaygroundEvents.Ask.INVENTORY:
+			if inventory_net != null:
+				inventory_net.on_ask(peer_id, session_id, reader)
 
 
 ## Asked before anything is spawned or given, and charged for if it is allowed.
@@ -953,12 +1038,28 @@ func _on_request(message: DotNetMessage) -> void:
 ## exists, and there is no second code path to keep in step.
 var charge_fn: Callable = Callable()
 
+## Asked before something is spawned, and charges nothing. The shop's `may_have`.
+##
+## [code](player_id: StringName, thing_id: StringName) -> DotResult[/code]
+##
+## What lets a spawn be paid for AFTER it happened without spawning things nobody can
+## afford — see [method _spawn_for]. Unset answers yes, and the charge after the spawn is
+## then the only check.
+var may_charge_fn: Callable = Callable()
+
 
 ## Charge for something, or say why not. Success when nothing is charging.
 func _charge(id: StringName, thing_id: StringName) -> DotResult:
 	if not charge_fn.is_valid():
 		return DotResult.success(null)
 	return charge_fn.call(id, thing_id) as DotResult
+
+
+## Whether [method _charge] would succeed, charging nothing. Success when nothing is asking.
+func _may_charge(id: StringName, thing_id: StringName) -> DotResult:
+	if not may_charge_fn.is_valid():
+		return DotResult.success(null)
+	return may_charge_fn.call(id, thing_id) as DotResult
 
 
 ## Spawns in front of the player who asked, which is what the menu means by "spawn".
@@ -978,20 +1079,65 @@ func _spawn_for(id: StringName, prop_id: StringName) -> void:
 			PlaygroundEvents.write_notice(session_of(id), "No such prop: %s" % prop_id))
 		return
 
-	# Paid for first, and refused with a reason. A refusal that says nothing is the one
-	# thing a price list must not do: the player presses the button, nothing appears,
-	# and there is no way to tell it from a broken menu.
-	var paid := _charge(id, def.id)
+	# [b]Carried first.[/b] Something in the bag was paid for when it went in, so spawning
+	# it costs nothing and takes it out — which is what the bag is FOR: without this a
+	# purchase into it bought a grid cell and nothing else, and every spawn was charged
+	# again. Taken only once the spawner has said yes, so a spawn the prop budget refuses
+	# leaves the bag as it was.
+	var bag := inventory_net.bag_key(session_of(id)) if inventory_net != null else &""
+	if bag != &"" and game.inventory.carries(bag, def.id) > 0:
+		var at_bag := player.eye_position() + player.aim_direction() * 3.0
+		if game.props.spawn(def.id, id, at_bag) != null:
+			var taken := game.inventory.take(bag, def.id)
+			if not taken.ok:
+				DotLog.warn(CHANNEL, "a prop spawned from a bag that then refused to give it up", {
+					"player": String(id), "prop": String(def.id), "why": taken.error.message,
+				})
+		return
 
-	if not paid.ok:
+	# [b]Asked, spawned, and only THEN charged.[/b] It was charged first, so a spawn the
+	# prop budget refused had already been paid for: credits gone and nothing in the world,
+	# which is the one bug report a shop must not produce (and which `PlaygroundShop.charge`
+	# says in as many words). Refunding on a refusal is the other order and it is not
+	# atomic: dot-economy's refund is a POLICY — off on a server with `refund_ticks` 0, off
+	# for an item that is not refundable, closed with the buy window — so a refund can itself
+	# be refused, on exactly the servers that turned refunds off. The spawner's refusals, on
+	# the other hand, are many (budget, interval, size, entitlement, missing content, no
+	# world) and only known by trying, while "can they afford it" is one read that changes
+	# nothing. So: that read, then the spawn, then the charge.
+	#
+	# Refused with a reason. A refusal that says nothing is the one thing a price list must
+	# not do: the player presses the button, nothing appears, and there is no way to tell it
+	# from a broken menu.
+	var affordable := _may_charge(id, def.id)
+
+	if not affordable.ok:
 		_tell(peer_for_player(session_of(id)), PlaygroundEvents.Kind.NOTICE,
-			PlaygroundEvents.write_notice(session_of(id), paid.error.message))
+			PlaygroundEvents.write_notice(session_of(id), affordable.error.message))
 		return
 
 	# Three metres in front of the eye, the same distance `pg_prop` uses. A player who
 	# spawns a crate expects it where they are looking, not at their feet.
 	var at := player.eye_position() + player.aim_direction() * 3.0
-	game.props.spawn(def.id, id, at)
+	var spawned := game.props.spawn(def.id, id, at)
+
+	if spawned == null:
+		# Refused by the spawner, which has already told the player why through `refused`
+		# (see _on_prop_refused). Nothing has been charged.
+		return
+
+	var paid := _charge(id, def.id)
+
+	if not paid.ok:
+		# The question said yes and the purse said no — nothing runs between the two on
+		# this thread, so this is a charge_fn with no may_charge_fn beside it, or two that
+		# disagree. Taken back out rather than left standing for free.
+		game.props.remove(spawned.instance_id, DotPropSpawner.REASON_CLEANUP)
+		_tell(peer_for_player(session_of(id)), PlaygroundEvents.Kind.NOTICE,
+			PlaygroundEvents.write_notice(session_of(id), paid.error.message))
+		DotLog.warn(CHANNEL, "a spawn was refused its charge after it had been placed", {
+			"player": String(id), "prop": String(def.id), "why": paid.error.message,
+		})
 
 
 func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> void:
@@ -1130,6 +1276,9 @@ func _on_event(message: DotNetMessage) -> void:
 			if bool(clock["ok"]):
 				clock_view.adopt(clock, Time.get_ticks_msec() / 1000.0)
 				clock_received.emit(clock)
+		PlaygroundEvents.Kind.INVENTORY:
+			if inventory_net != null:
+				inventory_net.on_tell(reader)
 
 
 func _apply_hello(reader: DotNetReader) -> void:
@@ -1138,6 +1287,10 @@ func _apply_hello(reader: DotNetReader) -> void:
 		return
 
 	local_player_id = int(hello["player_id"])
+
+	# Before anything else arrives for it: the bag that follows is this identity's.
+	if inventory_net != null:
+		inventory_net.on_hello(local_player_id)
 
 	# [b]The server's tick rate, before anything is derived from it.[/b] game-g2gfast
 	# shipped with HELLO carrying this and nothing reading it: a browser client counted
@@ -1157,6 +1310,8 @@ func _apply_hello(reader: DotNetReader) -> void:
 	var map_id: StringName = hello["map_id"]
 	if map_id != &"" and (game.maps.current == null or game.maps.current.id != map_id):
 		game.change_map(map_id)
+
+	_claim_local_player()
 
 	hello_received.emit(local_player_id)
 
@@ -1217,7 +1372,15 @@ func _apply_join(reader: DotNetReader) -> void:
 		player.sampler = null
 		player.samples_input = false
 
-		var identity := _build_entity(player, 0)
+		# [b]This client's own player is owned by this client, and nobody else is.[/b] Until
+		# 2026-09-25 every mirror was built with owner 0, the local one included — so on a
+		# connected client `is_owner` was false for it, `registry.predicted()` was empty,
+		# `client_tick` simulated nobody, and the player moved only when a snapshot came
+		# back: INPUT_LEAD + 1 ticks behind the key. No check saw it, because "it moves" and
+		# "the server agrees" both hold for a client that adopts every snapshot, and the
+		# correction rate is lowest of all for a predictor that never runs. headless_net's
+		# "this client predicts its own player" is the section that sees it.
+		var identity := _build_entity(player, _mirror_owner(session_id))
 		var registered := net.registry.register(
 			identity, int(join["net_id"]), net.clock.tick, net.config
 		)
@@ -1230,6 +1393,56 @@ func _apply_join(reader: DotNetReader) -> void:
 
 	game.set_player_style(id, _style_id(int(join["style_index"])))
 	roster_changed.emit(session_id)
+
+
+## Who owns a mirrored player on this client: this client, if it is this client's own
+## player, and the server's 0 otherwise.
+##
+## [b]Matched by session id, not sent on the wire.[/b] game-g2gfast and game-arena put the
+## owner's peer id in JOIN instead; that changes the JOIN format, and then a client can only
+## predict if its own `local_peer_id` is exactly the number the server knows it by. Here the
+## session id HELLO already carries is the whole answer, the wire is unchanged, and the
+## owner on this side is `net.local_peer_id` whatever that turns out to be — `is_owner` is
+## owner == local peer, so the two can never disagree. The server's own `until_acked` rule
+## uses the server's copy of the owner, which was always right.
+##
+## [b]Never the local peer for anybody else[/b], or this client would predict somebody whose
+## keys it never had. And a client whose local peer is 0 claims nothing: 0 is the server's
+## owner id, and on such a registry dot-net's `is_owner` is already true of every owner-0
+## mirror — which this cannot undo, and which no client here runs into, because
+## `PlaygroundClient` takes its id from the multiplayer API and that never answers 0.
+func _mirror_owner(session_id: int) -> int:
+	if net == null or net.local_peer_id <= 0:
+		return 0
+
+	if local_player_id != 0 and session_id == local_player_id:
+		return net.local_peer_id
+
+	return 0
+
+
+## The local player's mirror, claimed if it arrived before HELLO said whose it was.
+##
+## Not the order `_admit` sends in, which is why this is belt and braces rather than a path
+## this game takes: a JOIN broadcast that reached this peer before its HELLO would otherwise
+## leave the local player unpredicted for the rest of the session, with every other check
+## still passing — which is the bug [method _apply_join] documents. A vehicle is never
+## claimed: it is not a player mirror, and a rigid body is not predicted (family decision).
+func _claim_local_player() -> void:
+	var mine: PlaygroundPlayerNet = _behaviours.get(local_player_id)
+
+	if mine == null or mine.identity == null or not mine.identity.is_registered():
+		return
+
+	var claimed := _mirror_owner(local_player_id)
+
+	if claimed == 0 or mine.identity.owner_peer_id == claimed:
+		return
+
+	DotLog.debug(CHANNEL, "claimed the local player after HELLO", {
+		"session": local_player_id, "net_id": mine.identity.net_id,
+	})
+	var _changed := net.registry.change_owner(mine.identity.net_id, claimed)
 
 
 ## Builds the client's copy of a prop and mirrors the net id it was given.
@@ -1537,4 +1750,5 @@ func describe() -> Dictionary:
 		"local": local_player_id,
 		"tick": _tick,
 		"link": link.describe() if link != null else {},
+		"inventory": inventory_net.describe() if inventory_net != null else {},
 	}

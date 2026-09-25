@@ -15,6 +15,7 @@ const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
 ## [codeblock]
 ## tools/screenshot_net.sh                # four consecutive frames, screenshots/net_0..3.png
 ## tools/screenshot_net.sh --no-interp    # the same with the client's interpolation off
+## tools/screenshot_net.sh --walk         # THIS client strafes its own player: is it predicted?
 ## [/codeblock]
 ##
 ## A server and a client in one process, joined by the loopback `headless_net` uses: the
@@ -27,6 +28,16 @@ const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
 ## the same every frame, and the share of frames far from the typical one is the judder.
 ## `--no-interp` shows what that share is when it is wrong, because a number with nothing
 ## to compare it to proves nothing.
+##
+## [b]`--walk` is the other probe: this client's OWN player.[/b] It stands for three quarters
+## of a second, strafes east for 90 ticks, stands, strafes back, through the same `client_tick` the
+## real client calls, and reports what a player feels: how many ticks after a key is pressed
+## the player's node moves (0 is the tick it was pressed in), the predictor's corrections,
+## and the eye's apparent speed per rendered frame while the server has them at full speed.
+## Until 2026-09-25 the client predicted nobody — every mirror was owner 0 — and this is where
+## that shows as a number: 3 ticks from key to motion, and an eye that moved only on the
+## frames a snapshot landed. Snapshots at 32 a second in this mode, as `PlaygroundClient`
+## asks for; the remote-player probe keeps the 20 its figures were taken at.
 ##
 ## xvfb-run, never --headless: headless gives a null renderer and saves a frame of nothing.
 
@@ -62,6 +73,24 @@ var _speeds: Array[float] = []
 var _last_drawn := Vector3.INF
 var _home := Vector3.ZERO
 
+## `--walk`: see the class note. Ticks into the cycle, the tick and place of the current
+## press, and what was measured.
+var _walk := false
+var _walk_tick := 0
+var _pressed_at := -1
+var _pressed_from := Vector3.ZERO
+var _pressed_sign := 1.0
+var _latencies: Array[int] = []
+var _eye_speeds: Array[float] = []
+var _last_eye := Vector3.INF
+var _walk_ticks := 0
+var _corrections_from := -1
+
+## Long enough to come to rest: friction takes most of a second off a full-speed strafe, and
+## a press measured while the last one is still sliding is measured against the slide.
+const WALK_IDLE := 96
+const WALK_RUN := 90
+
 
 func _ready() -> void:
 	DotLog.set_level(DotLog.Level.ERROR)
@@ -80,6 +109,8 @@ func _run() -> void:
 			out = arg.substr(6)
 		elif arg == "--no-interp":
 			_interp = false
+		elif arg == "--walk":
+			_walk = true
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://screenshots"))
 	await _build()
@@ -98,6 +129,8 @@ func _run() -> void:
 		print("saved %s" % path)
 
 	_report()
+	if _walk:
+		_report_walk()
 	# Stalls and extrapolations are frames the interpolator had nothing newer than its render
 	# time to blend toward and guessed instead, out of `samples`. Near zero on this loopback.
 	# Until 2026-09-24 it was most frames — 1,684 stalls in six seconds — because dot-net
@@ -193,6 +226,8 @@ func _make_manager(
 
 	var config := DotNetConfig.new()
 	config.tick_rate = tick_rate
+	if _walk:
+		config.snapshot_rate = 32
 	config.enable_lag_compensation = false
 	config.enable_prediction = true
 	config.world_extent = 512.0
@@ -227,8 +262,60 @@ func _physics_process(delta: float) -> void:
 	var _ticks := _client_net.clock.advance(delta)
 	_server_bridge.server_tick(_tick)
 	_flush()
-	_client_bridge.client_tick(_tick + INPUT_LEAD, DotFpsCommand.new())
+	_client_bridge.client_tick(_tick + INPUT_LEAD, _local_command())
 	_flush()
+
+	if _walk:
+		_watch_the_press()
+
+
+## What this client's own keys say this tick: nothing, or with `--walk` the cycle in the
+## class note. Facing north, as the camera does, and strafing, so the view never turns and
+## what moves on screen is the eye.
+func _local_command() -> DotFpsCommand:
+	var command := DotFpsCommand.new()
+
+	if not _walk or not _placed or _settle > 0:
+		return command
+
+	var cycle := WALK_IDLE + WALK_RUN
+	var at := _walk_tick % cycle
+	var east := (_walk_tick / cycle) % 2 == 0
+	_walk_tick += 1
+	_walk_ticks += 1
+
+	command.yaw = 0.0
+	if at >= WALK_IDLE:
+		command.move = Vector2(1.0 if east else -1.0, 0.0)
+
+		if at == WALK_IDLE:
+			var mine: PlaygroundPlayer = _client_game.players.get(&"u%d" % SESSION)
+			if mine != null:
+				_pressed_at = _tick
+				_pressed_from = mine.global_position
+				_pressed_sign = 1.0 if east else -1.0
+
+	if _corrections_from < 0:
+		var d := _client_net.predictor.describe()
+		_corrections_from = int(d["corrections"]) + int(d["snaps"])
+
+	return command
+
+
+## The first tick after a press on which this client's player NODE has moved the way the key
+## says: the node is what the camera's eye and the body are drawn from. Along the key's axis,
+## so the tail of the previous strafe — the other way — is not counted as the answer.
+func _watch_the_press() -> void:
+	if _pressed_at < 0:
+		return
+
+	var mine: PlaygroundPlayer = _client_game.players.get(&"u%d" % SESSION)
+	if mine == null:
+		return
+
+	if (mine.global_position.x - _pressed_from.x) * _pressed_sign > 0.001:
+		_latencies.append(_tick - _pressed_at)
+		_pressed_at = -1
 
 
 ## Bea runs back and forth across Ada's view, driven the way her client would drive her: the
@@ -274,9 +361,23 @@ func _process(delta: float) -> void:
 	var _shown := PlaygroundClient.present_frame(_client_net if _interp else null, _client_game)
 
 	if mine != null:
-		var eye := mine.eye_position()
+		# Where the real client draws its eye (`PlaygroundClient._process`).
+		var eye := mine.render_eye_position()
 		_camera.global_position = eye
 		_camera.look_at(eye + Vector3(0.0, -0.2, -1.0), Vector3.UP)
+
+		# The eye's apparent speed while the SERVER has this player strafing flat out: the
+		# same measurement as the other probe, on the one player nobody sees from outside.
+		if _walk and delta > 0.0:
+			var server_mine: PlaygroundPlayer = _server_game.players.get(&"u%d" % SESSION)
+			var flat := 0.0
+			if server_mine != null:
+				flat = Vector2(
+					server_mine.controller.state.velocity.x, server_mine.controller.state.velocity.z
+				).length()
+			if _last_eye != Vector3.INF and flat > 5.0 and _settle <= 0:
+				_eye_speeds.append(eye.distance_to(_last_eye) / delta)
+			_last_eye = eye
 
 	var theirs: PlaygroundPlayer = _client_game.players.get(&"u%d" % OTHER_SESSION)
 	var bea: PlaygroundPlayer = _server_game.players.get(&"u%d" % OTHER_SESSION)
@@ -295,6 +396,44 @@ func _process(delta: float) -> void:
 		_speeds.append(at.distance_to(_last_drawn) / delta)
 
 	_last_drawn = at
+
+
+func _report_walk() -> void:
+	var d := _client_net.predictor.describe()
+	var seconds := float(_walk_ticks) / float(maxi(_client_game.tick_rate, 1))
+	var corrections := int(d["corrections"]) + int(d["snaps"]) - maxi(_corrections_from, 0)
+
+	var lat := "none seen"
+	if not _latencies.is_empty():
+		var sorted := _latencies.duplicate()
+		sorted.sort()
+		lat = "%d presses, %d..%d ticks (median %d)" % [
+			sorted.size(), sorted[0], sorted[sorted.size() - 1], sorted[sorted.size() / 2]
+		]
+
+	var eye := "nothing sampled"
+	if not _eye_speeds.is_empty():
+		var sorted_eye := _eye_speeds.duplicate()
+		sorted_eye.sort()
+		var median: float = sorted_eye[sorted_eye.size() / 2]
+		var still := 0
+		var off := 0
+		for v in _eye_speeds:
+			if v < 0.01:
+				still += 1
+			if absf(v - median) / maxf(median, 0.001) > 0.2:
+				off += 1
+		eye = "%d frames, median %.2f m/s, %d standing still, %d more than 20%% off (%.0f%%)" % [
+			_eye_speeds.size(), median, still, off, 100.0 * off / float(_eye_speeds.size())
+		]
+
+	print("walk: predicted %d of %d players; key to motion: %s" % [
+		_client_net.registry.predicted().size(), _client_game.players.size(), lat
+	])
+	print("walk: %.1f s walking, %d corrections and snaps; predictor %s" % [
+		seconds, corrections, str(d)
+	])
+	print("walk: this client's eye: %s" % eye)
 
 
 func _report() -> void:

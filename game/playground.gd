@@ -4,6 +4,7 @@ const PlaygroundPaths := preload("playground_paths.gd")
 
 const PlaygroundConfig := preload("playground_config.gd")
 const PlaygroundEntity := preload("entities/playground_entity.gd")
+const PlaygroundInventory := preload("playground_inventory.gd")
 const PlaygroundMap := preload("playground_map.gd")
 const PlaygroundPlayer := preload("playground_player.gd")
 const PlaygroundPlayerStack := preload("playground_player_stack.gd")
@@ -175,6 +176,15 @@ var npc_candidates: Array = []
 ## What a player may hold. See [PlaygroundWeapons].
 var weapons: Array[PlaygroundWeaponDef] = []
 
+## What every player is carrying — prepaid props, a grid and a weight. See
+## [PlaygroundInventory], and [PlaygroundInventoryNet] for how it crosses a wire.
+##
+## [b]The game's, on both ends, and authoritative exactly when the game is.[/b] A server
+## holds one bag per person and decides; a client holds its OWN bag and nobody else's, and
+## predicts. It was built by nothing until 2026-09-25 — the class existed, its suite
+## passed, and no running game had an inventory at all.
+var inventory: PlaygroundInventory = null
+
 ## The node loaded maps and spawned props are put under.
 var world: Node3D = null
 
@@ -259,6 +269,7 @@ func _ready() -> void:
 	_build_leaderboards()
 	_build_timers()
 	_build_props()
+	_build_inventory()
 	_build_vehicles()
 	_build_npc_senses()
 	_build_maps()
@@ -591,6 +602,23 @@ func _build_props() -> void:
 	props.removed.connect(_on_prop_removed)
 
 	add_child(props)
+
+
+## After the props, because the item catalogue is derived from the prop catalogue — one
+## list, so a prop somebody adds can be carried without anybody remembering to say so.
+func _build_inventory() -> void:
+	inventory = PlaygroundInventory.new()
+	inventory.name = "Inventory"
+	inventory.authoritative = authoritative
+	add_child(inventory)
+
+	var res := inventory.setup(props.catalogue, service_scope)
+
+	if not res.ok:
+		DotLog.warn(CHANNEL, "the inventory is off", {"why": res.error.message})
+		remove_child(inventory)
+		inventory.queue_free()
+		inventory = null
 
 
 ## Builds a spawned prop's body from the definition it came from.

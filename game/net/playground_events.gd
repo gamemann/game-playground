@@ -52,6 +52,9 @@ enum Kind {
 	## The map's time left, from the vote's clock: sent when it changes rather than
 	## counted, so an extend reaches the HUD. Last, for the same reason.
 	CLOCK,
+	## The player's OWN inventory: an answer to one op they sent, or the whole bag. Only
+	## ever to the owner's peer — see [PlaygroundInventoryNet]. Last, for the same reason.
+	INVENTORY,
 }
 
 enum Ask {
@@ -88,6 +91,10 @@ enum Ask {
 	VOTE,
 	## Here is what I want to spawn with.
 	LOADOUT,
+	## Something about my inventory: an op I have already predicted, a request for the
+	## whole bag, or a purchase into it. One kind with a sub-kind, because this enum is
+	## [constant PlaygroundRequest.KIND_BITS] wide and three would have filled it.
+	INVENTORY,
 }
 
 ## Every decoder returns an `ok` alongside its fields, and every caller checks it.
@@ -674,3 +681,168 @@ static func read_loadout(reader: DotNetReader) -> Dictionary:
 		pairs.append([slot, item])
 
 	return {"pairs": pairs, "ok": reader.ok()}
+
+
+# --- Inventory -------------------------------------------------------------
+
+## What an [constant Ask.INVENTORY] carries.
+enum InvAsk {
+	## An op the client has already applied to its own copy: a sequence number and the op.
+	OP,
+	## "Send me the whole bag": the newest sequence number this client has used.
+	RESYNC,
+	## Buy one of this into the bag, through the shop.
+	BUY,
+}
+
+## What a [constant Kind.INVENTORY] carries.
+enum InvTell {
+	## The answer to one op: its sequence number, yes or no, and why not.
+	ACK,
+	## The whole bag, and the newest sequence number it already reflects.
+	DOC,
+}
+
+const INV_SUB_BITS := 2
+const INV_CONTAINER_BYTES := 48
+const INV_REASON_BYTES := 120
+## A JSON document. A full 10x6 bag of one-cell items is about five kilobytes, inside
+## [constant PlaygroundEvent.MAX_BODY]; see [method write_inv_doc] for what happens past it.
+const INV_DOC_BYTES := 12000
+const INV_OP_KIND_BITS := 3
+const INV_CELL_MIN := -1
+const INV_CELL_MAX := 254
+
+
+## One op, and its sequence number.
+##
+## [b]Field by field, and deliberately without [code]state[/code].[/b] `DotInvOp.state`
+## is "whatever a game wants to carry with an ADD — durability, an enchantment, a
+## serial", which is exactly what a client must not get to write: a client ADD is refused
+## anyway, and a state that crossed the wire on a MOVE would be a way to stamp a serial
+## on something. The [code]actor[/code] is absent too, as dot-inventory insists — the
+## server sets it from the peer the request arrived on.
+static func write_inv_op(seq: int, op: Dictionary) -> PackedByteArray:
+	var w := _w()
+	w.write_uint(InvAsk.OP, INV_SUB_BITS)
+	w.write_varint(maxi(seq, 0))
+	w.write_uint(clampi(int(op.get("kind", 0)), 0, (1 << INV_OP_KIND_BITS) - 1), INV_OP_KIND_BITS)
+	w.write_string(str(op.get("from", "")), INV_CONTAINER_BYTES)
+	w.write_varint(maxi(int(op.get("from_uid", 0)), 0))
+	w.write_string(str(op.get("to", "")), INV_CONTAINER_BYTES)
+	var cell: Variant = op.get("cell", [0, 0])
+	var cx := 0
+	var cy := 0
+	if cell is Array and (cell as Array).size() >= 2:
+		cx = int(cell[0])
+		cy = int(cell[1])
+	w.write_svarint(clampi(cx, INV_CELL_MIN, INV_CELL_MAX))
+	w.write_svarint(clampi(cy, INV_CELL_MIN, INV_CELL_MAX))
+	w.write_bool(bool(op.get("rotated", false)))
+	w.write_varint(maxi(int(op.get("to_uid", 0)), 0))
+	w.write_varint(maxi(int(op.get("count", 1)), 0))
+	w.write_string(str(op.get("item", "")), ID_BYTES)
+	return w.to_bytes()
+
+
+## Reads the sub-kind every [constant Ask.INVENTORY] starts with.
+static func read_inv_ask(r: DotNetReader) -> int:
+	return r.read_uint(INV_SUB_BITS)
+
+
+## The rest of an [constant InvAsk.OP], after [method read_inv_ask]. The op comes back as
+## the dictionary [method DotInvOp.from_dictionary] reads.
+static func read_inv_op(r: DotNetReader) -> Dictionary:
+	var seq := r.read_varint()
+	var op := {
+		"kind": r.read_uint(INV_OP_KIND_BITS),
+		"from": r.read_string(INV_CONTAINER_BYTES),
+		"from_uid": r.read_varint(),
+		"to": r.read_string(INV_CONTAINER_BYTES),
+		"cell": [r.read_svarint(), r.read_svarint()],
+		"rotated": r.read_bool(),
+		"to_uid": r.read_varint(),
+		"count": r.read_varint(),
+		"item": r.read_string(ID_BYTES),
+		"state": {},
+	}
+	return {"seq": seq, "op": op, "ok": r.ok()}
+
+
+static func write_inv_resync(seq: int) -> PackedByteArray:
+	var w := _w()
+	w.write_uint(InvAsk.RESYNC, INV_SUB_BITS)
+	w.write_varint(maxi(seq, 0))
+	return w.to_bytes()
+
+
+static func read_inv_resync(r: DotNetReader) -> Dictionary:
+	var seq := r.read_varint()
+	return {"seq": seq, "ok": r.ok()}
+
+
+static func write_inv_buy(item_id: StringName) -> PackedByteArray:
+	var w := _w()
+	w.write_uint(InvAsk.BUY, INV_SUB_BITS)
+	w.write_string(String(item_id), ID_BYTES)
+	return w.to_bytes()
+
+
+static func read_inv_buy(r: DotNetReader) -> Dictionary:
+	var item := StringName(r.read_string(ID_BYTES))
+	return {"item": item, "ok": r.ok()}
+
+
+static func write_inv_ack(seq: int, ok: bool, reason: String) -> PackedByteArray:
+	var w := _w()
+	w.write_uint(InvTell.ACK, INV_SUB_BITS)
+	w.write_varint(maxi(seq, 0))
+	w.write_bool(ok)
+	w.write_string(reason, INV_REASON_BYTES)
+	return w.to_bytes()
+
+
+## Reads the sub-kind every [constant Kind.INVENTORY] starts with.
+static func read_inv_tell(r: DotNetReader) -> int:
+	return r.read_uint(INV_SUB_BITS)
+
+
+static func read_inv_ack(r: DotNetReader) -> Dictionary:
+	var seq := r.read_varint()
+	var accepted := r.read_bool()
+	var reason := r.read_string(INV_REASON_BYTES)
+	return {"seq": seq, "accepted": accepted, "reason": reason, "ok": r.ok()}
+
+
+## The whole bag, as the JSON [method DotInvDoc.to_dictionary] was written to survive.
+##
+## [b]JSON rather than a field-by-field encoding, on purpose.[/b] `DotInvDoc` and
+## `DotInvContainer` write cells as two numbers because "a Vector2i does not survive JSON",
+## which makes JSON the format they claim — and the format a saved bag will be in. Sending
+## the same bytes a save would hold is what puts that claim through a real round trip every
+## time somebody joins, rather than a second encoding beside it that could drift.
+##
+## [b]Refused, not truncated, when it is too big.[/b] [method DotNetWriter.write_string]
+## truncates, and a truncated JSON document is one the client cannot parse — so it would
+## arrive as a bag the client silently fails to adopt. An empty result here is one
+## [method PlaygroundNetBridge._tell] refuses to send, and the caller logs it.
+static func write_inv_doc(through_seq: int, doc: Dictionary) -> PackedByteArray:
+	var text := JSON.stringify(doc)
+	if text.to_utf8_buffer().size() > INV_DOC_BYTES:
+		return PackedByteArray()
+	var w := _w()
+	w.write_uint(InvTell.DOC, INV_SUB_BITS)
+	w.write_varint(maxi(through_seq, 0))
+	w.write_string(text, INV_DOC_BYTES)
+	return w.to_bytes()
+
+
+static func read_inv_doc(r: DotNetReader) -> Dictionary:
+	var through := r.read_varint()
+	var text := r.read_string(INV_DOC_BYTES)
+	if not r.ok():
+		return {"ok": false}
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary):
+		return {"ok": false}
+	return {"through": through, "doc": parsed as Dictionary, "ok": true}

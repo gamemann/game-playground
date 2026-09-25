@@ -68,6 +68,8 @@ game/
     playground_weapon_def.gd  one weapon, as a document
     playground_weapon.gd      the base: two buttons and a tick. Extends DotPropTool
     swep_*.gd                 the shipped weapons. `extends` a PATH, deliberately
+  playground_inventory.gd  the bag: an item per prop, one bag per person, give/take/may_give
+  net/playground_inventory_net.gd  the bag over dot-net: ops with sequence numbers, acks, whole-bag corrections
   playground_hud.gd      the clock, the speed, the crosshair, what is in your hands, a blind
   playground_beacon.gd   an admin's beacon: a ring, a ripple and a column through walls
   playground_geometry.gd dev-textured boxes and ramps, in code
@@ -80,7 +82,8 @@ maps/
   *.zones.json           generated from the maps, and checked against them
 tools/
   export_zones.gd        writes those files. Run it after changing a map
-  screenshot_net.gd/.sh  a CONNECTED client watching another player, with a jitter probe
+  screenshot_net.gd/.sh  a CONNECTED client watching another player, with a jitter probe;
+                         --walk: its own player, key-to-motion ticks and eye speed
 examples/
   headless_playground.gd the integration suite
   dedicated.gd           a real DotServer, the module, and its commands
@@ -943,6 +946,7 @@ becomes administrable:
 | `pg_waves` | the director's NPCs, off by default |
 | `pg_vote` | what plays next |
 | `pg_achievements` | what somebody has earned |
+| `pg_give` `pg_inv` | put something in somebody's bag, and read it |
 
 **The zone commands are `CHANGEMAP`, not `GENERIC`.** Drawing a start line is editing
 the map's rules, and somebody who can do it can invalidate every record on it.
@@ -1063,8 +1067,8 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 382 checks, 22 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
-godot --headless --path . res://examples/headless_net.tscn          # 156 checks, 17 sections
-godot --headless --path . res://examples/dedicated.tscn             # 209 checks, 23 sections
+godot --headless --path . res://examples/headless_net.tscn          # 255 checks, 27 sections
+godot --headless --path . res://examples/dedicated.tscn             # 214 checks, 24 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
@@ -1192,6 +1196,8 @@ be a way round that.
 The charge happens through `PlaygroundNetBridge.charge_fn` — a callable, not a reference to
 the shop, because the bridge is dot-net's half of this game and knows nothing about prices.
 Unset, everything is free, so no call site has to branch on whether a shop exists.
+
+**A spawn is asked, placed, and only then charged** (`_spawn_for`, with `may_charge_fn` = the shop's `may_have`). Until 2026-09-25 it charged first and spawned second, so a spawn the prop budget refused had already been paid for — the exact report `PlaygroundShop.charge`'s own comment says a shop must never produce, in the one caller that ignored it. Refunding on a refusal was the other fix and is not atomic: dot-economy's refund is a policy (off with `refund_ticks` 0, off for a non-refundable item, closed with the buy window), so it can itself be refused on precisely the servers that turned refunds off. The spawner's refusals are many and only known by trying; affordability is one read that changes nothing, and `buy` is `may_buy` plus the debit, so the two cannot disagree. A charge that still fails after the spawn — a `charge_fn` with no `may_charge_fn` beside it — takes the prop back out and says so at WARN. `headless_net`'s "a spawn the prop budget refuses costs nothing" fails on the old order (armed).
 
 ### `pg_spec`: a sandbox is where watching is not about being dead
 
@@ -1333,6 +1339,35 @@ applies locally, sends, and rolls back on a refusal. A server receiving *state* 
 to diff two documents, and a diff cannot tell "this crate moved" from "this crate was
 destroyed and an identical one appeared".
 
+**None of that was true of the running game until 2026-09-25.** `PlaygroundInventory` was built by nothing but `headless_presentation`: no `Playground` had an inventory, the shop charged per spawn exactly as the paragraph above says it no longer did, and "buying puts a thing in here; spawning takes it out" described a test. `Playground.inventory` is built on both ends now, authoritative exactly when the game is, and the bridge carries it. It is the first inventory in the family to cross a wire.
+
+### The bag over the wire
+
+`PlaygroundInventoryNet` (`game/net/`) is both halves, beside the bridge that routes `Ask.INVENTORY` and `Kind.INVENTORY` to it. Each shape below is the answer to the obvious alternative being wrong:
+
+- **A client sends ops, never state, and only four kinds.** MOVE, SPLIT, MERGE and DROP. An ADD from a client is a client giving itself something, and a USE is what spawning does; both are refused with an ack, and the client rolls its prediction back. The op crosses field by field and **without `state`**, which is the one field a client must not write — an ADD's durability or serial stamped on a MOVE.
+- **Every op has a sequence number, because two ops can be the same dictionary.** `DotInvManager.confirm` and `rollback` find an op by comparing `to_dictionary()`, and "drop one of #3" twice is two identical dictionaries. The number is also what makes an answer cumulative: acks come back in order on a reliable channel, so an ack for #6 while #5 waits means #5 never arrived — **dot-net drops a request past its per-peer message rate and tells nobody**, and without this a predicted op would sit in the client's bag for ever. An op lost at the tail has nothing after it to say so, and the client asks for the whole bag once the oldest answer is three seconds overdue.
+- **A refusal rewinds everything in flight, newest first, and replays the survivors — here, not in the addon.** This began as a workaround: `DotInvManager.rollback(op)` used to undo every op predicted after `op` too. It no longer does (it undoes one op and re-applies the rest, below), and the rewind stays anyway, because an answer carries more than one refusal: an ack for #6 while #4 and #5 wait means those two never arrived, and the client must take them out and keep #6. Which to keep is a question about sequence numbers, which the manager never sees — it names an op by its dictionary, and "drop one of #3" twice is two identical dictionaries. Rewinding the whole flight newest-first undoes everything whichever identical op the manager's matching picks, and the survivors are re-applied here, where each one's number is known.
+- **A change the server makes arrives as the whole bag, not as the op — by choice now, not by necessity.** dot-inventory's `apply_authoritative` can put a server's op on a predicting manager, underneath the predictions in flight, which removes both reasons this used to give (the op went straight back up as the client's own; first-fit placed it on the predicted layout). The document is still the better message: it **converges**, putting right whatever the client got wrong since the last one — a dropped op, a replay that diverged — where an op stream carries a divergence forward and nothing on the wire says so; it coalesces a tick's burst into one message; and the join and the resync need the document anyway, so ops would be a second path to the same state. It carries the newest sequence number it already includes, and the client replays whatever it has sent since on top — so a purchase landing mid-drag does not snap the drag back. Once per tick per bag, after the game ticked.
+- **Only ever to the owner.** Nothing about a bag is a replicated field, so dot-net's interest management never sees it and cannot leak it; every message goes through `_tell`, which refuses peer 0 because peer 0 is the broadcast address. `PlaygroundInventoryNet` is handed a way to reach one peer and no way to reach everybody, so a later edit cannot broadcast a bag by picking the wrong helper. A bot has a bag and no peer, and is told nothing.
+- **A bag belongs to a person, not to a connection.** dot-server's userid is sequential and a reconnect is a new one. `PlaygroundModule._bag_key_for` is the statistics key (`PlaygroundPlatform.key_for_session`) — the pseudonymous per-scope id with an identity stack — and the bag is kept across a disconnect under it. `local:<userid>` identifies nobody next time and is answered as empty, so on a LAN the bag goes with the session rather than one abandoned bag piling up per connection. The key a peer was admitted with is **remembered**, not recomputed on the way out, because by the time a disconnect is handled dot-server may no longer have the session.
+- **Every HELLO resets the client's bag and sequence**, even one naming the same userid: ops in flight from the old connection replayed onto the new bag would land on somebody else's layout under a sequence the server has forgotten.
+- **JSON for the whole bag.** `DotInvDoc` writes cells as two numbers because "a Vector2i does not survive JSON", so JSON is the format it claims and the one a saved bag will be in; the wire sends the same bytes, which puts that claim through a real round trip on every join. Too big to send is refused, not truncated: `DotNetWriter.write_string` truncates, and truncated JSON is a bag the client silently fails to adopt.
+- **Buying into the bag is checked, then charged, then given — and the check includes room** (`PlaygroundInventory.may_give`, which is `DotInvManager.validate` now that that asks room). Spawning something carried is free and takes it out, and it is taken only after the spawner said yes, so a budget refusal leaves the bag as it was. Spawning something bought is charged only after it exists (above, in the shop).
+- **The rate limit is the addon's, on the server, and the server's own changes are exempt.** Thirty ops a second per actor, and the actor is the session the request arrived on; `PlaygroundInventory.SERVER_ACTOR` is in every manager's `unlimited_actors`. A flood is refused by the manager and answered with an ack like any other refusal. Client managers are unlimited: a client limiting itself protects nothing, and after a whole-bag correction the client re-applies everything still in flight through `apply` in one frame.
+
+**What building it found.** Five, and four were dot-inventory's — all four fixed there on 2026-09-25, each reproduced in its own suite first (see its CLAUDE.md, "What a real wire found"):
+
+- **The server's own changes spent the player's rate budget.** `give` and `take` applied as the player's id, and `DotInvManager` rate-limits per actor at 30 a second: thirty beach balls into a sixty-cell bag and the thirty-first was "too many inventory operations" (measured). A separate actor only moved the cap onto the server's own changes, and `DotInvManager` had no way to exempt the authority — so for a while the managers here were built unlimited and the rule was re-implemented per peer on the wire. `DotInvManager.unlimited_actors` now exempts `SERVER_ACTOR`, the managers use their own limit again, and the wire limiter is gone (armed both ways: no exemption fails the thirty-five-ball check; no limit fails the flood).
+- **`DotInvManager.validate` passed an ADD into a full bag**, and `_do_add` then logged **ERROR** "an inventory operation failed after it had been validated" for an ordinary full bag. A shop asking only `validate` charged first. `may_give` used to ask first-fit itself; `validate` asks room now and `may_give` is one line. `headless_net` asserts the addon's own `validate` refuses a crate into a full bag, which is the check that said the opposite before.
+- **`DotInvManager.rollback` undid every later prediction too, and nothing applied a server op to a predicting manager.** Both fixed in the addon (`rollback` undoes one op and re-applies the rest; `apply_authoritative`). Neither workaround here was removed, for reasons that are now this file's rather than the addon's — the rewind needs sequence numbers the manager never sees, and the whole bag converges (both above).
+- **A MOVE re-allocated the entry's uid**, even within one container (`_do_move` removed and re-added). Ops name entries by uid, so a client that chains a second op onto the uid its first *predicted* named whatever the server allocated that number to — the right item when nothing else happened, and the wrong one if a server-originated ADD landed in between. Measured with two managers: a ball dragged twice, a crate given by the server between the two drags, and the server moved the CRATE on the second op — validly, so nothing was refused and the next whole bag simply showed the player a crate where they had put the ball. A move keeps its uid now (within a container always; across containers unless the destination already uses it), and dot-inventory's suite runs exactly that exchange. `headless_net` still compares uids on both ends after every exchange.
+- **Nothing built the inventory at all** (above).
+
+One more, the bridge's own, found in the same review: **a spawn the prop budget refused had already been charged for** (see the shop, above).
+
+`headless_net` has nine sections on it: the wire; a spawn the prop budget refuses, which costs nothing (and one nobody can afford, which places nothing); an op predicted and confirmed; two refusals rolled back — a client ADD with a good move behind it, and a move into a cell the server had just filled and not yet said so; ops lost in the middle and at the tail; a purchase, a refused purchase (a 900 kg boulder, and a full bag, which dot-inventory's own `validate` now refuses too) and a spawn from the bag; privacy, against a second peer, a bot on peer 0 and every event the server sent whether delivered or not; a flood past thirty a second; and a reconnect under a new userid getting the whole bag, including what an admin gave while they were away. Every one of the thirteen guards was armed (the refusal path as a plain `rollback`, a broadcast instead of `_tell`, non-cumulative acks, no poll, no room check, a limited manager, no HELLO reset, forgetting every bag, no spawn-from-bag, no flush, echoing a client's op back as a document, a truncated document, and the CHECKS total) and each fails at least one check. Re-armed on 2026-09-25 after dot-inventory's fixes, for the guards those changed: charging before the spawn (fails four), no `SERVER_ACTOR` exemption (fails four, the thirty-five-ball burst first), no limit on the server manager (fails the flood), and a limit on the client manager too (fails the flood and the HELLO reset). The room check now lives in dot-inventory and is armed there. `dedicated` runs `pg_give` and `pg_inv` at a real console and the `local:` filter (armed).
+
 ### The presentation layer
 
 Settings, randomness, audio, effects and a console. Two decisions are this game's own:
@@ -1459,6 +1494,26 @@ And a remote body kept whatever way it faced when built, because `drive_characte
 
 **A rider sits (6dbd015).** `PlaygroundCharacter.set_seated` drops the body by its leg height and swings the legs forward, turned to the vehicle's basis. `tools/screenshot_views.sh` renders `body_standing` and `rider_seated` side by side from the same spot.
 
+## A connected client predicted nobody, its own player included
+
+**Until 2026-09-25 `PlaygroundNetBridge._apply_join` built every mirrored player with owner 0** — the local one too. dot-net's `is_owner` is owner == local peer, so on a connected client the local player was not owned, `registry.predicted()` was empty, `client_tick` simulated nobody, and the player moved only when a snapshot came back. mg-buses-from-hell found the same line the same day; this is its fix, measured here first rather than assumed.
+
+**Measured before**, in `headless_net` and in `tools/screenshot_net.sh --walk` (a rendered client strafing its own player over the loopback): owner 0, `predicted()` empty, a key moving the client's player 0.0000 m on the tick it was pressed, 3 ticks from key to motion in the suite and 3..5 (median 5) in the render — on a 1 ms loopback, so a real link adds its whole round trip — and 0 predictor corrections, because the predictor never ran. The local player was being **interpolated like a remote one** (the interpolator had two tracks, not one), which is why nobody saw it: the eye was smooth, just late.
+
+**Why no check saw it.** "The client moves under its own prediction" and "the server agrees with it" both hold for a client that simply adopts every snapshot, and "the correction rate is low" is lowest of all — zero — for a predictor that never runs. Every one of the three passed for the wrong reason.
+
+**The fix, and why this shape rather than game-g2gfast's and game-arena's.** Those two send the owner's peer id in JOIN. Here `_mirror_owner(session_id)` owns the mirror with `net.local_peer_id` when the session id is the one HELLO named, and 0 for everybody else, and `_claim_local_player()` on HELLO takes the mirror over through `registry.change_owner` if JOIN got there first. No wire change, so an old server and a new client (or the reverse) still talk, and the owner on the client is whatever `local_peer_id` is — `is_owner` compares the two, so they cannot disagree, where a peer id sent on the wire is right only if the client's own copy is exactly the server's number (dot-net's #16 is that bug). A client learns nothing about other people's peer ids either. Vehicles are untouched: they are not player mirrors, and a rigid body is not predicted (the family's decision).
+
+**The claim is not belt and braces here, and that was measured too.** `add_player` broadcasts JOIN to every connected peer, the joiner included, before that peer has asked to be admitted, so in this suite's handshake JOIN arrives FIRST and the claim on HELLO is the path that makes the player predicted. Arming the JOIN-side owner alone (owner 0 in `_apply_join`, the claim kept) fails only the HELLO-first rebuild check; arming the claim alone fails nine.
+
+**And the camera needed a blend it had never had.** Predicted, the eye is the simulation's and moves once a tick, so on a 144 Hz screen against 128 ticks some frames advance it and some do not: 62 of 593 full-speed frames standing still, 19% more than 20% off the median. `PlaygroundPlayer.render_eye_position()` is `DotFpsController.render_state()` through the motor — the last two ticks blended by the engine's physics fraction, which the bridge makes a fraction through a tick by putting the engine on the server's rate — and `PlaygroundClient` draws its camera from it. Aim and traces still use `eye_position()`. Not while riding: the controller is not simulated in a vehicle and a blend toward a tick nothing simulated is the backward lurch mg-buses-from-hell measured at 137.9 m/s.
+
+**Measured after**, same render: 1 of 2 players predicted, 0 ticks from key to motion on every press, 2 corrections in 9.7 s (0.9%, worst error 0.018 m), and the eye at a median 7.00 m/s — the server's speed — with 0 frames standing still and 7% more than 20% off (before: 7.00 m/s, 0 still, 9% off, and five ticks late). The remote-player probe in the same run is unchanged (0 still, 4% off).
+
+`headless_net`'s **this client predicts its own player, and nobody else** is the section that sees it: the local mirror owned by the local peer and the one entity in `predicted()`; a second player, on a peer with no client here, mirrored as the server's and not predicted; a key moving the player — state and node — on the tick it is pressed with no server tick and no snapshot in between, while the server has not moved; key to motion over the link at zero ticks; a teleport only the server made (3 m) corrected by the predictor and converged to within 5 cm, in the state and on the node; and both arrival orders — a mirror handed back to the server and claimed again by HELLO, and a mirror forgotten and rebuilt owned by a JOIN after HELLO. Armed four ways: the old code (ten fail), the claim alone removed (nine), the owned JOIN alone removed (one, the HELLO-first rebuild), and predicting everybody (four: the second player, the count, and the remote body's even step and facing in "somebody else has a body", which a client simulating somebody it has no keys for spoils). Every other section still passes with the local player predicted — the vehicle ride included, whose `riding` branches in `PlaygroundPlayerNet` were written for a predicted entity and had never had one.
+
+**For the deployed game:** nothing on the wire and no `@rpc` set changed, and no `class_name` was added, so the client shell does not need a rebuild; the playground pack needs republishing from dot-server-deploy for clients to get it. A shell whose dot-player-controller predates `render_state` supporting `Drive.EXTERNAL` gets the raw tick state back from it — the stepping above, not a lurch.
+
 ## The chat box, and the channels it offers
 
 `PlaygroundPresentation` gives each of its seven audio ids a `DotAudioSynth` voice in `sound_recipes()`, because the catalogue named seven `.ogg` files nobody has produced and the sandbox was therefore silent while every check about its audio passed. `DotAudioSinkGodot` consults that bank only when a def's path resolves to nothing, so dropping the real files in switches the stand-ins off one id at a time. A sandbox makes noise for a different reason than a shooter does: almost nothing here is information a player has to act on, it is confirmation that the thing they just did happened — which is why `refused` gets a voice of its own rather than silence, since a buy that does nothing and a buy that was refused are otherwise indistinguishable. `wave_incoming` is the one ominous sound in the table, because it is the one thing in this game that arrives whether the player asked for it or not. `tools/audio_probe.sh` is what says a speaker actually moved; no assertion in `headless_presentation` can, because a headless run has no audio device.
@@ -1498,6 +1553,9 @@ The prop count is the spawner's own `world_count()` and the player count is the 
 Before it was closed it stood at 358 and 274, growing by one script's worth whenever a script was added, which is what said to find what held the graph rather than to stop preloading.
 
 ## Things deliberately not here
+
+- **A screen for the bag, and a key that buys into it.** The wire, the server's rules and the client's copy are all here (`PlaygroundNetBridge.inventory_manager()`, `ask_buy`); `DotInvPanel` is the grid, and its `_can_drop_data` asks the same `validate` the server does. A pickup — pocketing a prop you own back into the bag — is the other missing producer, and wants a use verb this game does not have yet (see `F` above). Weapons are not items: they are not in the prop catalogue and `weapon_changed` already carries them.
+- **Saving a bag.** Bags outlive a reconnect and not a restart. The document is already the JSON a save would be.
 
 - **`Kind.HELD`, and the three `ask_*` with no caller.** `PlaygroundEvents.write_held` /
   `read_held` are a complete encoder and decoder for "who is carrying which prop, and is

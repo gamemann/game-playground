@@ -294,6 +294,15 @@ func _module_load() -> DotResult:
 		DotAdminFlags.CHANGEMAP
 	)
 	add_command(
+		"pg_give", _cmd_give,
+		"pg_give <player> <prop> [count] — put something in somebody's bag",
+		DotAdminFlags.CHANGEMAP
+	)
+	add_command(
+		"pg_inv", _cmd_inv,
+		"pg_inv <player> — what somebody is carrying", DotAdminFlags.GENERIC
+	)
+	add_command(
 		"pg_vote", _cmd_vote,
 		"pg_vote [open|next|status] — what plays next", DotAdminFlags.CHANGEMAP
 	)
@@ -508,6 +517,8 @@ func _build_extras() -> DotResult:
 	# The bridge charges through this and knows nothing about prices. Unset it and
 	# everything is free, which is what this game was before there was a price list.
 	bridge.charge_fn = shop.charge
+	# Asked before a spawn, which is charged only once it exists. See _spawn_for.
+	bridge.may_charge_fn = shop.may_have
 
 	spectate = PlaygroundSpectate.new()
 	spectate.name = "Spectate"
@@ -827,6 +838,23 @@ func _stats_key_for(player_id: StringName) -> String:
 	return PlaygroundPlatform.key_for_session(server, session)
 
 
+## Who a session is, for a bag that outlasts the connection — or empty for nobody.
+##
+## [b]The same key the statistics are filed under, and for the same reason:[/b] dot-server's
+## userid is sequential and a reconnect is a new one, so a bag keyed on it would be emptied
+## by every dropped connection. With no identity stack the key is `local:<userid>`, which
+## identifies nobody next time; that is answered as empty, and the bag goes with the session
+## rather than piling up one abandoned bag per connection for the life of the server.
+func _bag_key_for(session_id: int) -> String:
+	if server == null:
+		return ""
+	var session := server.session_by_userid(session_id)
+	if session == null:
+		return ""
+	var key := PlaygroundPlatform.key_for_session(server, session)
+	return "" if key == "" or key.begins_with("local:") else "bag:" + key
+
+
 ## A world player id back to a dot-server session id, or zero.
 func _session_of(player_id: StringName) -> int:
 	var text := String(player_id)
@@ -868,6 +896,10 @@ func _build_netcode() -> DotResult:
 
 	if not attached.ok:
 		return attached
+
+	# A bag belongs to the person, and dot-server's userid is a new number every time
+	# somebody connects. See `_bag_key_for`.
+	bridge.inventory_key_fn = _bag_key_for
 
 	net.messages.seal()
 	return net.start()
@@ -1857,6 +1889,47 @@ func _cmd_credits(ctx: DotCmdContext) -> void:
 		"%s now has %d (%s%d)."
 			% [String(target), shop.balance(target), "+" if paid >= 0 else "", paid]
 	)
+
+
+## `pg_give` — put something in somebody's bag, as the server. It reaches their client as
+## the whole bag, like any change the server makes; see [PlaygroundInventoryNet].
+func _cmd_give(ctx: DotCmdContext) -> void:
+	var target := _player_named(ctx.arg(0))
+	var item := StringName(ctx.arg(1))
+
+	if target == &"" or item == &"":
+		ctx.reply("pg_give <player> <prop> [count]")
+		return
+
+	if game.inventory == null or bridge == null or bridge.inventory_net == null:
+		ctx.reply("This server has no inventory.")
+		return
+
+	var count := maxi(1, ctx.arg(2).to_int()) if ctx.arg(2) != "" else 1
+	var bag := bridge.inventory_net.bag_key(PlaygroundNetBridge.session_of(target))
+	var given := game.inventory.give(bag, item, count)
+
+	if not given.ok:
+		ctx.reply_error(given)
+		return
+
+	ctx.reply("%s now carries %d %s." % [String(target), game.inventory.carries(bag, item), item])
+
+
+## `pg_inv` — what somebody is carrying, as the server has it.
+func _cmd_inv(ctx: DotCmdContext) -> void:
+	var target := _player_named(ctx.arg(0))
+
+	if target == &"":
+		ctx.reply("pg_inv <player>")
+		return
+
+	if game.inventory == null or bridge == null or bridge.inventory_net == null:
+		ctx.reply("This server has no inventory.")
+		return
+
+	var bag := bridge.inventory_net.bag_key(PlaygroundNetBridge.session_of(target))
+	ctx.reply_lines(game.inventory.for_player(bag).describe_lines())
 
 
 func _cmd_vote(ctx: DotCmdContext) -> void:

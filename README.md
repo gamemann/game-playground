@@ -26,6 +26,8 @@ It is two things at once: a game you can play, and the only place the movement h
 | [dot-props](https://github.com/modcommunity/dot-props) | Spawnable props, a physics gun, a gravity gun |
 | [dot-leaderboard](https://github.com/modcommunity/dot-leaderboard) | Boards, ranking points, player statistics |
 | [dot-server](https://github.com/modcommunity/dot-server) | A dedicated server: console, RCON, permissions, modules |
+| [dot-net](https://github.com/modcommunity/dot-net) | Replication, prediction and the wire every networked system here rides on |
+| [dot-inventory](https://github.com/modcommunity/dot-inventory) | The bag: what a player has bought and not yet placed, validated by the server |
 | [dot-core](https://github.com/modcommunity/dot-core) | The foundation all of them share |
 
 ## Playing it
@@ -122,14 +124,22 @@ The end-of-map vote and the option to extend the current map:
 
 `end_vote: false` turns the end-of-map ballot off (the map still ends, on the rotation); `include_extend: false` takes "extend" off the ballot; `extend_seconds` is how much one extension adds and `max_extends` how many there may be. Every setting is in dot-vote's README, and its `docs/parity.md` maps the long-standing community map-chooser plugins' settings onto them.
 
+## What you carry
+
+With `pg_shop 1` on, a server has prices, and the bag is what sits between the spawn menu and the shop: a 10 × 6 grid with a 400 kg limit, one cell per small prop. Buying into it charges once; spawning something you carry is free and takes it out; a purchase that would not fit, by weight or by room, is refused before anybody is charged. Spawning something you do not carry is charged only once it exists, so a spawn the prop limit refuses costs nothing. An admin can put things in it with `pg_give <player> <prop> [count]` and read it with `pg_inv <player>`.
+
+It is networked the way every inventory should be and few are: the client moves things in its own bag at once, sends each move as an op with a sequence number, and the server says yes or no. A no springs that move back and keeps every move made after it; a move the network lost is rolled back too, and a client with an answer overdue asks for the whole bag. What the server changes — a purchase, a spawn, an admin's give — arrives as the whole bag, to the owner and nobody else. A player who reconnects gets it back whole, when the server has an identity stack to recognise them by. [`CLAUDE.md`](CLAUDE.md) says why each piece is shaped the way it is.
+
+**There is no screen for it yet**, and no key that buys into it: the wire, the server's rules and the client's copy are all in place and checked over a real socket, and dot-inventory's `DotInvPanel` is the grid that would sit on top.
+
 ## Validating
 
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 382 checks
-godot --headless --path . res://examples/headless_net.tscn          # 156 checks
-godot --headless --path . res://examples/dedicated.tscn             # 209 checks over 23 sections
+godot --headless --path . res://examples/headless_net.tscn          # 255 checks over 27 sections
+godot --headless --path . res://examples/dedicated.tscn             # 214 checks over 24 sections
 godot --headless --path . res://examples/headless_presentation.tscn #  89 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 ```

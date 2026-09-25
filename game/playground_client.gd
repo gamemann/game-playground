@@ -389,6 +389,12 @@ func _build_netcode() -> DotResult:
 		if hud != null:
 			hud.notice(text)
 	)
+	# A move in the bag the server refused has already sprung back by the time this fires;
+	# the line is what says it was the server and not the grid.
+	bridge.inventory_refused.connect(func(reason: String) -> void:
+		if hud != null:
+			hud.notice("Your bag: %s" % reason)
+	)
 	# The map's time left is handed to the HUD where the HUD is built, below.
 	# The map vote's cue and countdown. The ballot itself arrives as chat; this is what
 	# chat cannot carry.
@@ -866,7 +872,9 @@ func _process(_delta: float) -> void:
 	# player who turned `shake_scale` to zero gets an offset of exactly zero.
 	var shake := presentation.camera_shake() \
 		if presentation != null and presentation.fx != null else Vector3.ZERO
-	camera.global_position = player.eye_position() + shake
+	# `render_eye_position`, not `eye_position`: the blend of the last two ticks, because the
+	# simulation moves once a tick and the screen does not (see PlaygroundPlayer).
+	camera.global_position = player.render_eye_position() + shake
 	camera.global_rotation = Vector3(
 		deg_to_rad(player.controller.state.pitch),
 		deg_to_rad(player.controller.state.yaw),

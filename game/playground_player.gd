@@ -486,6 +486,27 @@ func eye_position() -> Vector3:
 	return controller.motor.eye_position(controller.state)
 
 
+## Where the eye is DRAWN this frame, which is not where it is: the last two ticks blended by
+## how far this frame sits between them ([method DotFpsController.render_state]). Aim, reach
+## and every trace still use [method eye_position]; this is the camera's and nothing else's.
+##
+## [b]Why the camera needs it now and did not before 2026-09-25.[/b] Until then a connected
+## client predicted nobody, its own player was interpolated like everybody else's, and the
+## eye rode that interpolation — smooth, and a round trip plus the interpolation delay behind
+## the keys. Predicted, the eye is the simulation's and moves once a tick, so on a screen
+## faster than the tick some frames advance it and some do not: measured with
+## `tools/screenshot_net.sh --walk`, 62 of 593 frames standing still at full speed.
+##
+## Not while riding: the controller is not simulated in a vehicle, so its previous tick is
+## wherever the player got in, and a blend toward it drags the view backwards every frame —
+## the lurch mg-buses-from-hell measured at 137.9 m/s when its blend read a tick nothing had
+## simulated. A teleport resets the blend itself (`DotFpsController.teleport`).
+func render_eye_position() -> Vector3:
+	if riding or controller == null or controller.motor == null:
+		return eye_position()
+	return controller.motor.eye_position(controller.render_state())
+
+
 func aim_direction() -> Vector3:
 	return DotFpsMotor.aim_for(controller.state.yaw, controller.state.pitch)
 

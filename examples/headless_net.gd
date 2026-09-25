@@ -17,6 +17,9 @@ const PlaygroundModTools := preload("../game/playground_mod_tools.gd")
 const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
 const PlaygroundClient := preload("../game/playground_client.gd")
 const PlaygroundCharacter := preload("../game/playground_character.gd")
+const PlaygroundInventory := preload("../game/playground_inventory.gd")
+const PlaygroundInventoryNet := preload("../game/net/playground_inventory_net.gd")
+const PlaygroundRequest := preload("../game/net/playground_request.gd")
 
 ## game-playground over the wire: a real server, a real client, and a lossy loopback
 ## between them.
@@ -46,13 +49,13 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 156
+const CHECKS := 255
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 17
+const SECTIONS := 27
 
 var _passed := 0
 var _failed := 0
@@ -70,6 +73,12 @@ var _client_bridge: PlaygroundNetBridge = null
 var _to_client: Array[Dictionary] = []
 var _to_server: Array[Dictionary] = []
 var _drop_every: int = 0
+
+## Every EVENT the server sent, to whichever peer, while [member _recording] is on — the
+## ones the loopback below does not deliver included. What "nobody else was told" is
+## checked against: a message filtered out before delivery is still a message that was sent.
+var _server_events: Array[Dictionary] = []
+var _recording := false
 var _snapshot_count: int = 0
 var _tick: int = 0
 
@@ -85,10 +94,12 @@ func _run() -> void:
 
 	_test_command_wire()
 	_test_event_wire()
+	_test_inventory_wire()
 
 	if await _build():
 		await _test_handshake()
 		await _test_prediction()
+		await _test_local_is_predicted()
 		await _test_prop_replication()
 		await _test_prop_request()
 		await _test_tools()
@@ -111,6 +122,18 @@ func _run() -> void:
 		# shared world and takes it back out.
 		await _test_somebody_else_is_drawn()
 		_test_clock_wire()
+		# The inventory last among the connected-player sections, for the reason every
+		# section above gives: the rejoin below takes the player's body out of the shared
+		# physics world and puts it back.
+		# Before the inventory sections, whose bag it must not find a barrel in.
+		await _test_refused_spawn_is_free()
+		await _test_inventory_predicted()
+		await _test_inventory_refused()
+		await _test_inventory_lost()
+		await _test_inventory_from_the_server()
+		await _test_inventory_is_private()
+		await _test_inventory_flood()
+		await _test_inventory_rejoin()
 		await _test_leave()
 
 	_report()
@@ -561,6 +584,8 @@ func _build() -> bool:
 
 
 func _on_server_send(method: StringName, peer_id: int, payload: PackedByteArray) -> void:
+	if _recording and method == &"event":
+		_server_events.append({"peer": peer_id, "payload": payload})
 	if method == &"snapshot":
 		_snapshot_count += 1
 		if _drop_every > 0 and _snapshot_count % _drop_every == 0:
@@ -836,6 +861,174 @@ func _test_prediction() -> void:
 	# measured the error. Both read as a predictor that snapped every packet.
 	var rate: float = _client_net.predictor.correction_rate()
 	_check(rate < 0.35, "the correction rate is low", "%.3f" % rate)
+	_done()
+
+
+## [b]The section above passes for a client that predicts nobody[/b], and did until
+## 2026-09-25: `_apply_join` mirrored every player — this client's own included — with owner
+## 0, so `registry.predicted()` was empty, `client_tick` simulated nobody, and the local
+## player moved only when a snapshot came back. "It moves" and "the server agrees" both hold
+## for a client that simply adopts every snapshot, and the correction rate is lowest of all
+## for a predictor that never runs. So this asks the four things only prediction answers:
+## who owns the mirror, who is in `predicted()`, whether a key moves the player on the tick
+## it is pressed with nothing from the server in between, and whether a move only the server
+## made still wins.
+func _corrections_and_snaps() -> int:
+	var d := _client_net.predictor.describe()
+	return int(d.get("corrections", 0)) + int(d.get("snaps", 0))
+
+
+func _test_local_is_predicted() -> void:
+	_section("this client predicts its own player, and nobody else")
+
+	var mine := _client_player()
+	var mine_net := mine.get_node_or_null("Net") as PlaygroundPlayerNet if mine != null else null
+
+	if mine_net == null or mine_net.identity == null:
+		_check(false, "the client has its own player, replicated")
+		return
+
+	var identity := mine_net.identity
+	_check(
+		identity.owner_peer_id == _client_net.local_peer_id and identity.is_owner,
+		"the client's mirror of its own player is owned by this client (peer %d)"
+			% _client_net.local_peer_id,
+		"owner %d, is_owner %s" % [identity.owner_peer_id, str(identity.is_owner)]
+	)
+
+	var predicted := _client_net.registry.predicted()
+	_check(
+		predicted.size() == 1 and predicted[0] == identity,
+		"so it is the one entity the client predicts",
+		"predicted %d" % predicted.size()
+	)
+
+	# Somebody else, on a peer with no client in this process.
+	var session := SESSION + 3
+	var added := _server_bridge.add_player(CLIENT_PEER + 3, session, "Cy")
+	await _steps(4)
+	var theirs: PlaygroundPlayer = _client_game.players.get(&"u%d" % session)
+	var theirs_net := theirs.get_node_or_null("Net") as PlaygroundPlayerNet if theirs != null else null
+	_check(
+		added.ok and theirs_net != null and theirs_net.identity != null
+			and theirs_net.identity.owner_peer_id == 0
+			and not theirs_net.identity.is_predicted(),
+		"a second player is mirrored as the server's, and not predicted",
+		"owner %s" % (str(theirs_net.identity.owner_peer_id) if theirs_net != null else "-")
+	)
+	_check(
+		_client_net.registry.predicted().size() == 1,
+		"and the client still predicts exactly one player",
+		"%d" % _client_net.registry.predicted().size()
+	)
+	_server_bridge.remove_player(session)
+	await _steps(4)
+
+	# A key, and nothing from the server: one client tick, no server tick, no flush. Standing
+	# still first, so the press is the only reason to move.
+	await _steps(24)
+	var client_from := mine.controller.state.position
+	var node_from := mine.global_position
+	var server_from := _server_player().controller.state.position
+	_tick += 1
+	_client_net.clock.advance(1.0 / float(maxi(_client_game.tick_rate, 1)))
+	_client_bridge.client_tick(_tick + INPUT_LEAD, _forward())
+	var moved := mine.controller.state.position.distance_to(client_from)
+	_check(
+		_to_client.is_empty() and moved > 0.0005,
+		"a key moves the player on the client in the tick it is pressed, before any snapshot",
+		"%.4f m (a client that waits for the server moves 0)" % moved
+	)
+	_check(
+		mine.global_position.distance_to(node_from) > 0.0005,
+		"and the node the camera and the body follow moved with it",
+		"%.4f m" % mine.global_position.distance_to(node_from)
+	)
+	_check(
+		_server_player().controller.state.position.distance_to(server_from) < 0.0001,
+		"while the server has not moved them yet: this is prediction, not a snapshot"
+	)
+
+	# Key to motion, counted: ticks from the press to the client's player moving, over a whole
+	# exchange with the server. Zero is the tick it was pressed in.
+	await _steps(24)
+	var still_from := mine.controller.state.position
+	var latency := -1
+	for i in range(16):
+		await _step(_forward())
+		if latency < 0 and mine.controller.state.position.distance_to(still_from) > 0.0005:
+			latency = i
+	_check(latency == 0, "key to motion over the link is zero ticks", "%d ticks" % latency)
+	await _steps(24)
+
+	# A move only the server made: the client cannot predict it and must be corrected to it.
+	var corrections_before := _corrections_and_snaps()
+	var server_mine := _server_player()
+	var target := server_mine.controller.state.position + Vector3(3.0, 0.0, 0.0)
+	server_mine.teleport(target, server_mine.controller.state.yaw)
+	var before_gap := mine.controller.state.position.distance_to(target)
+	await _steps(32)
+	var server_at := server_mine.controller.state.position
+	var gap := mine.controller.state.position.distance_to(server_at)
+	var corrections := _corrections_and_snaps() - corrections_before
+	_check(
+		before_gap > 2.0 and gap < 0.05,
+		"a teleport only the server made is corrected and converges",
+		"%.2f m away when it happened, %.4f m after" % [before_gap, gap]
+	)
+	_check(
+		mine.global_position.distance_to(server_at) < 0.05,
+		"on the node as well as in the state",
+		"%.4f m" % mine.global_position.distance_to(server_at)
+	)
+	_check(
+		corrections > 0, "by the predictor, as a correction or a snap",
+		"%d corrections and snaps" % corrections
+	)
+	_check(
+		_client_net.registry.predicted().size() == 1 and identity.is_predicted(),
+		"and the player is still predicted afterwards"
+	)
+
+	# [b]Both orders HELLO and this player's JOIN can arrive in, and each is its own half of
+	# the fix.[/b] `add_player` broadcasts JOIN to every connected peer, the joiner included,
+	# BEFORE that peer has asked to be admitted — so in this suite's handshake, as on any
+	# server whose client is listening by then, JOIN comes first and the mirror is built
+	# before the client knows it is its own: HELLO has to CLAIM it. Admitted again, `_admit`
+	# sends HELLO first and JOIN after it, and the mirror has to be built owned. Each is
+	# forced here, and each was armed on its own: without the claim, the first nine checks
+	# above fail and so does the claim below; without the owned mirror, only the rebuild does.
+	var _given := _client_net.registry.change_owner(identity.net_id, 0)
+	_check(not identity.is_predicted(), "a mirror handed back to the server stops being predicted")
+	_client_bridge.ask_ready()
+	_exchange()
+	await _steps(4)
+	_check(
+		identity.owner_peer_id == _client_net.local_peer_id and identity.is_predicted(),
+		"and HELLO claims it again for this client (JOIN first)",
+		"owner %d" % identity.owner_peer_id
+	)
+
+	# HELLO first: the client forgets its mirror, as a LEAVE would, and is admitted again.
+	_client_bridge._on_event(PlaygroundEvent.new(
+		PlaygroundEvents.Kind.LEAVE, PlaygroundEvents.write_player(SESSION)
+	))
+	await get_tree().process_frame
+	_check(_client_player() == null, "a client that forgot its own player has none")
+	_client_bridge.ask_ready()
+	_exchange()
+	await _steps(4)
+	var rebuilt := _client_player()
+	var rebuilt_net := rebuilt.get_node_or_null("Net") as PlaygroundPlayerNet if rebuilt != null else null
+	_check(
+		rebuilt_net != null and rebuilt_net.identity != null
+			and rebuilt_net.identity.owner_peer_id == _client_net.local_peer_id
+			and rebuilt_net.identity.is_predicted()
+			and _client_net.registry.predicted().size() == 1,
+		"and a JOIN after HELLO builds it owned by this client, and predicted (HELLO first)",
+		"owner %s" % (str(rebuilt_net.identity.owner_peer_id) if rebuilt_net != null else "-")
+	)
+	await _steps(8)
 	_done()
 
 
@@ -1187,6 +1380,82 @@ func _test_weapon_request() -> void:
 	_check(charged.size() == paid, "an unknown weapon id charges nothing")
 
 	refuse[0] = false
+	_server_bridge.charge_fn = Callable()
+	_done()
+
+
+## A spawn the prop budget refuses costs nothing.
+##
+## [b]It cost the price.[/b] `_spawn_for` charged and then spawned, so a spawn the spawner
+## refused had been paid for — credits gone and nothing in the world. It asks now, spawns,
+## and charges only what exists; the check below fails on the old order.
+func _test_refused_spawn_is_free() -> void:
+	_section("a spawn the prop budget refuses costs nothing")
+
+	var charged: Array[StringName] = []
+	_server_bridge.charge_fn = func(_id: StringName, thing: StringName) -> DotResult:
+		charged.append(thing)
+		return DotResult.success(null)
+	var notices: Array[String] = []
+	var on_notice := func(_pid: int, text: String) -> void: notices.append(text)
+	_client_bridge.notice_received.connect(on_notice)
+
+	var spawner := _server_game.props
+	var budget := spawner.limits.world_budget
+	var props := spawner.world_count()
+	var spent := spawner.world_cost()
+	var bag := _server_bridge.inventory_net.bag_key(SESSION)
+	_check(
+		spent > 0 and _server_game.inventory.carries(bag, &"barrel") == 0,
+		"the world has props in it and the bag has no barrel, so a spawn is bought, not carried",
+		"cost %d" % spent
+	)
+	# Full: a world budget of exactly what is already spent.
+	spawner.limits.world_budget = spent
+	_client_bridge.ask_spawn_prop(&"barrel")
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(2)
+	_check(spawner.world_count() == props, "the spawner refuses a barrel past the world budget")
+	_check(charged.is_empty(), "and nobody is charged for it", str(charged))
+	_check(
+		notices.size() == 1 and notices[0].contains("prop limit"),
+		"and the player is told why, by the spawner",
+		str(notices)
+	)
+	spawner.limits.world_budget = budget
+
+	# Asked before anything is spawned: a player who cannot afford it gets nothing placed.
+	notices.clear()
+	_server_bridge.may_charge_fn = func(_id: StringName, _thing: StringName) -> DotResult:
+		return DotResult.fail(DotError.CODE_STATE, "$100 short of 'barrel'.")
+	_client_bridge.ask_spawn_prop(&"barrel")
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(2)
+	_check(
+		spawner.world_count() == props and charged.is_empty(),
+		"a spawn nobody can afford places nothing and charges nothing"
+	)
+	_check(notices.size() == 1 and notices[0].contains("short"), "and says so", str(notices))
+	_server_bridge.may_charge_fn = Callable()
+
+	# And one that is allowed is charged once, after it exists. Taken back out, because every
+	# body in this one physics space moves the readings of the sections after it.
+	_client_bridge.ask_spawn_prop(&"barrel")
+	_exchange()
+	await _steps(4)
+	_check(
+		spawner.world_count() == props + 1 and charged.size() == 1 and charged[0] == &"barrel",
+		"a barrel that fits is spawned, and charged for once",
+		"%d props, charged %s" % [spawner.world_count() - props, str(charged)]
+	)
+	spawner.undo(_client_player().player_id if _client_player() != null else &"u%d" % SESSION)
+	await _steps(2)
+
+	_client_bridge.notice_received.disconnect(on_notice)
 	_server_bridge.charge_fn = Callable()
 	_done()
 
@@ -1715,6 +1984,765 @@ func _test_somebody_else_is_drawn() -> void:
 		not _client_game.players.has(&"u%d" % session),
 		"and they leave again, so the sections after this one see one player"
 	)
+	_done()
+
+
+# --- The inventory ------------------------------------------------------------
+
+const BACKPACK := PlaygroundInventory.BACKPACK
+
+
+## The inventory's wire on its own: every encoder against its decoder, and the one field a
+## client must not be able to write.
+func _test_inventory_wire() -> void:
+	_section("the inventory's wire round-trips, and carries no state a client wrote")
+
+	var sent := DotInvOp.move(BACKPACK, 12, BACKPACK, Vector2i(3, 4), true).to_dictionary()
+	sent["state"] = {"serial": "forged"}
+	var r := DotNetReader.new(PlaygroundEvents.write_inv_op(41, sent))
+	var sub := PlaygroundEvents.read_inv_ask(r)
+	var got := PlaygroundEvents.read_inv_op(r)
+	var back := DotInvOp.from_dictionary(got["op"])
+	_check(
+		sub == PlaygroundEvents.InvAsk.OP and bool(got["ok"]) and int(got["seq"]) == 41,
+		"an op arrives with its sequence number"
+	)
+	_check(
+		back.kind == DotInvOp.Kind.MOVE and back.from_uid == 12 and back.to_cell == Vector2i(3, 4)
+			and back.to_rotated and back.from_container == BACKPACK and back.to_container == BACKPACK,
+		"and every field of it",
+		back.describe_line()
+	)
+	_check(back.state.is_empty(), "but not a state the client wrote into it", str(back.state))
+
+	var add := DotNetReader.new(PlaygroundEvents.write_inv_op(2, DotInvOp.add(&"crate", 1, BACKPACK).to_dictionary()))
+	PlaygroundEvents.read_inv_ask(add)
+	var add_got := PlaygroundEvents.read_inv_op(add)
+	var add_back := DotInvOp.from_dictionary(add_got["op"])
+	_check(
+		add_back.kind == DotInvOp.Kind.ADD and add_back.to_cell == Vector2i(-1, -1) and add_back.item == &"crate",
+		"an ADD's 'anywhere' cell survives, so a refusal matches what was predicted"
+	)
+
+	var ack_r := DotNetReader.new(PlaygroundEvents.write_inv_ack(9, false, "no room"))
+	var ack_sub := PlaygroundEvents.read_inv_tell(ack_r)
+	var ack := PlaygroundEvents.read_inv_ack(ack_r)
+	_check(
+		ack_sub == PlaygroundEvents.InvTell.ACK and bool(ack["ok"]) and int(ack["seq"]) == 9
+			and not bool(ack["accepted"]) and str(ack["reason"]) == "no room",
+		"an answer round-trips: which op, yes or no, and why"
+	)
+
+	var doc := {
+		"containers": {String(BACKPACK): {
+			"id": String(BACKPACK), "shape": "grid", "next_uid": 4,
+			"entries": {"3": {"item": "crate", "count": 1, "cell": [2, 1], "rotated": false, "state": {}}},
+		}},
+		"parents": {}, "max_depth": 3, "next_child": 1,
+	}
+	var doc_r := DotNetReader.new(PlaygroundEvents.write_inv_doc(17, doc))
+	var doc_sub := PlaygroundEvents.read_inv_tell(doc_r)
+	var doc_got := PlaygroundEvents.read_inv_doc(doc_r)
+	var entry: Dictionary = {}
+	if bool(doc_got.get("ok", false)):
+		entry = ((doc_got["doc"]["containers"][String(BACKPACK)]["entries"] as Dictionary).get("3", {}))
+	_check(
+		doc_sub == PlaygroundEvents.InvTell.DOC and bool(doc_got.get("ok", false))
+			and int(doc_got["through"]) == 17 and str(entry.get("item", "")) == "crate",
+		"a whole bag round-trips as the JSON dot-inventory writes, with what it already includes"
+	)
+
+	var huge_entries := {}
+	for i in range(400):
+		huge_entries[str(i)] = {"item": "a_long_item_name_%d" % i, "count": 1, "cell": [i, 0], "rotated": false, "state": {}}
+	var huge := {"containers": {"x": {"entries": huge_entries}}}
+	_check(
+		PlaygroundEvents.write_inv_doc(1, huge).is_empty(),
+		"a bag too big to send is refused rather than truncated into JSON nobody can read"
+	)
+
+	var rs := DotNetReader.new(PlaygroundEvents.write_inv_resync(5))
+	var rs_sub := PlaygroundEvents.read_inv_ask(rs)
+	var buy := DotNetReader.new(PlaygroundEvents.write_inv_buy(&"barrel"))
+	var buy_sub := PlaygroundEvents.read_inv_ask(buy)
+	_check(
+		rs_sub == PlaygroundEvents.InvAsk.RESYNC and int(PlaygroundEvents.read_inv_resync(rs)["seq"]) == 5
+			and buy_sub == PlaygroundEvents.InvAsk.BUY
+			and StringName(PlaygroundEvents.read_inv_buy(buy)["item"]) == &"barrel",
+		"a request for the whole bag and a purchase round-trip"
+	)
+	_done()
+
+
+func _server_bag(session: int = SESSION) -> DotInvManager:
+	return _server_game.inventory.for_player(_server_bridge.inventory_net.bag_key(session))
+
+
+func _client_bag() -> DotInvManager:
+	return _client_bridge.inventory_manager()
+
+
+## A bag as the things two ends have to agree about: every entry's uid, item, cell and
+## rotation, and the next uid either end will hand out.
+##
+## [b]The uids are the point.[/b] The next op names an entry by uid, so two bags laid out
+## identically under different uids are two bags in which "move #4" means different
+## things — which is a duplication or a loss one op later, and invisible in any picture.
+static func _bag_summary(m: DotInvManager) -> String:
+	if m == null or m.doc == null:
+		return "-"
+	var c := m.doc.get_container(BACKPACK)
+	if c == null:
+		return "-"
+	var parts := PackedStringArray()
+	for uid: Variant in c.entries.keys():
+		var e: Dictionary = c.entries[uid]
+		var at: Variant = e.get("cell", Vector2i.ZERO)
+		var cell: Vector2i = at if at is Vector2i else Vector2i(-9, -9)
+		parts.append("%s#%d@%d,%d%s" % [
+			str(e.get("item", "")), int(uid), cell.x, cell.y,
+			"r" if bool(e.get("rotated", false)) else "",
+		])
+	parts.sort()
+	return "%s next=%d" % [",".join(parts), int(c.to_dictionary().get("next_uid", 0))]
+
+
+static func _uid_at(m: DotInvManager, cell: Vector2i) -> int:
+	if m == null or m.doc == null:
+		return 0
+	var c := m.doc.get_container(BACKPACK)
+	for uid: Variant in c.entries.keys():
+		var at: Variant = (c.entries[uid] as Dictionary).get("cell", null)
+		if at is Vector2i and (at as Vector2i) == cell:
+			return int(uid)
+	return 0
+
+
+static func _cell_of(m: DotInvManager, item: StringName) -> Vector2i:
+	if m == null or m.doc == null:
+		return Vector2i(-9, -9)
+	var c := m.doc.get_container(BACKPACK)
+	for uid: Variant in c.entries.keys():
+		var e: Dictionary = c.entries[uid]
+		if str(e.get("item", "")) == String(item):
+			var at: Variant = e.get("cell", null)
+			return at if at is Vector2i else Vector2i(-9, -9)
+	return Vector2i(-9, -9)
+
+
+## The first free cell in the backpack, row-major — what first-fit will choose next.
+static func _first_free(m: DotInvManager) -> Vector2i:
+	var c := m.doc.get_container(BACKPACK)
+	var taken := c.occupied_cells(m.catalogue)
+	for y in range(c.height):
+		for x in range(c.width):
+			if not taken.has(Vector2i(x, y)):
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+
+static func _free_cells(m: DotInvManager) -> int:
+	var c := m.doc.get_container(BACKPACK)
+	return c.width * c.height - c.occupied_cells(m.catalogue).size()
+
+
+func _request_bytes(kind: int, body: PackedByteArray = PackedByteArray()) -> PackedByteArray:
+	var writer := DotNetWriter.new()
+	var _encoded := _client_net.messages.encode(PlaygroundRequest.new(kind, body), writer)
+	return writer.to_bytes()
+
+
+## Every INVENTORY event the server sent to [param peer_id] while recording, decoded.
+func _inventory_events(peer_id: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for sent in _server_events:
+		if int(sent["peer"]) != peer_id:
+			continue
+		var decoded := _client_net.messages.decode(DotNetReader.new(sent["payload"]), 1, false)
+		if not decoded.ok:
+			continue
+		var event := decoded.value as PlaygroundEvent
+		if event == null or event.kind != PlaygroundEvents.Kind.INVENTORY:
+			continue
+		var r := event.reader()
+		var entry := {"sub": PlaygroundEvents.read_inv_tell(r)}
+		if int(entry["sub"]) == PlaygroundEvents.InvTell.DOC:
+			entry.merge(PlaygroundEvents.read_inv_doc(r))
+		out.append(entry)
+	return out
+
+
+## Every peer an INVENTORY event went to while recording, broadcast (0) included.
+func _inventory_peers() -> Array[int]:
+	var out: Array[int] = []
+	for sent in _server_events:
+		var peer := int(sent["peer"])
+		if not out.has(peer) and not _inventory_events(peer).is_empty():
+			out.append(peer)
+	return out
+
+
+static func _doc_count(doc: Dictionary, item: String) -> int:
+	var n := 0
+	var containers: Dictionary = doc.get("containers", {})
+	for id: Variant in containers.keys():
+		var entries: Dictionary = (containers[id] as Dictionary).get("entries", {})
+		for uid: Variant in entries.keys():
+			if str((entries[uid] as Dictionary).get("item", "")) == item:
+				n += int((entries[uid] as Dictionary).get("count", 1))
+	return n
+
+
+## The client predicts, the server decides, and nothing is left waiting.
+func _test_inventory_predicted() -> void:
+	_section("an inventory op is predicted, sent through the bridge, and confirmed")
+
+	var mine := _client_bag()
+	_check(mine != null, "the client holds a bag, made when the server sent it on admission")
+	if mine == null:
+		return
+	_check(
+		_client_game.inventory.keys().size() == 1,
+		"and exactly one: its own",
+		str(_client_game.inventory.keys())
+	)
+	_check(not mine.authoritative, "which predicts rather than decides")
+
+	var bag := _server_bridge.inventory_net.bag_key(SESSION)
+	var gave_crate := _server_game.inventory.give(bag, &"crate")
+	var gave_ball := _server_game.inventory.give(bag, &"beach_ball")
+	_check(gave_crate.ok and gave_ball.ok, "the server puts a crate and a ball in this player's bag")
+	await _steps(2)
+	_check(
+		mine.doc.count_of(&"crate") == 1 and mine.doc.count_of(&"beach_ball") == 1,
+		"and both reach the client"
+	)
+	_check(
+		_bag_summary(mine) == _bag_summary(_server_bag()),
+		"laid out exactly as the server's, uids and all",
+		"%s vs %s" % [_bag_summary(mine), _bag_summary(_server_bag())]
+	)
+
+	var ball := _uid_at(mine, _cell_of(mine, &"beach_ball"))
+	var requests := _client_bridge.link.requests_sent
+	var moved := mine.apply(DotInvOp.move(BACKPACK, ball, BACKPACK, Vector2i(6, 3)))
+	_check(moved.ok, "the client moves the ball")
+	_check(
+		_cell_of(mine, &"beach_ball") == Vector2i(6, 3)
+			and _cell_of(_server_bag(), &"beach_ball") != Vector2i(6, 3),
+		"and sees it moved before the server has heard of it"
+	)
+	_check(
+		mine.pending_count() == 1 and _client_bridge.inventory_net.in_flight_count() == 1,
+		"kept as one op in flight, so it can be rolled back"
+	)
+	_check(
+		_client_bridge.link.requests_sent == requests + 1,
+		"and sent as one request, through the bridge — the manager's send_fn is the seam",
+		"%d -> %d" % [requests, _client_bridge.link.requests_sent]
+	)
+
+	var confirmed := _client_bridge.inventory_net.confirmed_count
+	_exchange()
+	_check(
+		_cell_of(_server_bag(), &"beach_ball") == Vector2i(6, 3),
+		"the server applied it to the authoritative bag"
+	)
+	_check(
+		mine.pending_count() == 0 and _client_bridge.inventory_net.in_flight_count() == 0
+			and _client_bridge.inventory_net.confirmed_count == confirmed + 1,
+		"and confirmed it: nothing is left waiting",
+		str(_client_bridge.inventory_net.describe())
+	)
+	_check(
+		_bag_summary(mine) == _bag_summary(_server_bag()),
+		"the two bags agree, uids and all",
+		"%s vs %s" % [_bag_summary(mine), _bag_summary(_server_bag())]
+	)
+	_done()
+
+
+## Two refusals: one the client could have known about, sent with a good op behind it, and
+## one it could not — the server had changed the bag and not yet said so.
+func _test_inventory_refused() -> void:
+	_section("an op the server refuses is rolled back, and a good op sent behind it survives")
+
+	var mine := _client_bag()
+	var server := _server_bag()
+	var net_half: PlaygroundInventoryNet = _client_bridge.inventory_net
+	var reasons: Array[String] = []
+	var on_refused := func(reason: String) -> void: reasons.append(reason)
+	_client_bridge.inventory_refused.connect(on_refused)
+
+	var crates := mine.doc.count_of(&"crate")
+	var server_crates := server.doc.count_of(&"crate")
+	var docs := _server_bridge.inventory_net.docs_sent
+
+	# A client giving itself something. Predicted like any other op, because a client
+	# cannot know what it may do — and a predicting manager applies it before asking.
+	var gift := mine.apply(DotInvOp.add(&"crate", 1, BACKPACK))
+	_check(
+		gift.ok and mine.doc.count_of(&"crate") == crates + 1,
+		"a client that gives itself a crate sees it, locally"
+	)
+	var crate := _uid_at(mine, _cell_of(mine, &"crate"))
+	var behind := mine.apply(DotInvOp.move(BACKPACK, crate, BACKPACK, Vector2i(9, 5)))
+	_check(
+		behind.ok and net_half.in_flight_count() == 2,
+		"and moves its real crate right behind it, both in flight before either is answered"
+	)
+
+	var rolled := net_half.rolled_back_count
+	_exchange()
+	_check(
+		server.doc.count_of(&"crate") == server_crates,
+		"the server never gave it: an ADD from a client is the server's to do"
+	)
+	_check(reasons.size() == 1, "the client is told why", str(reasons))
+	_check(
+		mine.doc.count_of(&"crate") == crates and net_half.rolled_back_count == rolled + 1,
+		"and the crate it gave itself is gone again"
+	)
+	_check(
+		_uid_at(mine, Vector2i(9, 5)) != 0 and _uid_at(server, Vector2i(9, 5)) != 0,
+		"while the move sent behind it survives the rollback — DotInvManager.rollback alone restores the snapshot from before the refused op, which undoes this one too"
+	)
+	_check(
+		mine.pending_count() == 0 and net_half.in_flight_count() == 0,
+		"and nothing is left waiting"
+	)
+	await _steps(4)
+	_check(
+		_bag_summary(mine) == _bag_summary(server) and _server_bridge.inventory_net.docs_sent == docs,
+		"the two bags agree, uids and all, with no document sent to put it right",
+		"%s vs %s, %d documents" % [_bag_summary(mine), _bag_summary(server), _server_bridge.inventory_net.docs_sent - docs]
+	)
+
+	# The race: the server has put something where the client is about to, and has not
+	# said so yet — it says so once a tick, and this is inside one.
+	var where := _first_free(server)
+	var gave := _server_game.inventory.give(_server_bridge.inventory_net.bag_key(SESSION), &"barrel")
+	_check(gave.ok and _cell_of(server, &"barrel") == where, "the server puts a barrel in the first free cell")
+	var ball_was := _cell_of(mine, &"beach_ball")
+	var into := mine.apply(DotInvOp.move(BACKPACK, _uid_at(mine, ball_was), BACKPACK, where))
+	_check(into.ok, "and the client, not yet told, moves its ball into that same cell")
+	_flush()
+	_flush()
+	_check(
+		reasons.size() == 2 and _cell_of(mine, &"beach_ball") == ball_was,
+		"the server refuses, and the ball springs back to where it was",
+		"%s, ball at %s" % [str(reasons), str(_cell_of(mine, &"beach_ball"))]
+	)
+	await _steps(2)
+	_check(
+		mine.doc.count_of(&"barrel") == 1 and _bag_summary(mine) == _bag_summary(server),
+		"then the barrel arrives, and the two bags agree",
+		"%s vs %s" % [_bag_summary(mine), _bag_summary(server)]
+	)
+
+	_client_bridge.inventory_refused.disconnect(on_refused)
+	_done()
+
+
+## dot-net drops a client request past its per-peer message rate and tells nobody. An op in
+## that request would sit in the client's bag, predicted and never answered, for ever.
+func _test_inventory_lost() -> void:
+	_section("an op the transport dropped is rolled back, wherever in the stream it was lost")
+
+	var mine := _client_bag()
+	var server := _server_bag()
+	var net_half: PlaygroundInventoryNet = _client_bridge.inventory_net
+
+	# In the middle: the answer to the op behind it is what says it never arrived.
+	var ball_was := _cell_of(mine, &"beach_ball")
+	var a := mine.apply(DotInvOp.move(BACKPACK, _uid_at(mine, ball_was), BACKPACK, Vector2i(3, 3)))
+	var dropped: bool = a.ok and not _to_server.is_empty() and _to_server.back()["method"] == &"request"
+	if dropped:
+		_to_server.pop_back()
+	_check(dropped, "an op is predicted and its request is lost on the way")
+	var crate_was := _cell_of(mine, &"crate")
+	var b := mine.apply(DotInvOp.move(BACKPACK, _uid_at(mine, crate_was), BACKPACK, Vector2i(4, 4)))
+	_check(b.ok and net_half.in_flight_count() == 2, "and a second op is sent behind it")
+	_exchange()
+	_check(
+		_cell_of(mine, &"beach_ball") == ball_was and _cell_of(mine, &"crate") == Vector2i(4, 4),
+		"the answer to the second rolls the first back, because an answer to #2 says #1 never came",
+		"ball %s crate %s" % [str(_cell_of(mine, &"beach_ball")), str(_cell_of(mine, &"crate"))]
+	)
+	_check(
+		net_half.in_flight_count() == 0 and _bag_summary(mine) == _bag_summary(server),
+		"nothing is left waiting, and the bags agree",
+		"%s vs %s" % [_bag_summary(mine), _bag_summary(server)]
+	)
+
+	# At the tail: nothing after it will ever be answered, so nothing can say it was lost.
+	var t := mine.apply(DotInvOp.move(BACKPACK, _uid_at(mine, ball_was), BACKPACK, Vector2i(2, 2)))
+	var tail: bool = t.ok and not _to_server.is_empty() and _to_server.back()["method"] == &"request"
+	if tail:
+		_to_server.pop_back()
+	await _steps(2)
+	var asked := net_half.resyncs_asked
+	_check(
+		tail and net_half.in_flight_count() == 1 and _cell_of(mine, &"beach_ball") == Vector2i(2, 2),
+		"a last op lost on the way is still waiting, a few ticks later, with nothing to say so"
+	)
+	var clock := [Time.get_ticks_msec() + PlaygroundInventoryNet.RESYNC_AFTER_MS + 1000]
+	net_half.now_fn = func() -> int: return int(clock[0])
+	await _steps(2)
+	_check(
+		net_half.resyncs_asked == asked + 1,
+		"once it is overdue the client asks for the whole bag"
+	)
+	_check(
+		net_half.in_flight_count() == 0 and _cell_of(mine, &"beach_ball") == ball_was
+			and _bag_summary(mine) == _bag_summary(server),
+		"and the bag it is sent does not have the lost move in it: the bags agree",
+		"%s vs %s" % [_bag_summary(mine), _bag_summary(server)]
+	)
+	net_half.now_fn = func() -> int: return Time.get_ticks_msec()
+	_done()
+
+
+## A purchase, a spawn from the bag and an admin's give all change a bag on the server. Each
+## reaches its owner as the whole bag.
+func _test_inventory_from_the_server() -> void:
+	_section("what the server changes reaches the owner: a purchase, a spawn from the bag")
+
+	var charged: Array[StringName] = []
+	_server_bridge.charge_fn = func(_id: StringName, thing: StringName) -> DotResult:
+		charged.append(thing)
+		return DotResult.success(null)
+
+	var bag := _server_bridge.inventory_net.bag_key(SESSION)
+	var barrels := _server_game.inventory.carries(bag, &"barrel")
+
+	_client_bridge.ask_buy(&"barrel")
+	_exchange()
+	await _steps(2)
+	_check(charged.size() == 1 and charged[0] == &"barrel", "a barrel bought into the bag is charged for", str(charged))
+	_check(
+		_server_game.inventory.carries(bag, &"barrel") == barrels + 1
+			and _client_bag().doc.count_of(&"barrel") == barrels + 1,
+		"and lands in the bag on both ends"
+	)
+	_check(
+		_bag_summary(_client_bag()) == _bag_summary(_server_bag()),
+		"where the server put it, rather than wherever the client would have",
+		"%s vs %s" % [_bag_summary(_client_bag()), _bag_summary(_server_bag())]
+	)
+
+	var notices: Array[String] = []
+	var on_notice := func(_pid: int, text: String) -> void: notices.append(text)
+	_client_bridge.notice_received.connect(on_notice)
+	_client_bridge.ask_buy(&"boulder")
+	_exchange()
+	await _steps(2)
+	_check(
+		charged.size() == 1 and _client_bag().doc.count_of(&"boulder") == 0,
+		"a 900 kg boulder in a 400 kg bag is refused before anybody is charged",
+		str(charged)
+	)
+	_check(notices.size() == 1, "and the player is told why", str(notices))
+	_client_bridge.notice_received.disconnect(on_notice)
+
+	var props := _server_game.props.world_count()
+	_client_bridge.ask_spawn_prop(&"barrel")
+	_exchange()
+	await _steps(4)
+	_check(_server_game.props.world_count() == props + 1, "a barrel spawned from the bag appears")
+	_check(charged.size() == 1, "and is not charged for again: it was paid for when it went in", str(charged))
+	_check(
+		_server_game.inventory.carries(bag, &"barrel") == barrels
+			and _client_bag().doc.count_of(&"barrel") == barrels,
+		"and the bag has one fewer, on both ends"
+	)
+
+	# The server's own changes spend nobody's budget. They spent the PLAYER'S: thirty
+	# a second, so the thirty-first thing given in a second was refused.
+	var inv := _server_game.inventory
+	var balls := inv.carries(bag, &"beach_ball")
+	var burst := 0
+	for i in range(35):
+		if inv.give(bag, &"beach_ball").ok:
+			burst += 1
+	await _steps(2)
+	_check(
+		burst == 35 and _client_bag().doc.count_of(&"beach_ball") == balls + 35,
+		"thirty-five things given by the server in one tick all land, on both ends (%d)" % burst
+	)
+
+	# A purchase into a bag with no ROOM. dot-inventory validated an ADD for the item, the
+	# container and the weight and not for room, so asking only it charged first; it asks
+	# room now, and this is the check that says so from here.
+	var filled := inv.give(bag, &"beach_ball", _free_cells(_server_bag()))
+	_check(filled.ok and _free_cells(_server_bag()) == 0, "the server fills the bag to the last cell")
+	var validated := _server_bag().validate(DotInvOp.add(&"crate", 1, BACKPACK))
+	_check(
+		not validated.ok and validated.code() == DotError.CODE_QUOTA,
+		"and dot-inventory's own validate says there is no room for a crate"
+	)
+	var paid := charged.size()
+	_client_bridge.ask_buy(&"crate")
+	_exchange()
+	await _steps(2)
+	_check(
+		charged.size() == paid and _client_bag().doc.count_of(&"crate") == _server_bag().doc.count_of(&"crate"),
+		"so a crate bought into it is refused before anybody is charged",
+		str(charged)
+	)
+
+	while inv.carries(bag, &"beach_ball") > balls:
+		if not inv.take(bag, &"beach_ball").ok:
+			break
+	await _steps(2)
+	_check(
+		_bag_summary(_client_bag()) == _bag_summary(_server_bag()),
+		"and emptied again, the two bags agree",
+		"%s vs %s" % [_bag_summary(_client_bag()), _bag_summary(_server_bag())]
+	)
+
+	_server_game.props.undo(_client_player().player_id if _client_player() != null else &"u%d" % SESSION)
+	await _steps(2)
+	_server_bridge.charge_fn = Callable()
+	_done()
+
+
+## Nobody else is told what anybody is carrying — not even that it changed, and not a bot's,
+## whose peer id is the broadcast address.
+func _test_inventory_is_private() -> void:
+	_section("a bag is private: nobody else is told, not even that it changed")
+
+	var other_peer := CLIENT_PEER + 3
+	var other := SESSION + 3
+	var bot := SESSION + 4
+
+	_server_events.clear()
+	_recording = true
+	var added := _server_bridge.add_player(other_peer, other, "Cy")
+	_server_bridge.link.deliver(&"request", other_peer, _request_bytes(PlaygroundEvents.Ask.READY))
+	var bot_added := _server_bridge.add_player(0, bot, "Bot")
+	await _steps(2)
+	_check(added.ok and bot_added.ok, "a second player joins on a peer of their own, and a bot on none")
+
+	var theirs := _inventory_events(other_peer)
+	_check(
+		theirs.size() == 1 and int(theirs[0]["sub"]) == PlaygroundEvents.InvTell.DOC
+			and bool(theirs[0].get("ok", false)) and _doc_count(theirs[0]["doc"], "crate") == 0,
+		"the second player is sent their own bag on admission, and it is empty",
+		str(theirs)
+	)
+
+	_server_events.clear()
+	var inv := _server_game.inventory
+	var net_half: PlaygroundInventoryNet = _server_bridge.inventory_net
+	var gave := inv.give(net_half.bag_key(SESSION), &"die").ok \
+		and inv.give(net_half.bag_key(other), &"can").ok \
+		and inv.give(net_half.bag_key(bot), &"ball").ok
+	_check(gave, "the server changes all three bags in one tick")
+	await _steps(2)
+
+	var to_mine := _inventory_events(CLIENT_PEER)
+	var to_other := _inventory_events(other_peer)
+	_check(
+		_inventory_events(0).is_empty(),
+		"nothing about any bag is broadcast — not the bot's either, whose peer id is the broadcast address"
+	)
+	_check(
+		to_other.size() == 1 and _doc_count(to_other[0].get("doc", {}), "can") == 1
+			and _doc_count(to_other[0].get("doc", {}), "die") == 0
+			and _doc_count(to_other[0].get("doc", {}), "crate") == 0,
+		"the second player hears about their own can, and nothing of this client's bag",
+		str(to_other)
+	)
+	_check(
+		to_mine.size() == 1 and _doc_count(to_mine[0].get("doc", {}), "die") == 1
+			and _doc_count(to_mine[0].get("doc", {}), "can") == 0
+			and _doc_count(to_mine[0].get("doc", {}), "ball") == 0,
+		"and this client hears about its die and nobody else's anything"
+	)
+	var peers := _inventory_peers()
+	peers.sort()
+	_check(
+		peers.size() == 2 and peers[0] == CLIENT_PEER and peers[1] == other_peer,
+		"no inventory message went anywhere but to the two owners",
+		str(peers)
+	)
+	_check(
+		_client_game.inventory.keys().size() == 1
+			and _client_bag().doc.count_of(&"can") == 0 and _client_bag().doc.count_of(&"ball") == 0,
+		"and this client still holds one bag, its own"
+	)
+
+	_recording = false
+	_server_events.clear()
+	_server_bridge.remove_player(other)
+	_server_bridge.remove_player(bot)
+	await _steps(4)
+	_check(
+		not inv.has_bag(net_half.bag_key(other)) and not inv.has_bag(net_half.bag_key(bot)),
+		"and a bag that belonged to a session goes with it"
+	)
+	_done()
+
+
+func _reconnect(session: int) -> void:
+	_server_bridge.add_player(CLIENT_PEER, session, "Ada")
+	_client_bridge.ask_ready()
+	_exchange()
+	await _steps(4)
+
+
+func _disconnect() -> void:
+	_server_bridge.remove_peer(CLIENT_PEER)
+	_exchange()
+	await _steps(4)
+
+
+## A client flooding its bag. Its own section, just before the rejoin, because it spends the
+## peer's whole budget and every client op for the next second is refused for it — which is
+## the rule working, and would read as a bug in whatever section came next. The rejoin's
+## disconnect is what resets it.
+func _test_inventory_flood() -> void:
+	_section("a client flooding its bag is told no past thirty a second, and rolls every no back")
+
+	var mine := _client_bag()
+	var server := _server_bag()
+	var net_half: PlaygroundInventoryNet = _client_bridge.inventory_net
+	var reasons: Array[String] = []
+	var on_refused := func(reason: String) -> void: reasons.append(reason)
+	_client_bridge.inventory_refused.connect(on_refused)
+	var before_flood := 0
+
+	# Answered, not dropped: every one of them is already applied on the client.
+	var home := _cell_of(mine, &"beach_ball")
+	var away := _first_free(mine)
+	for i in range(40):
+		var from := home if i % 2 == 0 else away
+		var to := away if i % 2 == 0 else home
+		var _flooded := mine.apply(DotInvOp.move(BACKPACK, _uid_at(mine, from), BACKPACK, to))
+	_check(net_half.in_flight_count() == 40, "a client sends forty moves in one tick")
+	_exchange()
+	await _steps(2)
+	var said_no := reasons.slice(before_flood)
+	_check(
+		said_no.size() >= 5 and said_no.size() <= 35 and said_no.has("too many inventory operations"),
+		"the server takes about thirty and refuses the rest as too many (%d refused)" % said_no.size(),
+		str(said_no.slice(0, 3))
+	)
+	_check(
+		net_half.in_flight_count() == 0 and _bag_summary(mine) == _bag_summary(server),
+		"and after every refusal is rolled back the two bags agree",
+		"%s vs %s" % [_bag_summary(mine), _bag_summary(server)]
+	)
+
+	_client_bridge.inventory_refused.disconnect(on_refused)
+	_done()
+
+
+## A person who reconnects is a new userid to dot-server, and the same person to their bag.
+func _test_inventory_rejoin() -> void:
+	_section("a player who reconnects is sent their whole bag, under a new userid")
+
+	var rejoin := SESSION + 20
+	var person := &"bag:ada"
+	var inv := _server_game.inventory
+	var net_half: PlaygroundInventoryNet = _server_bridge.inventory_net
+	var old_key := net_half.bag_key(SESSION)
+
+	# What the module sets: who a session IS, for a bag that should outlast it.
+	_server_bridge.inventory_key_fn = func(session_id: int) -> String:
+		return String(person) if session_id == SESSION or session_id == rejoin else ""
+
+	# An op still in flight when the connection drops, whose request never arrives.
+	var mine_then := _client_bag()
+	var stranded := mine_then.apply(DotInvOp.move(
+		BACKPACK, _uid_at(mine_then, _cell_of(mine_then, &"beach_ball")), BACKPACK, _first_free(mine_then)
+	))
+	if stranded.ok and not _to_server.is_empty():
+		_to_server.pop_back()
+
+	await _disconnect()
+	_check(
+		not inv.has_bag(old_key),
+		"the bag the first connection had was the session's, and went with it"
+	)
+	await _reconnect(SESSION)
+	_check(
+		stranded.ok and _client_bridge.inventory_net.in_flight_count() == 0
+			and _bag_summary(_client_bag()) == _bag_summary(inv.for_player(person)),
+		"nothing from the old connection is replayed onto the new bag, though dot-server gave the same userid",
+		"%d in flight, %s vs %s" % [
+			_client_bridge.inventory_net.in_flight_count(), _bag_summary(_client_bag()),
+			_bag_summary(inv.for_player(person))
+		]
+	)
+	_check(
+		net_half.bag_key(SESSION) == person and _client_bag() != null,
+		"reconnected, this player's bag is now kept under who they are"
+	)
+
+	var gave := inv.give(person, &"crate").ok and inv.give(person, &"barrel").ok \
+		and inv.give(person, &"beach_ball").ok
+	await _steps(2)
+	var mine := _client_bag()
+	var ball := _uid_at(mine, _cell_of(mine, &"beach_ball"))
+	var moved := mine != null and mine.apply(DotInvOp.move(BACKPACK, ball, BACKPACK, Vector2i(7, 4))).ok
+	_exchange()
+	_check(
+		gave and moved and _bag_summary(_client_bag()) == _bag_summary(inv.for_player(person)),
+		"they fill it — three things from the server and a move of their own",
+		"%s vs %s" % [_bag_summary(_client_bag()), _bag_summary(inv.for_player(person))]
+	)
+
+	_recording = true
+	_server_events.clear()
+	await _disconnect()
+	_check(inv.has_bag(person), "they leave, and the bag stays: it belongs to somebody the server will know again")
+	var away := inv.give(person, &"die")
+	await _steps(2)
+	_check(
+		away.ok and _inventory_events(CLIENT_PEER).is_empty() and _inventory_peers().is_empty(),
+		"an admin gives them a die while they are away, and nobody is sent anything"
+	)
+	_recording = false
+	var held := _bag_summary(inv.for_player(person))
+
+	await _reconnect(rejoin)
+	_check(
+		_client_bridge.local_player_id == rejoin,
+		"they come back, and dot-server gives them a new userid"
+	)
+	_check(
+		_bag_summary(_client_bag()) == held and _client_bag().doc.count_of(&"die") == 1
+			and _client_bag().doc.count_of(&"crate") == 1 and _client_bag().doc.count_of(&"barrel") == 1,
+		"and the whole bag, uids and all, including what arrived while they were away",
+		"%s vs %s" % [_bag_summary(_client_bag()), held]
+	)
+	_check(
+		_client_game.inventory.keys().size() == 1,
+		"in the one bag this client holds: the old connection's is gone",
+		str(_client_game.inventory.keys())
+	)
+
+	var mine_again := _client_bag()
+	var back_ball := _uid_at(mine_again, Vector2i(7, 4))
+	var again := mine_again.apply(DotInvOp.move(BACKPACK, back_ball, BACKPACK, Vector2i(8, 4)))
+	_exchange()
+	_check(
+		again.ok and _cell_of(inv.for_player(person), &"beach_ball") == Vector2i(8, 4)
+			and _client_bridge.inventory_net.in_flight_count() == 0,
+		"and an op on it after the rejoin is confirmed against the same bag on the server"
+	)
+
+	# The original connection back, for the section after this one.
+	await _disconnect()
+	_server_bridge.inventory_key_fn = Callable()
+	await _reconnect(SESSION)
+	_check(
+		_client_bridge.local_player_id == SESSION and _client_player() != null,
+		"and the original connection is back for the section after this"
+	)
+
 	_done()
 
 

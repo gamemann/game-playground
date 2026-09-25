@@ -42,8 +42,8 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## This suite had neither until 2026-09-24. Each section calls [method _section_done] as
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
-const SECTIONS := 23
-const CHECKS := 209
+const SECTIONS := 24
+const CHECKS := 214
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -121,6 +121,7 @@ func _run() -> void:
 		_test_identity()
 		await _test_live_tools()
 		await _test_blind_and_beacon()
+		_test_inventory_commands()
 		_test_disconnect_is_handled()
 		await _test_module_unloads_cleanly()
 		_test_no_message_preloads_itself()
@@ -1773,6 +1774,52 @@ func _run_command_later(line: String) -> PackedStringArray:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	return PackedStringArray(captured)
+
+
+## The inventory from the console: an operator puts something in somebody's bag and reads it
+## back. `headless_net` is where the bag crosses the wire; this is where the MODULE's half —
+## the commands and who a session is for a bag that outlasts it — is run at all.
+func _test_inventory_commands() -> void:
+	print("")
+	print("[the inventory, from the console]")
+
+	var bridge: Variant = _module().get("bridge")
+	_check(
+		bridge != null and (bridge.get("inventory_key_fn") as Callable).is_valid(),
+		"the module tells the bridge who a session is, so a bag can outlast a reconnect"
+	)
+
+	var player := game.add_player(&"u79", "Rae")
+	var session := DotClientSession.new()
+	session.peer_id = 7909
+	session.userid = 79
+	session.display_name = "Rae"
+	var _adopted := server.adopt_session(session)
+
+	var given := _run_command("pg_give Rae crate 2")
+	var bag: StringName = bridge.get("inventory_net").call("bag_key", 79) if bridge != null else &""
+	_check(
+		player != null and game.inventory.carries(bag, &"crate") == 2 and _said(given, "2 crate"),
+		"`pg_give Rae crate 2` puts two crates in their bag (%s)" % bag,
+		" | ".join(given)
+	)
+	var carried := _run_command("pg_inv Rae")
+	_check(_said(carried, "crate"), "and `pg_inv Rae` lists them", " | ".join(carried))
+	var nobody := _run_command("pg_give Nobody crate")
+	_check(_said(nobody, "pg_give <player>"), "somebody who is not here is answered with the usage")
+
+	# A session nobody can recognise next time has no bag that outlasts it: the platform's
+	# `local:<userid>` identifies nobody after a reconnect, and a bag kept under it would be
+	# one abandoned bag per connection for the life of the server.
+	var key := str(_module().call("_bag_key_for", 79))
+	_check(
+		not key.begins_with("bag:local:"),
+		"and a key that identifies nobody next time is not used to keep a bag (%s)" % (key if key != "" else "the session's own")
+	)
+
+	var _released := server.release_session(session.peer_id)
+	game.remove_player(&"u79")
+	_section_done()
 
 
 func _test_disconnect_is_handled() -> void:

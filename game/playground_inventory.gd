@@ -42,6 +42,23 @@ const BACKPACK_H := 6
 ## something, or the grid is the only limit and a grid alone rewards tidiness.
 const BACKPACK_WEIGHT := 400.0
 
+## The actor every server-originated op is applied as: a purchase, a spawn from the bag, an
+## admin's give. What a refusal in the log is attributed to.
+##
+## [b]It was the player's own id, and that was a bug.[/b] `DotInvManager` rate-limits per
+## actor at 30 a second, which is right for what a CLIENT sends. `give` and `take` passed the
+## player's id, so the server's own changes spent the player's budget: thirty beach balls into
+## a sixty-cell bag and the thirty-first was refused as "too many inventory operations". A
+## separate actor alone only moves the cap onto the server's own changes, so this actor is
+## also in every server manager's `unlimited_actors` — which dot-inventory grew for exactly
+## this, after it was found here.
+const SERVER_ACTOR := &"server"
+
+## How many ops one player may apply a second, on the server. Keyed by the actor, which
+## [PlaygroundInventoryNet] sets to the SESSION the request arrived on — so it is per
+## connection, and one player flooding does not throttle anybody else's bag.
+const OPS_PER_SECOND := 30
+
 ## Somebody's carried items changed.
 signal changed(player_id: StringName)
 
@@ -54,17 +71,24 @@ var catalogue: DotInvCatalogue = null
 @export var authoritative: bool = true
 
 
-func setup(spawnables: DotPropCatalogue) -> DotResult:
+## Where [constant SERVICE] is registered. Scoped for the same reason the playground's own
+## registration is: a server and a client in one process — every net suite, and a listen
+## server — would otherwise replace each other's.
+var _service_name: StringName = SERVICE
+
+
+func setup(spawnables: DotPropCatalogue, scope: StringName = &"") -> DotResult:
 	catalogue = build_catalogue(spawnables)
 	var res := catalogue.validate()
 	if not res.ok:
 		return res.wrap("the playground's item catalogue")
-	DotRegistry.register(SERVICE, self)
+	_service_name = DotRegistry.scoped_name(SERVICE, scope) if scope != &"" else SERVICE
+	DotRegistry.register(_service_name, self)
 	return DotResult.success(null)
 
 
 func _exit_tree() -> void:
-	DotRegistry.unregister_instance(SERVICE, self)
+	DotRegistry.unregister_instance(_service_name, self)
 
 
 ## An item catalogue derived from the prop catalogue, rather than written beside it.
@@ -145,10 +169,18 @@ func for_player(player_id: StringName) -> DotInvManager:
 	m.catalogue = catalogue
 	m.authoritative = authoritative
 	m.register_as_service = false
-	# Thirty a second per player. An inventory is the cheapest denial of service a client
-	# has -- a move is a validation, a weight sum and a redraw -- and the bucket is per
-	# actor, so one player flooding does not throttle everybody else's bag.
-	m.ops_per_second = 30
+	# [b]Limited on the server, with the server's own changes exempt.[/b] An inventory is the
+	# cheapest denial of service a client has; the actor is the session the op arrived on.
+	# The exemption is what the limit was missing: without it the server's own purchases and
+	# gives spent the player's budget, and for a while the managers here were built unlimited
+	# with the rule re-implemented per peer on the wire.
+	#
+	# [b]Unlimited on a client.[/b] A client limiting itself protects nothing — a client that
+	# floods does not run this code — and [PlaygroundInventoryNet] re-applies every op still
+	# in flight through `apply` after a whole-bag correction, all in one frame, which a limit
+	# here refused.
+	m.ops_per_second = OPS_PER_SECOND if authoritative else 0
+	m.unlimited_actors = [SERVER_ACTOR]
 	add_child(m)
 
 	var res := m.setup([BACKPACK])
@@ -169,10 +201,38 @@ func forget(player_id: StringName) -> void:
 	_managers.erase(player_id)
 
 
+## Whether a bag exists for [param player_id], without making one.
+func has_bag(player_id: StringName) -> bool:
+	return _managers.has(player_id)
+
+
+## Every bag this instance holds, by key.
+func keys() -> Array[StringName]:
+	var out: Array[StringName] = []
+	for id: Variant in _managers.keys():
+		out.append(StringName(id))
+	return out
+
+
 ## Puts a bought item in somebody's bag. Returns what it could not fit.
+##
+## As [constant SERVER_ACTOR], not as the player: see there.
 func give(player_id: StringName, item_id: StringName, count: int = 1) -> DotResult:
 	var m := for_player(player_id)
-	return m.apply(DotInvOp.add(item_id, count, BACKPACK), player_id)
+	return m.apply(DotInvOp.add(item_id, count, BACKPACK), SERVER_ACTOR)
+
+
+## Whether [method give] would take [param count] of [param item_id], asked before anything
+## is charged for it.
+##
+## `DotInvManager.validate` of the same ADD, which asks the item, the container, the weight
+## and — since 2026-09-25 — the ROOM. It did not ask room before, so a purchase into a full
+## bag passed, was charged for, and was then refused, with dot-inventory logging an ERROR that
+## said it "failed after it had been validated"; this used to ask first-fit itself. Kept as a
+## method because "may this be given" is the shop's question, and the answer should not
+## depend on the caller knowing which container a purchase goes into.
+func may_give(player_id: StringName, item_id: StringName, count: int = 1) -> DotResult:
+	return for_player(player_id).validate(DotInvOp.add(item_id, count, BACKPACK))
 
 
 ## Takes one out, for spawning it. Refuses when they do not have one.
@@ -188,7 +248,7 @@ func take(player_id: StringName, item_id: StringName) -> DotResult:
 
 	for uid in container.entries.keys():
 		if str((container.entries[uid] as Dictionary).get("item", "")) == String(item_id):
-			return m.apply(DotInvOp.drop(BACKPACK, uid, 1), player_id)
+			return m.apply(DotInvOp.drop(BACKPACK, uid, 1), SERVER_ACTOR)
 
 	return DotResult.fail(
 		DotError.CODE_STATE, "you are not carrying a %s" % item_id
@@ -196,6 +256,8 @@ func take(player_id: StringName, item_id: StringName) -> DotResult:
 
 
 func carries(player_id: StringName, item_id: StringName) -> int:
+	if not _managers.has(player_id):
+		return 0
 	var m := for_player(player_id)
 	return m.doc.count_of(item_id)
 
