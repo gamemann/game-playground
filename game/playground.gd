@@ -669,17 +669,23 @@ func _classify_spawned(prop: DotPropInstance) -> void:
 	if player_stack == null or prop.node == null:
 		return
 
-	var layer := &"prop"
+	var _put := player_stack.classify(prop.node, layer_for(prop.def, prop.frozen))
 
-	match PlaygroundSpawnables.kind_of(prop.def):
+
+## The collision layer a spawned body of [param def] belongs on.
+##
+## One answer for both ends: the server's spawn and a client's mirror of it
+## (`PlaygroundNetBridge._apply_prop`) read this, because a mirror on a different layer
+## is a client whose own predicted player collides with a different world from the one
+## the server moves it through.
+static func layer_for(def: DotPropDef, frozen: bool) -> StringName:
+	match PlaygroundSpawnables.kind_of(def):
 		PlaygroundSpawnables.Kind.ENTITY:
-			layer = &"npc"
+			return &"npc"
 		PlaygroundSpawnables.Kind.VEHICLE:
-			layer = &"vehicle"
+			return &"vehicle"
 		_:
-			layer = &"frozen_prop" if prop.frozen else &"prop"
-
-	var _put := player_stack.classify(prop.node, layer)
+			return &"frozen_prop" if frozen else &"prop"
 
 
 ## Re-reads a prop's layer after it was frozen, unfrozen, grabbed or dropped.

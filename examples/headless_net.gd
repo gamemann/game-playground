@@ -49,7 +49,7 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 255
+const CHECKS := 256
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1137,6 +1137,25 @@ func _test_prop_replication() -> void:
 	# every position written into it and jitters against gravity.
 	var body := client_node as RigidBody3D
 	_check(body == null or body.freeze, "the mirrored body does not simulate itself too")
+
+	# `[prop-mirror-layer-1]`: the mirror is on the layout's props layer with its mask,
+	# as the server's body is — not the scene's 1/1, which made a crate scenery to a
+	# client that predicts its own player against its own copy of the world.
+	var client_body := client_node as CollisionObject3D
+	var server_body := server_node as CollisionObject3D
+	_check(
+		client_body != null and server_body != null
+			and server_body.collision_layer != 1
+			and client_body.collision_layer == server_body.collision_layer
+			and client_body.collision_mask == server_body.collision_mask,
+		"and it is on the server's collision layer and mask, not the scene's",
+		"client %d/%d, server %d/%d" % [
+			client_body.collision_layer if client_body != null else -1,
+			client_body.collision_mask if client_body != null else -1,
+			server_body.collision_layer if server_body != null else -1,
+			server_body.collision_mask if server_body != null else -1,
+		]
+	)
 	_done()
 
 

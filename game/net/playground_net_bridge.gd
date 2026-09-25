@@ -1497,6 +1497,20 @@ func _apply_prop(reader: DotNetReader) -> void:
 	if as_prop != null:
 		as_prop.configure(def)
 
+	# [b]On the layout's layer, not the scene's 1/1.[/b] The server classifies every
+	# spawned body (`Playground._classify_spawned`) and a mirror used to keep whatever the
+	# scene had — layer 1 masking 1, the world's — so a crate was scenery to this client
+	# and a prop to the server. That matters now the client predicts its own player: its
+	# sweeps run against its own copy of the world, and a copy whose props sit on another
+	# layer is a world the server does not move that player through. A client has a
+	# layout even though it applies no physics (see `PlaygroundPlayerStack._build_physics`).
+	#
+	# The PROP event carries no frozen state, so a mirror is classified as the spawn left
+	# it on the server only when that is unfrozen; a prop frozen or held later is
+	# reclassified on the server and not here. See the CLAUDE.md note on `[prop-mirror-layer-1]`.
+	if game.player_stack != null:
+		var _put := game.player_stack.classify(body, Playground.layer_for(def, false))
+
 	# An NPC's script is attached on the server and its behaviour runs there. A client
 	# copy is a body being drawn where the server says it is, so the script is
 	# deliberately NOT attached here: it would run a second, disagreeing AI.
