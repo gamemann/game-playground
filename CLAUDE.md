@@ -576,6 +576,8 @@ second thing to disagree with the first. `PgLobby.jump_reach` still answers, by
 inheritance, and the suite still asserts the three constants against the tunables the
 server applies.
 
+Since `[reach-3]` `PlaygroundMap.jump_reach` is no longer a copy of the arithmetic: it asks `DotFpsTunables.jump_reach` on `PlaygroundPlayer.movement_tunables()`, the static builder `_tunables()` now returns, so maps with no player in the tree ask the movement itself (numbers unchanged: 4.75 m flat, 0.0 at a 2.0 m rise); the three constants stay for laying out geometry and are still asserted.
+
 ### A spawn yaw lasted no ticks
 
 **`PlaygroundPlayer.teleport` wrote `controller.state.yaw` directly, and a yaw written
