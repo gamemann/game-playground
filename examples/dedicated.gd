@@ -340,6 +340,8 @@ func _boot() -> void:
 	# Off: nobody is at the keyboard, and the exit probe's copy of this suite inherits
 	# whatever stdin this one has — a reader thread blocked on a terminal is a process that
 	# never exits.
+	# Kept after dot-server 5f46687, which no longer reads a pipe unless `stdin_console_pipes`
+	# is on: a terminal is still read, and a suite takes no commands from either.
 	config.stdin_console_enabled = false
 
 	server = DotServer.new()
