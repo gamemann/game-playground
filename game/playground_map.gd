@@ -12,18 +12,19 @@ extends Node3D
 ##
 ## Subclasses override [method _build] and [method timer_zones].
 
+const PlaygroundPlayer := preload("playground_player.gd")
+
 ## Where players appear if the map has no spawn zone.
 @export var fallback_spawn: Vector3 = Vector3(0.0, 2.0, 0.0)
 
 # --- What the movement can do ----------------------------------------------
 #
 # [b]The three numbers every jump on every built-in map is sized against, copied from
-# `PlaygroundPlayer._tunables` deliberately.[/b] A map is content: it is loaded by
-# `DotMapDef` from a catalogue, it has no player in front of it when `build_zones` is
-# called from a tool, and reaching into the game's player class from here would make a
-# map depend on the game rather than the other way round. The family's answer to a
-# deliberate copy is a check that the copies agree, and `headless_playground` asserts
-# these three against the tunables the server actually applies.
+# `PlaygroundPlayer._tunables` deliberately,[/b] as constants so a map's layout can be
+# written with them. The arithmetic over them is not copied: [method jump_reach] asks
+# `PlaygroundPlayer.movement_tunables()`, a static builder, so a map with no player in
+# the tree still asks the movement itself. `headless_playground` asserts these three
+# against the tunables the server actually applies.
 #
 # They lived in `pg_lobby` until a second map needed them. Here rather than a second
 # copy in `pg_bhop_intro`, because two copies of one number is this tree's most
@@ -40,27 +41,27 @@ const MOVE_GRAVITY := 20.0
 
 
 ## The clear air a player running at [constant MOVE_SPEED] crosses in one jump, landing
-## [param rise] metres higher than they left.
+## [param rise] metres higher than they left. 0.0 for a rise the jump cannot reach.
 ##
-## [b]The landing height is the whole point of this function.[/b] Time to fall back to
-## the height you jumped from is the number everybody writes down, and it is the wrong
-## one for any course that climbs: at 1.15 m of jump height a player is airborne for
-## 0.68 s flat and 0.53 s onto a step 0.8 m up, which is 4.8 m against 3.7. A course
-## sized with the first number is 30% longer than the movement can do, and every check
-## over it passes, because nothing in a zone set knows how far a player can jump.
-##
-## Returns 0.0 for a rise the jump cannot reach at all.
+## [b]Asked of the movement, not worked out here.[/b] This was a copy of the arithmetic
+## until dot-player-controller answered it on `DotFpsTunables.jump_reach`; now it asks
+## the tunables every player here is built with (`PlaygroundPlayer.movement_tunables`,
+## static, so a map with no player in the tree can ask). The landing height is still
+## the point: 4.75 m flat, 4.16 m onto a 0.5 m step.
 static func jump_reach(rise: float) -> float:
-	var launch := sqrt(2.0 * MOVE_GRAVITY * JUMP_HEIGHT)
-	var inside := launch * launch - 2.0 * MOVE_GRAVITY * rise
+	return _movement().jump_reach(rise)
 
-	if inside < 0.0:
-		return 0.0
 
-	# The LATER root: the way back down through that height, not the way up.
-	var airborne := (launch + sqrt(inside)) / MOVE_GRAVITY
+## [method jump_reach]'s tunables, built once. Private and never handed out, so nothing
+## can scale it the way a class scales a live player's.
+static var _movement_cache: DotFpsTunables = null
 
-	return MOVE_SPEED * airborne
+
+static func _movement() -> DotFpsTunables:
+	if _movement_cache == null:
+		_movement_cache = PlaygroundPlayer.movement_tunables()
+
+	return _movement_cache
 
 
 ## The clear air between two standable boxes, seen from above, in metres. 0.0 when

@@ -392,7 +392,15 @@ func class_base_tunables() -> DotFpsTunables:
 ## those shooters added to *stop* bunny-hopping. `crease_slide` on, because a surf map
 ## is made of seams. `friction` low and `air_accelerate` high, because that pair is
 ## what makes a strafe worth making.
+##
+## Static because a map sizes its jumps against these with no player in the tree:
+## `PlaygroundMap.jump_reach` asks [method movement_tunables] directly.
 func _tunables() -> DotFpsTunables:
+	return movement_tunables()
+
+
+## A fresh copy of the movement every player here is built with. See [method _tunables].
+static func movement_tunables() -> DotFpsTunables:
 	var t := DotFpsTunables.new()
 
 	t.auto_hop = true
