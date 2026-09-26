@@ -275,6 +275,58 @@ const CIRCUIT_FINISH_BACK := 12.0
 ## The track bonus 3 runs on.
 const CIRCUIT_TRACK := DotTimerTrack.BONUS_FIRST + 2
 
+# --- The stepping stones ---------------------------------------------------
+#
+# Bonus 4, in the one corner of the plate nothing else uses that is not the vehicle
+# tests' empty one: x 9 to 58 at z = -56, south of the shallow ramp and west of where the
+# jump course's reset ends. Same rule as every course above: `_build_stones`,
+# `build_zones` and the suite read these and nothing else.
+#
+# [b]A different question again.[/b] Bonus 1 asks how far a player can jump, the tower
+# whether they can face somewhere new, the circuit whether they can drive. This asks
+# whether they can STOP: ten stone columns shrinking from 2 m across to 1 m, every jump
+# a diagonal across the line, and every one short enough that a flat-out running jump
+# lands past the stone (`stones_route` and the suite's overshoot check). Speed, which
+# every other course here rewards, is the thing to get rid of in the air.
+
+## The track bonus 4 runs on.
+const STONES_TRACK := DotTimerTrack.BONUS_FIRST + 3
+
+## The line the stones sway either side of, and the start pad's centre on it.
+const STONES_Z := -56.0
+const STONES_START_X := 12.0
+
+## The start pad and its top surface.
+const STONES_PAD := Vector3(6.0, 1.0, 6.0)
+const STONES_BASE_Y := 3.0
+
+## Stones after the pad, and how wide the first and the last are. A 1 m stone is a
+## player and a quarter across.
+const STONES_COUNT := 10
+const STONE_FIRST := 2.0
+const STONE_LAST := 1.0
+
+## The clear air along the line before stone [i]i[/i] is `STONE_GAP + STONE_GAP_GROWTH * i`;
+## [constant STONES_COUNT] is the gap onto the finish. Long enough to need a jump, and
+## every one shorter than `jump_reach` by more than the stone it lands on.
+const STONE_GAP := 1.8
+const STONE_GAP_GROWTH := 0.08
+
+## How much each stone is higher than the last. A quarter of a metre: enough that the
+## finish reads as up from the pad, nowhere near the climb limit.
+const STONE_RISE := 0.25
+
+## How far either side of [constant STONES_Z] the stones alternate, so each jump is a
+## diagonal and a player lands facing the wrong way for the next one.
+const STONE_SWAY := 1.0
+
+## The finish pad, on the line.
+const STONES_FINISH := Vector3(4.0, 1.0, 4.0)
+
+## The reset: the air just above the floor under the stones. A player who misses one
+## lands on the plate, inside it, and goes back to the pad.
+const STONES_FLOOR_Y := 1.5
+
 
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
@@ -307,6 +359,7 @@ func _build() -> void:
 	_build_course()
 	_build_tower()
 	_build_circuit()
+	_build_stones()
 
 
 ## The movement corner's steep ramp: past `max_slope_angle`, so it is only ever surfed.
@@ -593,6 +646,100 @@ static func tower_route() -> Array[AABB]:
 	return route
 
 
+## Bonus 4: a start pad, ten stone columns standing on the plate, and a finish pad.
+##
+## Columns from the floor rather than slabs in the air, because what makes a stepping
+## stone read as one is that there is nothing round it: a 1 m slab floating 5 m up is a
+## speck, and a 1 m column is a thing a player can see the top of and aim at.
+func _build_stones() -> void:
+	_pad(
+		Vector3(STONES_START_X, STONES_BASE_Y - STONES_PAD.y * 0.5, STONES_Z),
+		PlaygroundGeometry.COLOUR_START,
+		STONES_PAD
+	)
+
+	for i in range(STONES_COUNT):
+		var stone := stone_box(i)
+		PlaygroundGeometry.box(
+			self, stone.get_center(), stone.size, PlaygroundGeometry.COLOUR_PLATFORM
+		)
+
+	var finish := stones_finish_centre()
+	_pad(
+		Vector3(finish.x, finish.y - STONES_FINISH.y * 0.5, finish.z),
+		PlaygroundGeometry.COLOUR_END,
+		STONES_FINISH
+	)
+
+
+## How wide stone [param index] is, shrinking evenly from [constant STONE_FIRST] to
+## [constant STONE_LAST].
+static func stone_size(index: int) -> float:
+	return lerpf(STONE_FIRST, STONE_LAST, float(index) / float(STONES_COUNT - 1))
+
+
+## The clear air along the line before stone [param index]; [constant STONES_COUNT] is
+## the gap onto the finish pad.
+static func stone_gap(index: int) -> float:
+	return STONE_GAP + STONE_GAP_GROWTH * float(index)
+
+
+## Stone [param index] as the whole column, floor to top. Static, for `platform_centre`'s
+## reason: the zones and the suite read the same arithmetic the geometry is built from.
+##
+## Walked edge to edge along the line, as the jump course is, so the gap a player jumps
+## is the number [method stone_gap] says rather than a centre distance minus a guess.
+static func stone_box(index: int) -> AABB:
+	var edge := STONES_START_X + STONES_PAD.x * 0.5
+
+	for i in range(index):
+		edge += stone_gap(i) + stone_size(i)
+
+	edge += stone_gap(index)
+
+	var size := stone_size(index)
+	var top := STONES_BASE_Y + STONE_RISE * float(index + 1)
+	var sway := STONE_SWAY if index % 2 == 0 else -STONE_SWAY
+
+	return AABB(
+		Vector3(edge, 0.0, STONES_Z + sway - size * 0.5),
+		Vector3(size, top, size)
+	)
+
+
+## The top surface of the finish pad, one gap past the last stone and a rise above it.
+static func stones_finish_centre() -> Vector3:
+	var last := stone_box(STONES_COUNT - 1)
+
+	return Vector3(
+		last.end.x + stone_gap(STONES_COUNT) + STONES_FINISH.x * 0.5,
+		last.end.y + STONE_RISE,
+		STONES_Z
+	)
+
+
+## Bonus 4 as the boxes a player lands on: the pad, ten stones, the finish pad.
+static func stones_route() -> Array[AABB]:
+	var route: Array[AABB] = [
+		standable(
+			Vector3(STONES_START_X, STONES_BASE_Y - STONES_PAD.y * 0.5, STONES_Z),
+			STONES_PAD
+		),
+	]
+
+	for i in range(STONES_COUNT):
+		route.append(stone_box(i))
+
+	var finish := stones_finish_centre()
+	route.append(
+		standable(
+			Vector3(finish.x, finish.y - STONES_FINISH.y * 0.5, finish.z), STONES_FINISH
+		)
+	)
+
+	return route
+
+
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
 
@@ -697,6 +844,7 @@ static func build_zones() -> DotTimerZoneSet:
 
 	_add_tower_zones(zones)
 	_add_circuit_zones(zones)
+	_add_stones_zones(zones)
 
 	return zones
 
@@ -1060,3 +1208,73 @@ static func _add_circuit_zones(zones: DotTimerZoneSet) -> void:
 ## build.
 func track_is_driven(track: int) -> bool:
 	return track == CIRCUIT_TRACK
+
+
+## Bonus 4's zones, from the same `stone_box` the columns are built from.
+static func _add_stones_zones(zones: DotTimerZoneSet) -> void:
+	var track := STONES_TRACK
+	var first := stone_box(0).get_center()
+
+	# On the pad, a stride back from its middle, facing the first stone. The yaw is
+	# `_add_tower_zones`' `atan2(-dx, -dz)`, for the reason written there.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(STONES_START_X - 1.0, STONES_BASE_Y + 1.0, STONES_Z)
+	var toward := Vector3(
+		first.x - spawn.destination.x, 0.0, first.z - spawn.destination.z
+	).normalized()
+	spawn.destination_yaw = rad_to_deg(atan2(-toward.x, -toward.z))
+	zones.add(spawn)
+
+	# On the pad, so the clock starts on the jump off it.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(
+			STONES_START_X - STONES_PAD.x * 0.5,
+			STONES_BASE_Y - 0.5,
+			STONES_Z - STONES_PAD.z * 0.5
+		),
+		Vector3(
+			STONES_START_X + STONES_PAD.x * 0.5,
+			STONES_BASE_Y + 5.0,
+			STONES_Z + STONES_PAD.z * 0.5
+		)
+	)
+	zones.add(start)
+
+	# Deep, for `thin_zones`' reason, like every finish here.
+	var finish := stones_finish_centre()
+	var end := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	end.set_box(
+		Vector3(
+			finish.x - STONES_FINISH.x * 0.5, finish.y - 1.0,
+			finish.z - STONES_FINISH.z * 0.5
+		),
+		Vector3(
+			finish.x + STONES_FINISH.x * 0.5, finish.y + 5.0,
+			finish.z + STONES_FINISH.z * 0.5
+		)
+	)
+	zones.add(end)
+
+	# Two splits, on stones 3 and 6 of 10: slabs across the whole course and the whole
+	# height above the reset, 2 m deep along the line and centred on the stone. A player
+	# who clears a stone in one jump still passes through its slab — bonus 1's rule —
+	# and one who misses it falls into the reset before reaching the next.
+	for split in [1, 2]:
+		var stone := stone_box(STONES_COUNT * split / 3 - 1).get_center()
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(split)
+		stage.set_box(
+			Vector3(stone.x - 1.0, STONES_FLOOR_Y, STONES_Z - 6.0),
+			Vector3(stone.x + 1.0, finish.y + 10.0, STONES_Z + 6.0)
+		)
+		zones.add(stage)
+
+	# The plate under the whole course, on bonus 4's track only: a sandbox player
+	# walking between the columns is left alone, as under every course here.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(STONES_START_X - STONES_PAD.x, 0.0, STONES_Z - 8.0),
+		Vector3(finish.x + STONES_FINISH.x * 2.0, STONES_FLOOR_Y, STONES_Z + 8.0)
+	)
+	zones.add(reset)

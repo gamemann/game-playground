@@ -240,6 +240,14 @@ func _shots_for(id: String) -> Array[Dictionary]:
 		# height (down the start/finish straight, from the grid).
 		{"name": "pg_lobby_circuit", "from": Vector3(-120, 105, 130), "at": Vector3(0, 0, 30)},
 		{"name": "pg_lobby_circuit_grid", "from": Vector3(-26, 3.0, 82), "at": Vector3(40, 2.0, 82)},
+
+		# Bonus 4, the stepping stones: ten columns at z = -56 from x 15 to 54, shrinking
+		# from 2 m across to 1 m. From the north and above, square to the line, so the
+		# shrinking and the sway either side of the line both read; and from behind the
+		# pad and off to one side at a little over head height: straight down the line the
+		# columns stand behind each other and read as one.
+		{"name": "pg_lobby_stones", "from": Vector3(34, 16, -34), "at": Vector3(34, 3.0, -56)},
+		{"name": "pg_lobby_stones_start", "from": Vector3(5, 9.0, -49), "at": Vector3(30, 4.0, -57)},
 	]
 
 
