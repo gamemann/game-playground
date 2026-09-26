@@ -48,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 415
+const CHECKS := 432
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 24
+const SECTIONS := 25
 
 var _passed := 0
 var _failed := 0
@@ -114,6 +114,7 @@ func _run() -> void:
 	await _test_the_switchback()
 	await _test_the_ascent()
 	await _test_the_cascade()
+	await _test_the_stepping_stones()
 	await _test_the_maps_are_surveyed()
 	await _test_the_client_boots()
 
@@ -2137,8 +2138,9 @@ func _test_the_sandbox_and_its_course() -> void:
 			DotTimerTrack.BONUS_FIRST,
 			DotTimerTrack.BONUS_FIRST + 1,
 			PgLobby.CIRCUIT_TRACK,
+			PgLobby.STONES_TRACK,
 		],
-		"the game can see all four tracks without being told about them",
+		"the game can see all five tracks without being told about them",
 		str(tracks)
 	)
 
@@ -3537,6 +3539,137 @@ func _test_the_cascade() -> void:
 	_check(
 		drive["finished"],
 		"and reaches the finish pad: the cascade run end to end",
+		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.x, player.global_position.y,
+				player.global_position.z, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+func _test_the_stepping_stones() -> void:
+	print("")
+	_section("the stepping stones — pg_lobby's bonus 4, landed stone by stone")
+
+	var loaded: DotResult = await playground.change_map(&"pg_lobby")
+	_check(loaded.ok, "the sandbox loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgLobby.STONES_TRACK
+	var zones := PgLobby.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2},
+		"bonus 4 has a start, a finish, a spawn, a respawn and two splits, on its own track",
+		str(kinds)
+	)
+	_check(
+		zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"and dot-timer finds nothing missing from any route on the map",
+		", ".join(zones.route_problems())
+	)
+
+	var route := PgLobby.stones_route()
+	_check_route_reach(route, "the stepping stones")
+
+	# What makes it this course and not a fifth copy of the jump course: every stone is
+	# narrower than the last, every stone-to-stone jump crosses the line, and a jump at
+	# full running reach lands PAST every stone — so each one is a jump a player has to
+	# take speed off in the air to land, which no other route here asks.
+	var shape := PackedStringArray()
+	var widest_margin := -INF
+	for i in range(1, route.size()):
+		var gap := PgLobby.gap_between(route[i - 1], route[i])
+		var rise := route[i].end.y - route[i - 1].end.y
+		var beyond := gap + route[i].size.x
+		if i < route.size() - 1:
+			widest_margin = maxf(widest_margin, beyond / PgLobby.jump_reach(rise))
+		if i < route.size() - 1 and beyond >= PgLobby.jump_reach(rise):
+			shape.append("#%d: %.2f m of air and stone against a %.2f m reach" % [
+				i, beyond, PgLobby.jump_reach(rise)])
+		if i > 1 and i < route.size() - 1:
+			if route[i].size.x >= route[i - 1].size.x:
+				shape.append("#%d is no narrower than #%d" % [i, i - 1])
+			if absf(route[i].get_center().z - route[i - 1].get_center().z) < 1.0:
+				shape.append("#%d does not cross the line" % i)
+	print("    the stepping stones: stones %.2f m down to %.2f m; the far edge of a stone is at most %.0f%% of a running jump" % [
+		route[1].size.x, route[route.size() - 2].size.x, widest_margin * 100.0,
+	])
+	_check(shape.is_empty(),
+		"every stone is narrower than the last, across the line, and overshot flat out",
+		", ".join(shape))
+
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	var lowest_top := INF
+	for box in route:
+		lowest_top = minf(lowest_top, box.end.y)
+	_check(
+		reset.from.y <= 0.0 and reset.to.y < lowest_top - 1.0,
+		"and its reset is the air on the plate under it, well below every stone",
+		"reset %.2f..%.2f, lowest top %.2f" % [reset.from.y, reset.to.y, lowest_top]
+	)
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	_check(player.timer.set_track(track), "the stepping stones' track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	var first := route[1].get_center()
+	var toward := Vector3(
+		first.x - player.global_position.x, 0.0, first.z - player.global_position.z
+	).normalized()
+	_check(
+		player.aim_direction().dot(toward) > 0.9,
+		"facing the first stone",
+		"dot %.2f; yaw %.1f, the spawn says %.1f"
+			% [player.aim_direction().dot(toward), player.controller.state.yaw,
+				spawn.destination_yaw]
+	)
+
+	var drive: Dictionary = await _drive_route(player, route, 3000)
+
+	print("    the stepping stones: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 4")
+	_check(
+		drive["splits"] == [1, 2],
+		"it lands through both splits, in order",
+		str(drive["splits"])
+	)
+	_check(
+		drive["finished"],
+		"and reaches the finish pad: the stepping stones run end to end",
 		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
 			% [int(drive["reached"]), route.size() - 1,
 				player.global_position.x, player.global_position.y,

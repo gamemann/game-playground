@@ -77,7 +77,7 @@ game/
   playground_map_survey.gd  slots, unreached ground and traps, swept over a built map's boxes
   prop.tscn / entity.tscn  one scene for every prop, one for every entity
 maps/
-  pg_lobby.gd            the sandbox, and a jump course on bonus 1
+  pg_lobby.gd            the sandbox: the jump course, the tower, the circuit and the stepping stones on bonus 1-4
   pg_surf_intro.gd       two ramps and a valley, the plunge on bonus 1, the cascade on bonus 2
   pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3
   *.zones.json           generated from the maps, and checked against them
@@ -1031,6 +1031,14 @@ Bonus 2 on `pg_surf_intro` (`CASCADE_TRACK`), west of the main run at x = -60, m
 
 `headless_playground`'s **the cascade** drives it with `_drive_route`: through both splits in ~1,600 ticks, no respawns. Armed with the last gap at 6.5 m: the reach check fails and the bot stops at box 6 with two respawns. `tools/screenshot.sh pg_surf_intro` renders `pg_surf_intro_cascade` (from the west, 45 degrees down: the profile) and `pg_surf_intro_cascade_start` (over the backstop, down the staircase). **Rendering it found that the maps had no scale at all**: flat unshaded colour made a 3 m block beside a 220 m ramp two tiles, and the first profile angle showed the route as a scatter of them in front of the main run's ramp. The world-space grid fixed the first; the angle the second.
 
+## `pg_lobby`'s stepping stones: the first course where speed is the thing to lose
+
+Bonus 4 on `pg_lobby` (`STONES_TRACK`), in the plate's south-east quarter at z = -56, x 9 to 58 — clear of the jump course's reset, the shallow ramp, the circuit's corner and the vehicle tests' empty corner at (-60, -60). pg_lobby was the map that had waited longest for a level (its last route work was the tower's drive on 2026-09-23). A 6 m pad at 3 m, ten stone columns standing on the plate shrinking evenly from 2.0 m to 1.0 m across, each 0.25 m above the last and alternating 1 m either side of the line, then a 4 m finish pad at 5.75 m. Gaps along the line grow 1.8 -> 2.6 m. **Every other course here rewards speed; this one asks whether a player can stop**: every jump is short (the tightest, #10, is 2.69 m of diagonal air against a 4.47 m reach, 60%) but a flat-out running jump lands past every stone (gap plus stone is at most 85% of the reach, and the suite asserts it is under 100% for every stone), so each landing means taking speed off in the air.
+
+**One description.** `PgLobby.stone_box(i)` (the whole column, floor to top, walked edge to edge like the jump course), `stones_finish_centre()` and `stones_route()`; the geometry (`_build_stones`), the zones (`_add_stones_zones`: spawn a stride back on the pad facing the first stone, start on the pad, splits as full-width slabs centred on stones 3 and 6, a deep finish, a reset over the plate under the whole course to 1.5 m) and the suite read those and nothing else. Columns rather than floating slabs because a 1 m slab 5 m up is a speck in a frame and a column is something to aim at. The survey finds pg_lobby still clean (no slot, nothing undeclared unreached, nothing trapped) with nothing new declared.
+
+`headless_playground`'s **the stepping stones** (17 checks) asserts the five zone kinds on its own track and `route_problems()`, sweeps reach and climb with `_check_route_reach`, asserts every stone is narrower than the last, crosses the line and is overshot flat out, puts the reset under every stone, checks the spawn and its yaw, and drives it with `_drive_route`: all eleven jumps through both splits in 1,145 ticks, no respawns. The sandbox section's track list now expects five tracks. Armed: without `_build_stones()` the bot is respawned 46 times at the pad and four drive checks fail; with the stones 3.0 -> 2.5 m wide the overshoot check fails on every stone (and the zone file drifts) while the bot still finishes — which is why "it finished" is not the check that says this is a precision course. `tools/screenshot.sh pg_lobby` renders `pg_lobby_stones` (from the north, above, square to the line) and `pg_lobby_stones_start` (behind the pad and off to one side: straight down the line the columns stand behind each other and read as one, which the first frame did).
+
 ## Every hand-built map is surveyed (`[gate-sweep-2]`)
 
 `PlaygroundMapSurvey` reads a built map's boxes (every `StaticBody3D` with a `BoxShape3D`, rotated or not), rasterises them into 0.25 m columns of solid spans, and asks three things: **slots** — two boxes facing across less than 0.8 m (the family's player width) over more than a step's height; **unreached** — standable ground (face within 46 degrees, 1.8 m of headroom, nothing in the hull's neighbouring columns) that no spawn leads to by walking, dropping, sliding down a face nobody stands on, or a jump inside `jump_reach(rise)`; and **trapped** — ground a spawn leads to from which no spawn, finish zone, respawn zone or fall into one is reachable. Reimplemented from a description of game-arena's `arena_map_survey.gd`, not copied.
@@ -1095,7 +1103,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 415 checks, 24 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 432 checks, 25 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
 godot --headless --path . res://examples/headless_net.tscn          # 256 checks, 27 sections
