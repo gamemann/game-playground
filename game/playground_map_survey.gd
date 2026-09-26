@@ -483,9 +483,9 @@ func _solid_between(col: int, y0: float, y1: float) -> bool:
 	return false
 
 
-## Whether what stands in column [param col] is over a jump's height above [param y].
+## Whether what stands in column [param col] is over the climb limit above [param y].
 func _too_tall(col: int, y: float) -> bool:
-	return _top_max[col] >= y + PlaygroundMap.JUMP_HEIGHT
+	return _top_max[col] > y + PlaygroundMap.climb_limit()
 
 
 ## Whether column [param col] has STANDABLE floor within a step of [param y]. A face
@@ -757,7 +757,7 @@ func _link_jumps() -> void:
 
 			# The most favourable rise between the two, and the reach it allows.
 			var rise := _region_low[b].y - _region_high[a].y
-			if rise >= PlaygroundMap.JUMP_HEIGHT:
+			if rise > PlaygroundMap.climb_limit():
 				continue
 
 			var reach := PlaygroundMap.jump_reach(rise)
@@ -815,7 +815,7 @@ func _can_jump(a: int, b: int) -> bool:
 				for m in list:
 					var to := _node_at(m)
 					var rise := to.y - from.y
-					if rise >= PlaygroundMap.JUMP_HEIGHT:
+					if rise > PlaygroundMap.climb_limit():
 						continue
 					var gap := Vector2(to.x - from.x, to.z - from.z).length() - CELL
 					if gap <= PlaygroundMap.jump_reach(rise):

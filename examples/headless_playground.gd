@@ -1102,7 +1102,7 @@ func _test_the_tower(playground: Playground, zones: DotTimerZoneSet) -> void:
 ## Whether a jump of [param gap] metres of clear air, landing [param rise] higher, is one
 ## the movement makes. The one rule every route sweep below asks.
 static func _jump_is_inside(gap: float, rise: float) -> bool:
-	return rise < PgLobby.JUMP_HEIGHT and gap <= PgLobby.jump_reach(rise)
+	return rise <= PgLobby.climb_limit() and gap <= PgLobby.jump_reach(rise)
 
 
 ## Sweeps every jump on a route — a list of the boxes a player lands on, in order — and
@@ -1161,9 +1161,9 @@ func _check_route_reach(
 			% [worst_at, worst_gap, worst_rise, PgLobby.jump_reach(worst_rise)]
 	)
 	_check(
-		tallest < PgLobby.JUMP_HEIGHT,
+		tallest <= PgLobby.climb_limit(),
 		"and no step on %s is also a wall" % name,
-		"tallest %.2f m against a %.2f m jump apex" % [tallest, PgLobby.JUMP_HEIGHT]
+		"tallest %.2f m against a %.3f m climb limit" % [tallest, PgLobby.climb_limit()]
 	)
 
 

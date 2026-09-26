@@ -52,6 +52,14 @@ static func jump_reach(rise: float) -> float:
 	return _movement().jump_reach(rise)
 
 
+## The highest top face a player on flat ground is asked to jump onto, in metres: the
+## apex times `DotFpsTunables.CLIMB_MARGIN`, asked of the same tunables as
+## [method jump_reach]. 1.035 m, not [constant JUMP_HEIGHT]: a ledge at the apex works
+## only when the tick lands right. Above this a block is a wall.
+static func climb_limit() -> float:
+	return _movement().climb_limit()
+
+
 ## [method jump_reach]'s tunables, built once. Private and never handed out, so nothing
 ## can scale it the way a class scales a live player's.
 static var _movement_cache: DotFpsTunables = null
