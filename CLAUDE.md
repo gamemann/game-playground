@@ -578,6 +578,8 @@ server applies.
 
 Since `[reach-3]` `PlaygroundMap.jump_reach` is no longer a copy of the arithmetic: it asks `DotFpsTunables.jump_reach` on `PlaygroundPlayer.movement_tunables()`, the static builder `_tunables()` now returns, so maps with no player in the tree ask the movement itself (numbers unchanged: 4.75 m flat, 0.0 at a 2.0 m rise); the three constants stay for laying out geometry and are still asserted.
 
+Since `[pg-climb-margin-1]` what counts as a climb is `PlaygroundMap.climb_limit()` (the same tunables' `climb_limit()`, apex × `CLIMB_MARGIN` 0.9 = 1.035 m, the family rule) in `PlaygroundMapSurvey` (jump links and `_too_tall`) and in `_jump_is_inside` / the no-step-is-a-wall check, not the 1.15 m apex; no built-in route changed, since the tallest step anywhere is 0.8 m (the jump course), and the ramp check that every ramp out-climbs a jump still uses the apex on purpose.
+
 ### A spawn yaw lasted no ticks
 
 **`PlaygroundPlayer.teleport` wrote `controller.state.yaw` directly, and a yaw written
