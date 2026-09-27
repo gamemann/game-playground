@@ -446,7 +446,8 @@ func _build_chat() -> void:
 
 	var offered: Array[Dictionary] = []
 
-	for channel in PlaygroundServices.chat_channels():
+	# Typed, not inferred: see [method PlaygroundServices.chat_channels].
+	for channel: DotChatChannel in PlaygroundServices.chat_channels():
 		if channel.admin_only or channel.server_only:
 			continue
 

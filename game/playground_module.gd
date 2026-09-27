@@ -448,12 +448,12 @@ func _build_extras() -> DotResult:
 	services = PlaygroundServices.new()
 	services.name = "Services"
 	services.bridge = bridge
-	services.game = game
-	services.server = server
 	services.punishments_path = punishments_path
 	add_child(services)
 
-	var serviced := services.setup()
+	# [DotGameServices]' sequence: moderation, chat, the relay, voice. The bridge is the
+	# link, because it is what carries a CHAT event; voice rides the bridge's own link.
+	var serviced: DotResult = services.setup(server, game, bridge)
 
 	if not serviced.ok:
 		return serviced.wrap("The services could not be set up")
@@ -664,7 +664,7 @@ func _on_player_chat(event: DotEvent) -> void:
 
 
 func _on_say_requested(peer_id: int, channel_id: StringName, text: String) -> void:
-	var said := services.chat.submit(peer_id, channel_id, text)
+	var said: DotResult = services.chat.submit(peer_id, channel_id, text)
 
 	if not said.ok and said.error != null:
 		# Back to the sender and nowhere else: dot-chat is deliberate that a rate-limited

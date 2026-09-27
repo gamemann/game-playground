@@ -778,6 +778,21 @@ a punishment is against a person who will come back; a chat line is attributed t
 standing here now. Two guests behind one device id share a uid, which game-simple-lobby
 found by running two clients in one process — with every count matching throughout.
 
+### `PlaygroundServices` is a `DotGameServices` now (`[services-1]`, 2026-09-27)
+
+The sequence — moderation first because it publishes `dot_mute_source`, then chat, the website relay, voice — is dot-game's, and `playground_services.gd` went from 557 lines to the part that is this sandbox's. `addons/dot_game` is linked (and in `.gitignore`) for it; the module still does not subclass `DotGameModule` (below). What the subclass keeps that the base would have done differently, each checked:
+
+- **The bridge is who is in the game.** `_chat_peers` is `bridge.ready_peers()`, not dot-server's playing sessions — a peer is playing before its client has built the node a CHAT event lands on. `_key_of` is the bridge's player id (which is the userid on a server, so the base's answer there) and `_subject_for_peer` falls back to `local:<player id>` with no session, where the base answers `""`. Those three are what let the real sequence run with no `DotServer`.
+- **`_send_chat` stamps `x.p`**, the one meta field this wire carries, then calls the base. The bridge is passed as the link because it has `send_chat`; `_send_voice` goes through `bridge.link`, because the bridge has no voice method.
+- **`_peer_can_receive` is false.** The backlog is `PlaygroundModule._welcome`'s, sent once the bridge says the peer is ready; the base would also send one from `add_peer`, and a joiner would get it twice.
+- **`mod_tools_enabled` is forced off.** The live tools stay the module's (`_build_mod_tools`): `PlaygroundModTools` needs the arena's health, which is built after the services, and the module clears their return history on every map change (`[modtools-return-1]`). A second set built by the base would bind the same command names to the same console.
+- The channels, rules and voice format stay **statics** a client reads. Callers type the element (`for channel: DotChatChannel in …`) rather than inferring it: a script whose base class lives in the host build cannot hand its return type to a script in a mounted pack — mg-buses-from-hell's finding. This conversion has not yet been driven by a client inside a delivered pack; the client shell already carries dot_game.
+- Two differences accepted rather than kept: a moderation or voice layer that fails to build is now logged rather than fatal to the module (the base's judgement), and `describe_lines` gains a `relay` line.
+
+`headless_net`'s **a chat line, end to end through the services** is the only check in this repository that carries a line through the real router: the client's SAY over the link, `say_requested`, the services with no `DotServer`, the CHAT event, `chat_received` — then a gag issued through the moderation the base built, and the gagged line reaching nobody. Armed: without the `x.p` stamp one check fails; with the base's `_subject_for_peer` the gagged line is delivered; with the base's `_chat_peers` four fail; with `_peer_can_receive` true the seating check sees the backlog.
+
+**`DotGameModule` was not adopted, deliberately.** Its `game`, `bridge`, `net` and `services` are untyped fields a subclass cannot redeclare, and this module reads them typed in most of its ~75 functions; its `_build_extras` builds services, then the arena, the waves, the mod tools, the vote and progress in an order each depends on; and it keeps its own `_joined` table and spawn path rather than a `DotGameRoster`. That is a conversion of its own, not a pass on the way to this one.
+
 ## Voice is the whole server, and the near channel is text's
 
 Three games, three answers, and each is right for what it is. A lobby is a room you can see
@@ -1106,7 +1121,7 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 432 checks, 25 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
-godot --headless --path . res://examples/headless_net.tscn          # 256 checks, 27 sections
+godot --headless --path . res://examples/headless_net.tscn          # 268 checks, 28 sections
 godot --headless --path . res://examples/dedicated.tscn             # 217 checks, 24 sections
 ```
 

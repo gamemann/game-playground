@@ -49,13 +49,17 @@ const SNAPSHOT_RATE := 32
 ## What a host project that never set one runs at — the browser shell's rate.
 const CLIENT_ENGINE_TICK_RATE := 60
 
-const CHECKS := 256
+## Where the services built by [method _test_chat_end_to_end] keep their one gag. Removed
+## before and after, so the real store and the next run both start empty.
+const NET_PUNISHMENTS := "user://headless_net_punishments.json"
+
+const CHECKS := 268
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 27
+const SECTIONS := 28
 
 var _passed := 0
 var _failed := 0
@@ -122,6 +126,8 @@ func _run() -> void:
 		# shared world and takes it back out.
 		await _test_somebody_else_is_drawn()
 		_test_clock_wire()
+		# Adds no body and moves nothing; it builds the services and takes them down again.
+		await _test_chat_end_to_end()
 		# The inventory last among the connected-player sections, for the reason every
 		# section above gives: the rejoin below takes the player's body out of the shared
 		# physics world and puts it back.
@@ -1728,6 +1734,124 @@ func _find_vehicle_node(game: Playground) -> PlaygroundVehicle:
 			return vehicle
 
 	return null
+
+
+
+## A line typed on the client, through the real services layer, and back to the client.
+##
+## [b]Every other chat check in this file is the codec[/b] — an encoder against its
+## decoder. This is the path: the client's SAY over the link, the server bridge's
+## `say_requested`, [PlaygroundServices] on [DotGameServices]' sequence with a real dot-chat
+## router and dot-moderation manager behind it, the bridge's CHAT event, and the client's
+## `chat_received`. With no [DotServer], which the subclass's bridge-shaped answers
+## (`_key_of`, `_chat_peers`, `_subject_for_peer`) are what make possible — the base's own
+## answer to "who is this peer" is a session, and there is none here.
+##
+## Then a gag, through the moderation the base built first, keyed the way the subclass keys
+## a peer with no session. Armed: without the subclass's `_subject_for_peer` the gagged line
+## is delivered; without its `_send_chat` the line arrives with nobody's id on it.
+func _test_chat_end_to_end() -> void:
+	_section("a chat line, end to end through the services")
+
+	var store := ProjectSettings.globalize_path(NET_PUNISHMENTS)
+	DirAccess.remove_absolute(store)
+
+	var services := PlaygroundServices.new()
+	services.name = "Services"
+	services.service_scope = &"server"
+	services.bridge = _server_bridge
+	services.punishments_path = NET_PUNISHMENTS
+	_server_bridge.get_parent().add_child(services)
+
+	var ready: DotResult = services.setup(null, _server_game, _server_bridge)
+	_check(
+		ready.ok, "the services come up on DotGameServices with no DotServer",
+		str(ready.error) if not ready.ok else ""
+	)
+	_check(
+		services.chat != null and services.moderation != null and services.voice != null,
+		"with chat, moderation and voice"
+	)
+	_check(
+		services.mod_tools == null,
+		"and no second set of live tools, which are the module's"
+	)
+	_check(
+		Array(_server_bridge.ready_peers()).has(CLIENT_PEER),
+		"the client is a peer the bridge will send a line to"
+	)
+
+	var heard: Array[Dictionary] = []
+	var refused: Array[DotResult] = []
+	var on_chat := func(wire: Dictionary) -> void:
+		heard.append(wire)
+	var on_say := func(peer_id: int, channel_id: StringName, text: String) -> void:
+		var said: DotResult = services.say(peer_id, channel_id, text)
+		if not said.ok:
+			refused.append(said)
+	_client_bridge.chat_received.connect(on_chat)
+	_server_bridge.say_requested.connect(on_say)
+
+	_client_bridge.say(PlaygroundServices.CHANNEL_ALL, "hello from the client")
+	_exchange()
+
+	_check(heard.size() == 1, "the line comes back to the client, once", "%d" % heard.size())
+	var got: Dictionary = heard[0] if heard.size() > 0 else {}
+	_check(String(got.get("m", "")) == "hello from the client", "with the text")
+	_check(
+		String(got.get("c", "")) == String(PlaygroundServices.CHANNEL_ALL),
+		"on the channel it was said on"
+	)
+	_check(
+		typeof(got.get("x")) == TYPE_DICTIONARY
+			and int((got["x"] as Dictionary).get("p", 0)) == SESSION,
+		"stamped with who said it, the one meta field this wire carries",
+		str(got.get("x"))
+	)
+
+	# [b]The backlog is the module's[/b], sent from `_welcome` once the bridge says the peer
+	# is ready. The base sends one from `add_peer` unless told not to, and both at once is
+	# every line of the backlog twice for everybody who joins.
+	heard.clear()
+	services.add_peer(CLIENT_PEER)
+	_exchange()
+	_check(
+		heard.is_empty(),
+		"seating a peer sends no backlog of its own, because the module sends it",
+		"%d lines" % heard.size()
+	)
+
+	var subject := DotPunishmentSubject.for_uid("local:%d" % SESSION)
+	var gagged: DotResult = await services.moderation.issue(
+		DotPunishment.Kind.GAG, subject, "testing", "console", 60
+	)
+	_check(gagged.ok, "a gag is issued", str(gagged.error) if not gagged.ok else "")
+
+	heard.clear()
+	_client_bridge.say(PlaygroundServices.CHANNEL_ALL, "and now I am gagged")
+	_exchange()
+
+	var leaked := 0
+	for wire in heard:
+		if String(wire.get("m", "")) == "and now I am gagged":
+			leaked += 1
+	_check(
+		leaked == 0 and refused.size() == 1,
+		"and the gagged player's next line reaches nobody",
+		"%d delivered, %d refused" % [leaked, refused.size()]
+	)
+
+	_server_bridge.say_requested.disconnect(on_say)
+	_client_bridge.chat_received.disconnect(on_chat)
+	services.get_parent().remove_child(services)
+	services.free()
+	DirAccess.remove_absolute(store)
+
+	_check(
+		not DotRegistry.has(DotModerationManager.MUTE_SERVICE),
+		"and the mute source goes with it, so no later section inherits a gag"
+	)
+	_done()
 
 
 func _test_timer() -> void:
