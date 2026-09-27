@@ -48,7 +48,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 450
+const CHECKS := 462
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1251,6 +1251,10 @@ func _drive_route(
 	var top_speed := 0.0
 	var last_at := player.global_position
 
+	# `[surf-ramp-1]`: where the ground and the descent came from — on one of the
+	# route's own boxes, in the air, or grounded on something else.
+	var tally := _motion_tally()
+
 	for i in walks:
 		walked[i] = 0
 
@@ -1258,6 +1262,7 @@ func _drive_route(
 		ticks = tick
 		var at := player.global_position
 		var grounded := player.controller.state.is_grounded()
+		var where := "air"
 
 		if grounded:
 			# Highest first: on a spiral a box is directly under another one.
@@ -1271,6 +1276,8 @@ func _drive_route(
 
 			if not on_a_box and walked.has(on):
 				walked[on] = int(walked[on]) + 1
+
+			where = "on" if on_a_box else "else"
 
 		reached = maxi(reached, on)
 
@@ -1327,6 +1334,7 @@ func _drive_route(
 		).length()
 		if moved < 1.0:
 			distance += moved
+		_tally_tick(tally, last_at, player.global_position, where)
 		last_at = player.global_position
 		var now := player.controller.state.velocity
 		top_speed = maxf(top_speed, Vector2(now.x, now.z).length())
@@ -1356,6 +1364,7 @@ func _drive_route(
 		"walked": walked,
 		"distance": distance,
 		"top_speed": top_speed,
+		"tally": tally,
 	}
 
 
@@ -1376,6 +1385,125 @@ static func _standing_on(at: Vector3, box: AABB) -> bool:
 		and at.z >= box.position.z - margin and at.z <= box.end.z + margin
 		and absf(at.y - box.end.y) < 0.35
 	)
+
+
+# --- Where a route's ground and descent come from (`[surf-ramp-1]`) -----------
+
+## A tally of one drive's motion, split three ways by what the player was on at the START
+## of each tick: [code]on[/code] the thing the route is named for (its platforms, its
+## stones, its road), in the [code]air[/code], or grounded on something [code]else[/code].
+##
+## [b]Why it exists.[/b] `pg_surf_intro`'s main run "surfs" on ramps that are level along
+## their length, and every check over it passed about a player who was falling. The
+## question that found it — how much of the route's ground and descent happens on the
+## surface the route is named after — is asked of every timed route on `pg_lobby` by
+## this, and printed.
+static func _motion_tally() -> Dictionary:
+	var out := {}
+	for where in ["on", "air", "else"]:
+		out[where] = {"distance": 0.0, "descent": 0.0, "ascent": 0.0, "ticks": 0}
+	return out
+
+
+## One tick's motion into [param tally]. A tick that moved further than any run can, a
+## metre sideways or up or down in 1/128 s, is a respawn's teleport and is left out.
+static func _tally_tick(tally: Dictionary, before: Vector3, after: Vector3, where: String) -> void:
+	var flat := Vector2(after.x - before.x, after.z - before.z).length()
+	var dy := after.y - before.y
+
+	if flat >= 1.0 or absf(dy) >= 1.0:
+		return
+
+	var bucket: Dictionary = tally[where]
+	bucket["distance"] = float(bucket["distance"]) + flat
+	bucket["ticks"] = int(bucket["ticks"]) + 1
+
+	if dy < 0.0:
+		bucket["descent"] = float(bucket["descent"]) - dy
+	else:
+		bucket["ascent"] = float(bucket["ascent"]) + dy
+
+
+## The sum of one field over all three parts of [param tally].
+static func _tally_total(tally: Dictionary, field: String) -> float:
+	var total := 0.0
+	for where in tally:
+		total += float((tally[where] as Dictionary)[field])
+	return total
+
+
+## Prints where [param tally]'s ground and descent happened, against the route's own net
+## rise ([param route_rise]). [param surface] names what the route is about.
+func _print_where(route_name: String, surface: String, tally: Dictionary, route_rise: float) -> void:
+	var covered := _tally_total(tally, "distance")
+	var descent := _tally_total(tally, "descent")
+	var ascent := _tally_total(tally, "ascent")
+	var part := func(field: String, where: String, total: float) -> String:
+		var value := float((tally[where] as Dictionary)[field])
+		return "%.1f (%.0f%%)" % [value, 100.0 * value / maxf(total, 0.001)]
+
+	print("    %s, where the ground went: %.1f m covered: %s on %s, %s in the air, %s on anything else" % [
+		route_name, covered, part.call("distance", "on", covered), surface,
+		part.call("distance", "air", covered), part.call("distance", "else", covered),
+	])
+	print("    %s, where the descent came from: %.1f m down (%.1f up, net %+.1f against the route's %+.1f): %s on %s, %s in the air, %s on anything else" % [
+		route_name, descent, ascent, ascent - descent, route_rise,
+		part.call("descent", "on", descent), surface,
+		part.call("descent", "air", descent), part.call("descent", "else", descent),
+	])
+
+
+## The length of a route of boxes as a bot that took every jump straight covers it:
+## [param from] to the first box after the pad, then centre to centre, along the ground.
+static func _route_length(from: Vector3, route: Array[AABB]) -> float:
+	var length := 0.0
+	for i in range(1, route.size()):
+		var to := route[i].get_center()
+		length += Vector2(to.x - from.x, to.z - from.z).length()
+		from = to
+	return length
+
+
+## `[bot-drive-1]`: the drive covered at least [param covered_floor] of the route, at a
+## pace of at least [param pace_floor] of [param max_speed]. The floors are per route and
+## set just under what the bot measured (2026-09-27), because a route with many jumps
+## spends time in the air where a bot cannot hold its ground speed; a bot crawling at 40%
+## of its speed fails every one of them.
+func _check_pace(
+	route_name: String, covered: float, length: float, pace: float, max_speed: float,
+	pace_floor: float, covered_floor: float = 0.9
+) -> void:
+	_check(
+		covered >= length * covered_floor and pace >= max_speed * pace_floor,
+		"%s is covered at a running pace, not a crawl (%.0f%% of the route, %.0f%% of max speed or more)"
+			% [route_name, covered_floor * 100.0, pace_floor * 100.0],
+		"%.1f m of %.1f at %.2f m/s against %.1f" % [covered, length, pace, max_speed]
+	)
+
+
+## `[surf-ramp-1]`: none of the ground and none of the descent of a drive happened on
+## something other than the route's own surface or the air above it.
+func _check_where(route_name: String, surface: String, tally: Dictionary) -> void:
+	var elsewhere: Dictionary = tally["else"]
+	_check(
+		float(elsewhere["distance"]) < 1.0 and float(elsewhere["descent"]) < 0.1,
+		"%s is run on its %s and the air between them, and nothing else" % [route_name, surface],
+		"%.1f m and %.2f m of descent on something else"
+			% [float(elsewhere["distance"]), float(elsewhere["descent"])]
+	)
+
+
+## `[bot-drive-1]`: prints "covered X of Y m in T s: V m/s against a max" and returns V.
+func _print_pace(
+	route_name: String, covered: float, length: float, ticks: int, max_speed: float,
+	top: float
+) -> float:
+	var seconds := float(ticks) / float(Engine.physics_ticks_per_second)
+	var pace := covered / maxf(seconds, 0.001)
+	print("    %s: covered %.1f m of a %.1f m route in %.2f s: %.2f m/s against a %.1f m/s max, top %.2f" % [
+		route_name, covered, length, seconds, pace, max_speed, top,
+	])
+	return pace
 
 
 ## The chaser goes through dot-npc's perception, not "the nearest player this tick".
@@ -2357,12 +2485,20 @@ func _walk_the_tower(player: PlaygroundPlayer) -> void:
 	# 16 platforms and a cap at roughly a second a jump is ~2,200 ticks; 4,000 leaves
 	# room for a fall onto a lower turn and the climb back, without being so long that a
 	# stuck bot takes a minute to say so.
+	var length := _route_length(player.global_position, route)
 	var drive: Dictionary = await _drive_route(player, route, 4000)
 
 	print("    the tower: platform %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
 		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
 		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
 	])
+	var pace := _print_pace(
+		"the tower", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_check_pace("the tower", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, 0.75)
+	_print_where("the tower", "platforms", drive["tally"], route[route.size() - 1].end.y - route[0].end.y)
+	_check_where("the tower", "platforms", drive["tally"])
 
 	_check(drive["started"], "leaving the tower's pad starts a run on bonus 2")
 	_check(
@@ -2516,6 +2652,13 @@ func _test_the_narrows() -> void:
 	command.move = Vector2(0.0, 1.0)
 
 	var ticks := 0
+	var finish_at := zones.first_of_kind(DotTimerZone.Kind.END, track).centre()
+	var length := Vector2(
+		finish_at.x - player.global_position.x, finish_at.z - player.global_position.z
+	).length()
+	var covered := 0.0
+	var top_speed := 0.0
+	var last_at := player.global_position
 
 	# Capped well above the ~1890 ticks the route takes, and broken out of on the
 	# finish rather than run to the end: a drive that keeps going past the finish pad
@@ -2528,6 +2671,14 @@ func _test_the_narrows() -> void:
 		player.controller.apply_command(command.duplicate_command())
 		await get_tree().physics_frame
 		ticks = i
+		var moved := Vector2(
+			player.global_position.x - last_at.x, player.global_position.z - last_at.z
+		).length()
+		if moved < 1.0:
+			covered += moved
+		last_at = player.global_position
+		var now := player.controller.state.velocity
+		top_speed = maxf(top_speed, Vector2(now.x, now.z).length())
 
 		if finished[0]:
 			break
@@ -2535,6 +2686,11 @@ func _test_the_narrows() -> void:
 	player.timer.run_started.disconnect(on_start)
 	player.timer.stage_reached.disconnect(on_stage)
 	player.timer.run_finished.disconnect(on_finish)
+
+	var pace := _print_pace(
+		"the narrows", covered, length, ticks + 1, PgLobby.MOVE_SPEED, top_speed
+	)
+	_check_pace("the narrows", covered, length, pace, PgLobby.MOVE_SPEED, 0.9)
 
 	_check(started[0], "leaving the start pad starts a run on the narrows")
 
@@ -3088,6 +3244,11 @@ func _test_the_jump_course() -> void:
 	# names the gap.
 	var reached := -1
 	var ticks := 0
+	var route := PgLobby.course_route()
+	var length := _route_length(player.global_position, route)
+	var tally := _motion_tally()
+	var top_speed := 0.0
+	var last_at := player.global_position
 
 	# Capped above the ~1700 ticks the course takes at walking pace. It was 1200 while
 	# the course was nine platforms and unfinishable, which is a cap that reports the
@@ -3097,9 +3258,19 @@ func _test_the_jump_course() -> void:
 		command.set_button(
 			DotFpsCommand.BUTTON_JUMP, _jumping_on_the_course(player.global_position.z)
 		)
+		var where := "air"
+		if player.controller.state.is_grounded():
+			where = "else"
+			for box in route:
+				if _standing_on(last_at, box):
+					where = "on"
 		player.controller.apply_command(command.duplicate_command())
 		await get_tree().physics_frame
 		ticks = i
+		_tally_tick(tally, last_at, player.global_position, where)
+		last_at = player.global_position
+		var now := player.controller.state.velocity
+		top_speed = maxf(top_speed, Vector2(now.x, now.z).length())
 
 		for step in range(PgLobby.COURSE_STEPS):
 			var at := PgLobby.platform_centre(step)
@@ -3117,6 +3288,15 @@ func _test_the_jump_course() -> void:
 	player.timer.run_started.disconnect(on_start)
 	player.timer.stage_reached.disconnect(on_stage)
 	player.timer.run_finished.disconnect(on_finish)
+
+	var pace := _print_pace(
+		"the jump course", _tally_total(tally, "distance"), length, ticks + 1,
+		PgLobby.MOVE_SPEED, top_speed
+	)
+	_check_pace("the jump course", _tally_total(tally, "distance"), length, pace, PgLobby.MOVE_SPEED, 0.85)
+	_print_where("the jump course", "platforms", tally,
+		route[route.size() - 1].end.y - route[0].end.y)
+	_check_where("the jump course", "platforms", tally)
 
 	_check(started[0], "leaving the start pad starts a run on the course")
 	_check(
@@ -3242,12 +3422,18 @@ func _test_the_switchback() -> void:
 	)
 
 	# Fourteen jumps at about a second each is ~1,800 ticks.
+	var length := _route_length(player.global_position, route)
 	var drive: Dictionary = await _drive_route(player, route, 4000)
 
 	print("    the switchback: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
 		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
 		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
 	])
+	var pace := _print_pace(
+		"the switchback", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_check_pace("the switchback", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, 0.85)
 
 	_check(drive["started"], "leaving the pad starts a run on bonus 2")
 	_check(
@@ -3387,6 +3573,7 @@ func _test_the_ascent() -> void:
 	await _the_spawn_yaw_survives_a_tick(player, spawn)
 
 	# Five jumps and four ramps at about a second each; 3,000 leaves room.
+	var length := _route_length(player.global_position, route)
 	var drive: Dictionary = await _drive_route(player, route, 3000, 0.3, walks)
 	var walked: Dictionary = drive["walked"]
 
@@ -3395,6 +3582,11 @@ func _test_the_ascent() -> void:
 		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
 		str(walked.values()),
 	])
+	var pace := _print_pace(
+		"the ascent", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_check_pace("the ascent", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, 0.8)
 
 	_check(drive["started"], "leaving the pad starts a run on bonus 3")
 	_check(
@@ -3544,12 +3736,18 @@ func _test_the_cascade() -> void:
 	)
 
 	# Eleven jumps at under a second each.
+	var length := _route_length(player.global_position, route)
 	var drive: Dictionary = await _drive_route(player, route, 3000)
 
 	print("    the cascade: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
 		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
 		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
 	])
+	var pace := _print_pace(
+		"the cascade", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_check_pace("the cascade", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, 0.85)
 
 	_check(drive["started"], "leaving the pad starts a run on bonus 2")
 	_check(
@@ -3675,12 +3873,20 @@ func _test_the_stepping_stones() -> void:
 				spawn.destination_yaw]
 	)
 
+	var length := _route_length(player.global_position, route)
 	var drive: Dictionary = await _drive_route(player, route, 3000)
 
 	print("    the stepping stones: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
 		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
 		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
 	])
+	var pace := _print_pace(
+		"the stepping stones", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_check_pace("the stepping stones", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, 0.7)
+	_print_where("the stepping stones", "stones", drive["tally"], route[route.size() - 1].end.y - route[0].end.y)
+	_check_where("the stepping stones", "stones", drive["tally"])
 
 	_check(drive["started"], "leaving the pad starts a run on bonus 4")
 	_check(
@@ -3814,25 +4020,18 @@ func _test_the_ladder() -> void:
 
 	# The route's length: spawn to the first rung's middle and middle to middle after,
 	# along the ground. What a bot that took every jump straight covers.
-	var length := 0.0
-	var from := player.global_position
-	for i in range(1, route.size()):
-		var to := route[i].get_center()
-		length += Vector2(to.x - from.x, to.z - from.z).length()
-		from = to
+	var length := _route_length(player.global_position, route)
 
 	var drive: Dictionary = await _drive_route(player, route, 3000, 0.1)
-	var seconds := float(drive["ticks"]) / float(Engine.physics_ticks_per_second)
-	var pace := float(drive["distance"]) / maxf(seconds, 0.001)
 
 	print("    the ladder: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
 		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
 		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
 	])
-	print("    the ladder: covered %.1f m of a %.1f m route in %.2f s: %.2f m/s against a %.1f m/s max, top %.2f" % [
-		float(drive["distance"]), length, seconds, pace, PgLobby.MOVE_SPEED,
-		float(drive["top_speed"]),
-	])
+	var pace := _print_pace(
+		"the ladder", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
 
 	_check(drive["started"], "leaving the pad starts a run on bonus 4")
 	_check(
@@ -4438,7 +4637,7 @@ func _test_the_circuit(playground: Playground, zones: DotTimerZoneSet) -> void:
 ##
 ## Sampled rather than solved. The centreline is four straights and four arcs and a
 ## closed-form nearest point is more arithmetic than this test is worth; 512 samples
-## over a 387 m lap is 76 cm apart, which is well inside the 6 m half-width being
+## over a 611 m lap is 1.2 m apart, which is well inside the 6 m half-width being
 ## asserted against.
 func _nearest_circuit_distance(at: Vector3) -> float:
 	var length := PgLobby.circuit_length()
@@ -4531,6 +4730,13 @@ func _drive_the_circuit() -> void:
 	var command := DotFpsCommand.new()
 	var progress := 0.0
 	var stalled := 0
+	# `[surf-ramp-1]` and `[bot-drive-1]`: how much of the lap was on the road, and at
+	# what pace. The grid is at s = 0 and the line 12 m behind it, so a lap is that short
+	# of the whole loop.
+	var tally := _motion_tally()
+	var lap := PgLobby.circuit_length() - PgLobby.CIRCUIT_FINISH_BACK
+	var driven := 0
+	var top_speed := 0.0
 
 	# Twelve thousand ticks is roughly ninety simulated seconds, which is three times
 	# what a clean lap takes. The loop exits on the finish, so the ceiling only ever
@@ -4553,8 +4759,16 @@ func _drive_the_circuit() -> void:
 			1.0 if heading.dot(to_target) > 0.2 else 0.4
 		)
 
+		var centre: Vector3 = (PgLobby.circuit_point(progress)[0] as Vector3)
+		var off_centre := Vector2(here.x - centre.x, here.z - centre.z).length()
+		var where := "on" if off_centre <= PgLobby.CIRCUIT_WIDTH * 0.5 else "else"
+
 		driver.controller.apply_command(command.duplicate_command())
 		await get_tree().physics_frame
+
+		driven += 1
+		_tally_tick(tally, here, car.position(), where)
+		top_speed = maxf(top_speed, car.speed())
 
 		if not finished.is_empty():
 			break
@@ -4566,6 +4780,19 @@ func _drive_the_circuit() -> void:
 
 		if stalled > 600:
 			break
+
+	var pace := _print_pace(
+		"the circuit", _tally_total(tally, "distance"), lap, driven,
+		car.def.tunables.top_speed, top_speed
+	)
+	_check_pace("the circuit", _tally_total(tally, "distance"), lap, pace, car.def.tunables.top_speed, 0.8)
+	_print_where("the circuit", "the road", tally, 0.0)
+	var road := float((tally["on"] as Dictionary)["distance"])
+	_check(
+		road >= _tally_total(tally, "distance") * 0.95,
+		"the lap is driven on the road, not across the plate beside it",
+		"%.1f of %.1f m on the road" % [road, _tally_total(tally, "distance")]
+	)
 
 	_check(
 		not finished.is_empty(),

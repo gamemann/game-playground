@@ -671,7 +671,7 @@ Bonus 4 on `pg_bhop_intro` (`LADDER_TRACK`), west of the switchback at x = -76, 
 ## Bonus 3 is a circuit, and a track now says whether it is driven
 
 `pg_lobby` gained a **driving circuit** round the outside of the plate: a rounded
-rectangle 387 m round, 12 m wide, with kerbs down both sides and its corners on a 26 m
+rectangle 611 m round, 12 m wide, with kerbs down both sides and its corners on a 26 m
 radius, running clear of the jump course, the tower and the movement corner. It is the
 first map in this family built at a **car's** scale rather than a player's, and the first
 time anything here has put a vehicle through dot-timer.
@@ -1061,6 +1061,25 @@ Bonus 4 on `pg_lobby` (`STONES_TRACK`), in the plate's south-east quarter at z =
 **One description.** `PgLobby.stone_box(i)` (the whole column, floor to top, walked edge to edge like the jump course), `stones_finish_centre()` and `stones_route()`; the geometry (`_build_stones`), the zones (`_add_stones_zones`: spawn a stride back on the pad facing the first stone, start on the pad, splits as full-width slabs centred on stones 3 and 6, a deep finish, a reset over the plate under the whole course to 1.5 m) and the suite read those and nothing else. Columns rather than floating slabs because a 1 m slab 5 m up is a speck in a frame and a column is something to aim at. The survey finds pg_lobby still clean (no slot, nothing undeclared unreached, nothing trapped) with nothing new declared.
 
 `headless_playground`'s **the stepping stones** (17 checks) asserts the five zone kinds on its own track and `route_problems()`, sweeps reach and climb with `_check_route_reach`, asserts every stone is narrower than the last, crosses the line and is overshot flat out, puts the reset under every stone, checks the spawn and its yaw, and drives it with `_drive_route`: all eleven jumps through both splits in 1,145 ticks, no respawns. The sandbox section's track list now expects five tracks. Armed: without `_build_stones()` the bot is respawned 46 times at the pad and four drive checks fail; with the stones 3.0 -> 2.5 m wide the overshoot check fails on every stone (and the zone file drifts) while the bot still finishes — which is why "it finished" is not the check that says this is a precision course. `tools/screenshot.sh pg_lobby` renders `pg_lobby_stones` (from the north, above, square to the line) and `pg_lobby_stones_start` (behind the pad and off to one side: straight down the line the columns stand behind each other and read as one, which the first frame did).
+
+## Where `pg_lobby`'s routes get their ground and their descent (`[surf-ramp-1]`, 2026-09-27)
+
+`pg_surf_intro`'s main run was found to "surf" on ramps that are level along their length. The question that found it, how much of a route's ground and descent happens on the thing the route is named after, has now been asked of every timed route on `pg_lobby`. **`pg_lobby` has no surf route at all.** The main track is the sandbox with no start or end zone, so it is not timed. Bonus 1 (the jump course, platforms), bonus 2 (the tower, platforms) and bonus 4 (the stepping stones, stone columns) are jumping courses that all CLIMB, so their net descent is negative by design. Bonus 3 (the circuit, the road) is flat and driven. The movement corner's shallow and 55-degree ramps are on no track. So the surf form of the question does not apply here. Its jumping form does: does the bot's ground come from the route's own surface, and does any of it come from something else?
+
+**The answer is "from the thing it is named after" on all four routes.** No route is somewhere other than its name, so nothing here waits on Christian. As printed by `headless_playground` (each tick is classified by what the player was on when the tick started, and a respawn teleport is left out):
+
+| route | covered, of route | on its surface | in the air | anything else | descent: on surface / air / else |
+|---|---|---|---|---|---|
+| jump course | 76.4 of 80.4 m | 28.0 m platforms (37%) | 48.4 (63%) | 0.0 | 0.0 / 5.5 / 0.0 m (15.0 m up, route +10.4) |
+| tower | 77.6 of 78.9 m | 16.7 m platforms (22%) | 60.9 (78%) | 0.0 | 0.1 / 9.3 / 0.0 m (19.1 m up, route +10.2) |
+| stepping stones | 49.3 of 49.9 m | 9.8 m stones (20%) | 39.5 (80%) | 0.0 | 0.0 / 9.9 / 0.0 m (12.4 m up, route +2.8) |
+| circuit (buggy) | 587.2 of 599.4 m | 587.2 m road (100%) | — | 0.0 | 0.6 m of suspension bob, flat |
+
+The descent on the jumping routes is the second half of each jump's arc, which is right for a flat-topped box. Most of the ground is covered in the air, as a jump course's should be, and none of it on the plate or anything else. `_motion_tally`/`_tally_tick`/`_print_where` do this. `_drive_route` returns the tally as `tally`; the jump course and the circuit have their own drivers and keep one inline. **What is asserted is only the stable half**: under 1 m of ground and 0.1 m of descent on something other than the route's boxes (jump course, tower, stones), and at least 95% of the lap on the road (circuit). The split between surface and air is printed and not asserted. Armed: counting the start pad as "something else" fails all three foot checks (16.9, 24.2 and 18.8 m), and narrowing the road to 2% of its width fails the circuit's (280 of 582 m).
+
+**Every route drive prints its pace now (`[bot-drive-1]`)**, the ladder's line through `_print_pace`: "covered X of a Y m route in T s: V m/s against a max". `_check_pace` holds each drive to 90% of the route and a pace floor set just under what it measured. The route length (`_route_length`) is centre to centre, so a bot cutting corners covers less than 100%. Measured and floored: narrows 6.85 m/s (floor 90% of 7.0), jump course 6.68 (85%), switchback 6.57 (85%), cascade 6.47 (85%), ascent 6.31 (80%), tower 5.94 (75%), stepping stones 5.51 (70%; it is the course where speed is lost on purpose), ladder 6.73 (its own 60% check), and the circuit's buggy 21.75 of 24.0 (80%). The plunge is not a route drive (it holds forward) and keeps its own top-speed print. Armed with every bot at 40% of its stick (and the buggy at 40% throttle): all eight new pace checks fail, at 1.8 to 2.7 m/s and 16.3 m/s.
+
+**Found, not changed:** `pg_lobby.gd`'s `CIRCUIT_SEGMENTS` note says 64 chords over "a 387 m lap" leave under 9 cm of scallop. The loop is 611 m, so each chord is 9.6 m, and on the 26 m corners that leaves about 0.44 m (c²/8r) between chord and arc. The buggy still drives 100% on the road, but the comment's reasoning is wrong. More segments would change a scored track's surface, so that is Christian's call. The circuit section's "387 m" above has been corrected to 611.
 
 ## Every hand-built map is surveyed (`[gate-sweep-2]`)
 
