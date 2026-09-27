@@ -1,0 +1,55 @@
+[gd_scene load_steps=7 format=3]
+
+[sub_resource type="Gradient" id="soft"]
+offsets = PackedFloat32Array(0, 0.4, 1)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 0.5, 1, 1, 1, 0)
+
+[sub_resource type="GradientTexture2D" id="soft_tex"]
+gradient = SubResource("soft")
+width = 32
+height = 32
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(1, 0.5)
+
+[sub_resource type="StandardMaterial3D" id="puff_mat"]
+transparency = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+billboard_mode = 3
+billboard_keep_scale = true
+albedo_texture = SubResource("soft_tex")
+
+[sub_resource type="QuadMesh" id="puff_quad"]
+material = SubResource("puff_mat")
+size = Vector2(0.6, 0.6)
+
+[sub_resource type="Curve" id="puff_grow"]
+_data = [Vector2(0, 0.5), 0.0, 1.2, 0, 0, Vector2(1, 1.6), 0.4, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="Gradient" id="puff_ramp"]
+offsets = PackedFloat32Array(0, 0.25, 1)
+colors = PackedColorArray(1, 1, 1, 0.8, 0.85, 0.9, 1, 0.55, 0.7, 0.75, 0.85, 0)
+
+[node name="SpawnPuff" type="Node3D"]
+
+[node name="Puff" type="CPUParticles3D" parent="."]
+amount = 20
+lifetime = 0.42
+one_shot = true
+explosiveness = 1.0
+mesh = SubResource("puff_quad")
+emission_shape = 1
+emission_sphere_radius = 0.35
+direction = Vector3(0, 1, 0)
+spread = 180.0
+gravity = Vector3(0, 0.6, 0)
+initial_velocity_min = 1.2
+initial_velocity_max = 2.6
+damping_min = 3.0
+damping_max = 5.0
+scale_amount_min = 0.7
+scale_amount_max = 1.3
+scale_amount_curve = SubResource("puff_grow")
+color_ramp = SubResource("puff_ramp")

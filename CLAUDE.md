@@ -1126,9 +1126,9 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 449 checks, 26 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 450 checks, 26 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
-godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
+godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 271 checks, 28 sections
 godot --headless --path . res://examples/dedicated.tscn             # 217 checks, 24 sections
 ```
@@ -1463,6 +1463,8 @@ Settings, randomness, audio, effects and a console. Two decisions are this game'
   did; a crate landing does not.
 
 **Nothing in the game called any of it, and the client was silent.** Every hook — `on_prop_spawned`, `on_refused`, `on_tool_grab`, `on_tool_punt`, `on_map_changed` — was called by `headless_presentation` and by nothing else, `camera_shake()` was computed and never added to a camera, and `tools/audio_probe.sh` plays through the manager directly — so every check about sound passed while the playable client never made one. `PlaygroundClient._wire_presentation` is the producer now, and `headless_playground` drives it through the client's own spawn, the spawner's own refusal and a real map change rather than through the hooks. On a networked client only your own props make a noise, from `PlaygroundNetBridge.prop_arrived`, because a joining client is sent the whole world's props through the same PROP event and the wire cannot tell a backlog from a spawn. Still unwired: `on_prop_landed` (nothing reports a landing), `on_bought` and `on_wave_incoming` (the shop and the waves are server-side and no event carries either to the client), and every tool sound on a networked client (the server actuates the tools).
+
+**Neither effect scene existed until 2026-09-27 (`[fx-scenes-1]`)**: `fx_catalogue()` named `scenes/fx/spawn_puff.tscn` and `tool_beam.tscn`, dot-fx refuses a missing scene at DEBUG, and every spawn puff was refused in silence. Both now exist with no script and no external resource (a CPUParticles3D puff; two additive cylinders one metre down -Z, tapering toward the gun), under `FX_DIR` through `PlaygroundPaths.rebase`, and `_build_fx` warns when `missing_scenes()` is not empty. **`tool_beam` was declared and never spawned**; `PlaygroundClient._present_tool_beam` now draws it once a frame, after `present`, from `BEAM_OFFSET` in front of and below the camera to the held prop, through `PlaygroundPresentation.on_tool_beam` — one node moved every frame and replaced in the same frame when its 100 ms ceiling retires it, not one spawned per frame. **Offline only**, like the grab and punt sounds: a connected client never sets `_holding`, and nothing replicates what anybody holds (`Kind.HELD`, below). `wave_flash` is still triggered by nothing (`on_wave_incoming`, above), and `DotFxManager.flash_colour` is drawn by nothing either: a flash would need an overlay in the HUD as well as an event. `headless_presentation`'s **the effects this game names are drawn** asserts `missing_scenes()` is empty, a puff where the prop appeared, and a beam starting in front of and below the eye, ending on the prop, moved rather than stacked, and replaced past its ceiling; `headless_playground` asserts the client's own frame draws it. Armed: the puff scene removed (3 fired), the reuse branch removed (1), the client's call removed (1). `tools/screenshot.sh pg_lobby --fx` renders `playground_fx` (first person) and `playground_fx_side`.
 
 The randomness manager is built **before** the playground, because `Playground._ready`
 loads its first map inside `add_child` and a generated map asks the registry for a seed

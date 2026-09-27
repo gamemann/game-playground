@@ -845,6 +845,7 @@ func _process(_delta: float) -> void:
 		var forward := -camera.global_transform.basis.z \
 			if camera != null and camera.is_inside_tree() else Vector3.FORWARD
 		presentation.present(_delta, eye, forward)
+		_present_tool_beam(eye, forward)
 
 	var _bodies := present_frame(net, playground)
 
@@ -1469,6 +1470,21 @@ func _punt() -> void:
 	var body := punted.node as Node3D if punted != null else null
 	if body != null and presentation != null and presentation.fx != null:
 		presentation.on_tool_punt(body.global_position, true)
+
+
+## The physics gun's beam to the prop it holds, once a frame, from the drawn camera.
+##
+## [b]Offline only, like the grab and punt sounds.[/b] On a server the gun is the
+## server's (`PlaygroundNetBridge._drive_tools`) and `_holding` is never set here, so a
+## connected client draws no beam: nothing replicates what a player holds yet.
+func _present_tool_beam(eye: Vector3, forward: Vector3) -> void:
+	if not _holding or tool != TOOL_PHYS or player == null or presentation == null:
+		return
+
+	var held: DotPropInstance = player.phys_gun.held
+	var body := held.node as Node3D if held != null else null
+	if body != null and body.is_inside_tree():
+		presentation.on_tool_beam(eye, forward, body.global_position)
 
 
 func _physics_process(delta: float) -> void:

@@ -48,7 +48,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 449
+const CHECKS := 450
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -4234,6 +4234,31 @@ func _test_the_client_boots() -> void:
 			"a prop the client spawns through the game makes a noise",
 			"%d" % sink.count_of(&"prop_spawn")
 		)
+
+		# The physics gun's beam, through the client's own frame: a hook nothing calls is
+		# this file's oldest bug. Holding is set by hand, because a grab needs the prop in
+		# the crosshair and that is dot-props' suite's question, not this one's.
+		var mine := client.playground.props.props_of(client.player_id)
+		var crate: DotPropInstance = mine.back() if not mine.is_empty() else null
+		var crate_body := crate.node as Node3D if crate != null else null
+		if crate_body != null:
+			client.player.phys_gun.held = crate
+			client._holding = true
+			await get_tree().process_frame
+			await get_tree().process_frame
+			var beam: Node3D = client.presentation._beam
+			var tip := beam.global_transform * Vector3(0, 0, -1) \
+				if beam != null and is_instance_valid(beam) else Vector3.INF
+			_check(
+				tip.distance_to(crate_body.global_position) < 0.3,
+				"the client's own frame draws the physics gun's beam to what it holds",
+				"tip %s, prop %s" % [tip, crate_body.global_position]
+			)
+			client._holding = false
+			client.player.phys_gun.held = null
+		else:
+			_check(false, "the client's own frame draws the physics gun's beam to what it holds",
+				"the crate the client spawned is not there to hold")
 
 		sink.forget()
 		client.playground.props.spawn(&"no_such_prop", client.player_id, Vector3.ZERO)

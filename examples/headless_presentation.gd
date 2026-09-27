@@ -22,7 +22,7 @@ const PlaygroundWorldGen := preload("../game/playground_worldgen.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 99
+const CHECKS := 107
 
 var _passed := 0
 var _failed := 0
@@ -48,6 +48,7 @@ func _run() -> void:
 	_test_the_backpack_is_the_prop_catalogue()
 	_test_carrying_is_a_refusal()
 	_test_sounds_and_effects()
+	_test_effects_draw()
 	_test_console()
 	_test_party_does_not_migrate()
 	await _test_party_over_http()
@@ -361,6 +362,69 @@ func _test_sounds_and_effects() -> void:
 	_check(
 		p.camera_shake() == Vector3.ZERO,
 		"and a player who turned shake off gets exactly none of it"
+	)
+
+	p.queue_free()
+	_done()
+
+
+## [b]Every effect scene the catalogue names exists, and the effects actually spawn.[/b]
+## Until 2026-09-27 `scenes/fx/` did not exist, dot-fx refused both scenes at DEBUG, and
+## no check noticed because none asked whether anything was drawn.
+func _test_effects_draw() -> void:
+	_section("The effects this game names are drawn")
+
+	var p := _make()
+	var missing := p.fx.catalogue.missing_scenes()
+	_check(missing.is_empty(), "every effect scene the catalogue names exists",
+		", ".join(missing))
+
+	# Looking at where the prop appears: dot-fx culls an effect behind the viewer.
+	var at := Vector3(0, 1, -6)
+	p.present(0.016, Vector3(0, 1.7, 0), Vector3.FORWARD)
+	var drawn: Array[Node] = []
+	p.fx.spawned.connect(func(id: StringName, node: Node, _why: StringName) -> void:
+		if id == &"prop_spawn" and node != null:
+			drawn.append(node)
+	)
+	p.on_prop_spawned(at, true)
+	_check(drawn.size() == 1, "a prop you spawned puffs")
+	_check(
+		not drawn.is_empty() and (drawn[0] as Node3D).global_position.is_equal_approx(at),
+		"where the prop appeared"
+	)
+
+	var eye := Vector3(0, 1.7, 0)
+	var aim := Vector3(0, 0, -1)
+	var held := Vector3(2, 1, -8)
+	var beam := p.on_tool_beam(eye, aim, held)
+	_check(beam != null, "the physics gun draws a beam")
+	var start := beam.global_position if beam != null else eye
+	_check(
+		(start - eye).dot(aim) > 0.2 and start.y < eye.y,
+		"starting in front of and below the eye, not in it",
+		str(start)
+	)
+	var tip := beam.global_transform * Vector3(0, 0, -1) if beam != null else Vector3.ZERO
+	_check(
+		tip.distance_to(held) < 0.001,
+		"and ending on what it holds",
+		"%s against %s" % [tip, held]
+	)
+	var moved := Vector3(-3, 2, -5)
+	var again := p.on_tool_beam(eye, aim, moved)
+	_check(
+		again == beam and (again.global_transform * Vector3(0, 0, -1)).distance_to(moved) < 0.001,
+		"a held prop that moves moves the same beam, rather than stacking another"
+	)
+
+	# Past its 100 ms ceiling dot-fx retires it; the next frame's call draws a new one.
+	OS.delay_msec(130)
+	p.present(0.016, eye, aim)
+	var fresh := p.on_tool_beam(eye, aim, held)
+	_check(
+		fresh != null and fresh != beam and not fresh.is_queued_for_deletion(),
+		"and a beam past its ceiling is replaced in the same frame, so a hold never flickers"
 	)
 
 	p.queue_free()

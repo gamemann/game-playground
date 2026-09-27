@@ -25,7 +25,13 @@ const SOUND_DIR := "res://audio"
 
 ## The ping an administrator's beacon makes. See [method sound_catalogue].
 const BEACON_SOUND := &"beacon"
+## Where the two effect scenes are: `spawn_puff.tscn` and `tool_beam.tscn`. Neither has a
+## script or an external resource, so a delivered pack has nothing in them to rewrite.
 static var FX_DIR := PlaygroundPaths.rebase("res://scenes/fx")
+
+## Where the physics gun's beam starts, from the eye, in the aim's frame: right, down,
+## forward. A beam from the eye itself is drawn end-on, as a dot in the crosshair.
+const BEAM_OFFSET := Vector3(0.14, -0.16, -0.35)
 
 var settings: DotSettingsManager = null
 var rng: DotRandomManager = null
@@ -33,6 +39,9 @@ var audio: DotAudioManager = null
 var fx: DotFxManager = null
 var console: DotConsoleController = null
 var console_panel: DotConsolePanel = null
+
+## The physics gun's beam while it is drawn. See [method on_tool_beam].
+var _beam: Node3D = null
 
 ## The in-game chat box. See [method _build_chat].
 var chat_window: DotChatWindow = null
@@ -424,6 +433,16 @@ func _build_fx() -> DotResult:
 	var res := fx.setup()
 	if not res.ok:
 		return res.wrap("the playground's effects")
+
+	# [b]Said out loud, because a missing scene is otherwise a DEBUG line.[/b] Until
+	# 2026-09-27 neither scene this catalogue names existed, and every spawn puff was
+	# refused in silence. `headless_presentation` asserts the list is empty; this is for
+	# a build that lost one anyway.
+	var missing := fx.catalogue.missing_scenes()
+	if not missing.is_empty():
+		DotLog.warn(CHANNEL, "effect scenes missing; those effects will not draw", {
+			"paths": ", ".join(missing),
+		})
 	return DotResult.success(null)
 
 
@@ -604,6 +623,45 @@ func on_prop_spawned(at: Vector3, mine: bool) -> void:
 	t.origin = at
 	audio.play_at(&"prop_spawn", at)
 	fx.spawn(&"prop_spawn", t)
+
+
+## A transform at [param at] whose -Z points along [param direction].
+static func facing(at: Vector3, direction: Vector3) -> Transform3D:
+	var forward := direction.normalized() if direction.length_squared() > 0.0 else Vector3.FORWARD
+	# Straight up or down has no yaw to keep; any other up vector will do.
+	var up := Vector3.RIGHT if absf(forward.dot(Vector3.UP)) > 0.99 else Vector3.UP
+	return Transform3D(Basis.looking_at(forward, up), at)
+
+
+## A transform that stretches `tool_beam.tscn` -- one metre down -Z -- from [param from]
+## to [param to]. Only Z is scaled, so the beam is as thin at thirty metres as at one.
+static func beam_between(from: Vector3, to: Vector3) -> Transform3D:
+	var t := facing(from, to - from)
+	var length := maxf(from.distance_to(to), 0.001)
+	t.basis = Basis(t.basis.x, t.basis.y, t.basis.z * length)
+	return t
+
+
+## The physics gun's beam, from in front of the eye to what it holds, this frame.
+##
+## [b]One node, moved every frame, not one spawned per frame.[/b] `tool_beam` lives
+## 100 ms, and a spawn a frame would stack six additive beams at 60 fps and a different
+## number at every other frame rate. The 100 ms is still the ceiling: when it retires the
+## node, the next frame spawns another, so a beam nobody updates is gone within it. Call
+## it after [method present], which is where the retiring happens, and there is no gap.
+func on_tool_beam(eye: Vector3, aim: Vector3, to: Vector3) -> Node3D:
+	if fx == null:
+		return null
+
+	var from := facing(eye, aim).translated_local(BEAM_OFFSET).origin
+	var at := beam_between(from, to)
+
+	if _beam != null and is_instance_valid(_beam) and not _beam.is_queued_for_deletion():
+		_beam.global_transform = at
+		return _beam
+
+	_beam = fx.spawn(&"tool_beam", at) as Node3D
+	return _beam
 
 
 func on_prop_landed(at: Vector3) -> void:

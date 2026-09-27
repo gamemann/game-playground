@@ -1,0 +1,45 @@
+[gd_scene load_steps=5 format=3]
+
+[sub_resource type="StandardMaterial3D" id="core_mat"]
+transparency = 1
+blend_mode = 1
+shading_mode = 0
+albedo_color = Color(0.55, 0.85, 1, 0.9)
+
+[sub_resource type="CylinderMesh" id="core"]
+material = SubResource("core_mat")
+top_radius = 0.003
+bottom_radius = 0.014
+height = 1.0
+radial_segments = 8
+rings = 1
+cap_top = false
+cap_bottom = false
+
+[sub_resource type="StandardMaterial3D" id="glow_mat"]
+transparency = 1
+blend_mode = 1
+shading_mode = 0
+albedo_color = Color(0.2, 0.55, 1, 0.22)
+
+[sub_resource type="CylinderMesh" id="glow"]
+material = SubResource("glow_mat")
+top_radius = 0.006
+bottom_radius = 0.05
+height = 1.0
+radial_segments = 10
+rings = 1
+cap_top = false
+cap_bottom = false
+
+[node name="ToolBeam" type="Node3D"]
+
+[node name="Core" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0, -0.5)
+cast_shadow = 0
+mesh = SubResource("core")
+
+[node name="Glow" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0, -0.5)
+cast_shadow = 0
+mesh = SubResource("glow")

@@ -1,5 +1,7 @@
 extends SceneTree
 
+const PlaygroundPresentation := preload("../game/playground_presentation.gd")
+
 ## Renders a playground map to PNGs so a person can look at it.
 ##
 ## [b]A map is a rendered thing, and this family has shipped a 0 x 0 Control twice and a
@@ -9,6 +11,7 @@ extends SceneTree
 ## had and which no count caught.
 ##
 ##   xvfb-run -a godot --path . --script tools/screenshot.gd -- --map pg_lobby
+##   tools/screenshot.sh pg_lobby --fx     # a spawn puff and the physics gun's beam
 ##
 ## Needs a real rendering context, so it does NOT run under `--headless`; `xvfb-run` is
 ## how it runs on a machine with no display. It writes into `screenshots/`, which is
@@ -65,6 +68,13 @@ func _initialize() -> void:
 	_camera.fov = 70.0
 	_camera.far = 800.0
 	root.add_child(_camera)
+
+	if args.has("--fx"):
+		# Staged from the first frame, not here: during `_initialize` nothing added to the
+		# root is inside the tree yet, so a global transform set on an effect is refused
+		# and every effect is drawn at the origin.
+		_fx_pending = true
+		return
 
 	_shots = _shots_for(id)
 
@@ -269,6 +279,65 @@ func _shots_for(id: String) -> Array[Dictionary]:
 
 var _wait := 0
 var _armed := false
+var _fx_pending := false
+
+
+# --- --fx -------------------------------------------------------------------
+
+## A prop spawning and a prop on the end of the physics gun, drawn by the real presentation
+## layer: [method PlaygroundPresentation.on_prop_spawned] and
+## [method PlaygroundPresentation.on_tool_beam], from a player's eye on the lobby's plate.
+##
+## [b]The puff is slowed to a twentieth of real speed and restarted once spawned[/b], for
+## game-arena's reason: it lives 420 ms and a software frame under xvfb is long enough that
+## the frame saved at full speed is the one after it went out. The beam is a mesh and is
+## not affected. `present` is not called again, so dot-fx retires nothing while the
+## frames are taken.
+func _stage_fx() -> Array[Dictionary]:
+	var presentation := PlaygroundPresentation.new()
+	presentation.name = "Presentation"
+	root.add_child(presentation)
+	var built := presentation.setup()
+	if not built.ok:
+		push_error("the presentation layer: %s" % built.error.message)
+
+	var eye := Vector3(0, 1.7, 8)
+	var aim := Vector3(0, -0.05, -1).normalized()
+	var puff_at := Vector3(1.6, 1.0, 3.5)
+	var held_at := Vector3(-1.4, 1.6, 2.5)
+
+	# A crate on the end of the gun, as `PlaygroundProp` draws one: an unshaded box.
+	var crate := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.9, 0.9, 0.9)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.7, 0.5, 0.25)
+	box.material = mat
+	crate.mesh = box
+	root.add_child(crate)
+	crate.global_position = held_at
+
+	presentation.present(0.016, eye, aim)
+	presentation.fx.spawned.connect(func(fx_id: StringName, node: Node, why: StringName) -> void:
+		print("fx: %s %s" % [fx_id, "drawn" if node != null else "refused (%s)" % why])
+	)
+	presentation.on_prop_spawned(puff_at, true)
+	presentation.on_tool_beam(eye, aim, held_at)
+	var missing := presentation.fx.catalogue.missing_scenes()
+	print("fx: missing scenes: %s" % (", ".join(missing) if not missing.is_empty() else "none"))
+
+	for particles in presentation.fx.find_children("*", "CPUParticles3D", true, false):
+		(particles as CPUParticles3D).speed_scale = 0.05
+		(particles as CPUParticles3D).restart()
+
+	return [
+		# What the player sees: the beam from low right of the view to the crate.
+		{"name": "playground_fx", "from": eye, "at": eye + aim * 10.0},
+		# From beside, which is the frame that says the beam ends on the crate and starts
+		# in front of the eye rather than in it.
+		{"name": "playground_fx_side", "from": Vector3(5.5, 2.6, 5.0), "at": Vector3(-0.5, 1.4, 4.0)},
+	]
 
 
 ## [b]Frame-counted rather than awaited.[/b] `SceneTree._process` is expected to return a
@@ -276,6 +345,11 @@ var _armed := false
 ## truthy, so the tree quits on the first frame and writes nothing. That is what
 ## game-arena's first version of this file did and the reason its comment says so.
 func _process(_delta: float) -> bool:
+	if _fx_pending:
+		_fx_pending = false
+		_shots = _stage_fx()
+		return false
+
 	if _index >= _shots.size():
 		return true
 

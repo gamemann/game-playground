@@ -15,4 +15,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 map="${1:-pg_lobby}"
 exec xvfb-run -a godot --path . --resolution 1600x900 \
-  --script tools/screenshot.gd -- --map "$map"
+  --script tools/screenshot.gd -- --map "$map" "${@:2}"
