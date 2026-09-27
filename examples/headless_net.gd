@@ -53,7 +53,7 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 268
+const CHECKS := 271
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -77,6 +77,14 @@ var _client_bridge: PlaygroundNetBridge = null
 var _to_client: Array[Dictionary] = []
 var _to_server: Array[Dictionary] = []
 var _drop_every: int = 0
+
+## One-way transit, in ticks, that the loopback holds every message for before delivering
+## it. Zero everywhere but the vehicle's round-trip measurement, which is the one place a
+## link with no transit time would flatter the answer. Deliveries stay in order when it
+## changes: see [method _enqueue].
+var _delay_ticks: int = 0
+var _last_due_to_client: int = 0
+var _last_due_to_server: int = 0
 
 ## Every EVENT the server sent, to whichever peer, while [member _recording] is on — the
 ## ones the loopback below does not deliver included. What "nobody else was told" is
@@ -598,11 +606,13 @@ func _on_server_send(method: StringName, peer_id: int, payload: PackedByteArray)
 			return
 	if peer_id != 0 and peer_id != CLIENT_PEER:
 		return
-	_to_client.append({"method": method, "payload": payload})
+	_last_due_to_client = maxi(_last_due_to_client, _tick + _delay_ticks)
+	_to_client.append({"method": method, "payload": payload, "due": _last_due_to_client})
 
 
 func _on_client_send(method: StringName, _peer_id: int, payload: PackedByteArray) -> void:
-	_to_server.append({"method": method, "payload": payload})
+	_last_due_to_server = maxi(_last_due_to_server, _tick + _delay_ticks)
+	_to_server.append({"method": method, "payload": payload, "due": _last_due_to_server})
 
 
 ## The map's time left, from the server's vote to what the client's HUD draws.
@@ -714,14 +724,22 @@ func _test_clock_wire() -> void:
 
 
 func _flush() -> void:
-	var to_client := _to_client.duplicate()
-	var to_server := _to_server.duplicate()
-	_to_client.clear()
-	_to_server.clear()
+	var to_client := _take_due(_to_client)
+	var to_server := _take_due(_to_server)
 	for entry in to_client:
 		_client_bridge.link.deliver(entry["method"], 1, entry["payload"])
 	for entry in to_server:
 		_server_bridge.link.deliver(entry["method"], CLIENT_PEER, entry["payload"])
+
+
+## The front of [param queue] whose transit time has run out, removed from it. A message's
+## due tick never goes backwards along a queue (the sends clamp it), so this is a prefix and
+## order is kept — a reliable EVENT overtaking the one before it is not a link any game has.
+func _take_due(queue: Array[Dictionary]) -> Array[Dictionary]:
+	var due: Array[Dictionary] = []
+	while not queue.is_empty() and int(queue[0].get("due", 0)) <= _tick:
+		due.append(queue.pop_front())
+	return due
 
 
 ## A request and its answer: the answer is queued during the first flush and delivered
@@ -748,8 +766,10 @@ func _step(command: DotFpsCommand = null) -> void:
 	_client_net.clock.advance(1.0 / float(maxi(_client_game.tick_rate, 1)))
 	_server_bridge.server_tick(_tick)
 	_flush()
+	# A real client stamps its command far enough ahead to cover the trip; the lead grows
+	# with the transit delay for the same reason.
 	_client_bridge.client_tick(
-		_tick + INPUT_LEAD, command if command != null else DotFpsCommand.new()
+		_tick + INPUT_LEAD + _delay_ticks, command if command != null else DotFpsCommand.new()
 	)
 	_flush()
 	await get_tree().physics_frame
@@ -1694,6 +1714,9 @@ func _test_vehicle_over_the_wire() -> void:
 	brake.set_button(DotFpsCommand.BUTTON_CROUCH, true)
 	await _steps(200, brake)
 
+	if mirror != null:
+		await _measure_round_trip(vehicle, mirror, brake)
+
 	_client_bridge.ask_use_vehicle()
 	_exchange()
 	await _steps(6)
@@ -1722,6 +1745,238 @@ func _test_vehicle_over_the_wire() -> void:
 
 	_check(_find_vehicle_node(_client_game) == null, "and removing it removes the mirror")
 	_done()
+
+
+## One-way transit the round-trip measurement puts on the loopback: three ticks at 128 is
+## 23 ms, a 47 ms round trip — the 40 ms [member PlaygroundNetBridge.rtt_source] this suite
+## feeds the clock, rounded up to a whole tick.
+const VEHICLE_TRANSIT_TICKS := 3
+## Every third snapshot dropped, the same loss [method _test_lossy] drives a player through.
+const VEHICLE_DROP_EVERY := 3
+## How far the mirror or the car has to move before it counts as having responded: a
+## centimetre, and a degree off the heading it was holding.
+const RESPONSE_METRES := 0.01
+const RESPONSE_DEGREES := 1.0
+## The bounds asserted. Generous on purpose: the figures printed beside them are the
+## measurement, and these fail only when the mirror stops following at all.
+const KEY_TO_VISIBLE_LIMIT_TICKS := 40
+const CONVERGE_LIMIT_TICKS := 64
+
+
+## [b]What the driver feels: how far their own car is behind their keys.[/b] See `[veh-3]`.
+##
+## dot-vehicle does not predict a vehicle, so the driver's throttle goes to the server and
+## comes back as a snapshot, and what they see is the client's MIRROR of the car — drawn
+## where [method DotNetManager.interpolate_frame] puts it, an interpolation buffer
+## behind the newest snapshot. Measured here on the drawn mirror, over a loopback holding
+## every message [constant VEHICLE_TRANSIT_TICKS] ticks each way and dropping every
+## [constant VEHICLE_DROP_EVERY]rd snapshot:
+##
+## - per tick, the gap between the drawn mirror and the server's car (metres, degrees),
+##   and the same gap as TIME: how many ticks back along the server's own path the mirror is;
+## - key to visible: throttle on from rest, and steer on at speed, to the first tick the
+##   server's car responds and the first tick the mirror does;
+## - how long the mirror takes to land on the car once the car has stopped.
+##
+## The figures are printed; what is asserted is only that the mirror follows (key to
+## visible under a generous bound) and converges once the car stops. The decision taken on
+## these numbers is in CLAUDE.md, "What a driver feels".
+func _measure_round_trip(
+	vehicle: DotVehicleInstance, mirror: Node3D, brake: DotFpsCommand
+) -> void:
+	var car := vehicle.body()
+	# Turned round where it stands. The drive above ends nose-first against map geometry
+	# (at about z -72, from a spawn at -60), and a throttle measured into a wall is a
+	# latency of forever. Backwards along its own tracks is ground it has just crossed.
+	car.global_basis = Basis(Vector3.UP, PI) * car.global_basis
+	car.linear_velocity = Vector3.ZERO
+	car.angular_velocity = Vector3.ZERO
+	var rate := float(_server_game.tick_rate)
+	var ms := 1000.0 / rate
+
+	_drop_every = VEHICLE_DROP_EVERY
+	_delay_ticks = VEHICLE_TRANSIT_TICKS
+
+	var gaps_m: Array[float] = []
+	var gaps_deg: Array[float] = []
+	var behind_ticks: Array[float] = []
+	var trail: Array[Vector3] = []
+	# Smoothness: while the car moves, how much the mirror's step this tick differs from
+	# the car's. A mirror that stalls on a dropped snapshot and then jumps shows here.
+	var step_err_cm: Array[float] = []
+	var last_mirror := [mirror.global_position]
+
+	# One tick: step, draw the mirror as the renderer would, and record the gap.
+	var sample := func(command: DotFpsCommand) -> void:
+		await _step(command)
+		# The interpolation `PlaygroundClient.present_frame` does once a frame, called
+		# directly: present_frame asks whether the manager is RUNNING first, and this
+		# suite's hand-driven client is not started until a later section. The first run
+		# of this measurement went through present_frame, drew the newest snapshot every
+		# tick, and measured a mirror stepping at the snapshot rate that no real client has.
+		_client_net.interpolate_frame(0.0)
+		trail.append(car.global_position)
+		gaps_m.append(mirror.global_position.distance_to(car.global_position))
+		gaps_deg.append(absf(rad_to_deg(angle_difference(
+			mirror.global_rotation.y, car.global_rotation.y
+		))))
+		var mirror_step: float = mirror.global_position.distance_to(last_mirror[0])
+		last_mirror[0] = mirror.global_position
+		# How far back along the server's own path the mirror sits, while it is moving.
+		if vehicle.speed() > 1.0:
+			var car_step := trail[trail.size() - 1].distance_to(trail[trail.size() - 2])
+			step_err_cm.append(absf(mirror_step - car_step) * 100.0)
+			var best := 0
+			var best_d := INF
+			for k in range(mini(trail.size(), 64)):
+				var d := trail[trail.size() - 1 - k].distance_to(mirror.global_position)
+				if d < best_d:
+					best_d = d
+					best = k
+			behind_ticks.append(float(best))
+
+	# Fill the pipe at a standstill, under the delay and the loss, and let the car settle.
+	for _i in range(64):
+		await sample.call(brake)
+
+	# Throttle on, from rest.
+	var driving_from := gaps_m.size()
+	var rest_car := car.global_position
+	var rest_mirror := mirror.global_position
+	var throttle_car := -1
+	var throttle_mirror := -1
+	for i in range(90):
+		await sample.call(_forward())
+		if throttle_car < 0 and car.global_position.distance_to(rest_car) > RESPONSE_METRES:
+			throttle_car = i + 1
+		if throttle_mirror < 0 \
+				and mirror.global_position.distance_to(rest_mirror) > RESPONSE_METRES:
+			throttle_mirror = i + 1
+	var speed_at_steer := vehicle.speed()
+
+	# Steer on, at speed. Measured as a departure from the heading each was holding,
+	# extrapolated at the yaw rate it had over the tick before the key.
+	var steer := DotFpsCommand.new()
+	steer.move = Vector2(-1.0, 1.0)
+	var yaw_car := car.global_rotation.y
+	var yaw_mirror := mirror.global_rotation.y
+	await sample.call(_forward())
+	var rate_car := angle_difference(yaw_car, car.global_rotation.y)
+	var rate_mirror := angle_difference(yaw_mirror, mirror.global_rotation.y)
+	yaw_car = car.global_rotation.y
+	yaw_mirror = mirror.global_rotation.y
+	var steer_car := -1
+	var steer_mirror := -1
+	# Whether the mirror's HEADING is drawn smoothly too: once it has started turning, the
+	# ticks on which it did not turn at all.
+	var turning_ticks := 0
+	var held_ticks := 0
+	var last_yaw := mirror.global_rotation.y
+	for i in range(60):
+		await sample.call(steer)
+		var yaw_step := absf(rad_to_deg(angle_difference(last_yaw, mirror.global_rotation.y)))
+		last_yaw = mirror.global_rotation.y
+		if steer_mirror > 0:
+			turning_ticks += 1
+			if yaw_step < 0.01:
+				held_ticks += 1
+		var expect_car := yaw_car + rate_car * float(i + 1)
+		var expect_mirror := yaw_mirror + rate_mirror * float(i + 1)
+		if steer_car < 0 and absf(rad_to_deg(angle_difference(
+			expect_car, car.global_rotation.y
+		))) > RESPONSE_DEGREES:
+			steer_car = i + 1
+		if steer_mirror < 0 and absf(rad_to_deg(angle_difference(
+			expect_mirror, mirror.global_rotation.y
+		))) > RESPONSE_DEGREES:
+			steer_mirror = i + 1
+
+	var moving_gaps_m := gaps_m.slice(driving_from)
+	var moving_gaps_deg := gaps_deg.slice(driving_from)
+
+	# Brake to a stop, then count until the mirror is on the car.
+	var stopped_at := -1
+	var converged_after := -1
+	for i in range(400):
+		await sample.call(brake)
+		if stopped_at < 0 and vehicle.speed() < 0.05:
+			stopped_at = i
+		if stopped_at >= 0 and gaps_m[gaps_m.size() - 1] < 0.05 \
+				and gaps_deg[gaps_deg.size() - 1] < 1.0:
+			converged_after = i - stopped_at
+			break
+
+	_drop_every = 0
+	_delay_ticks = 0
+	# Drain what the delayed link still holds before anything else runs on it.
+	await _steps(VEHICLE_TRANSIT_TICKS + 4, brake)
+
+	var interp := _client_net.interpolator
+	print("    round trip: server %d Hz, snapshots %d Hz, every %drd snapshot dropped, " % [
+		_server_game.tick_rate, SNAPSHOT_RATE, VEHICLE_DROP_EVERY
+	] + "%d ticks (%.1f ms) each way, interpolation buffer %.1f ticks (%.1f ms)" % [
+		VEHICLE_TRANSIT_TICKS, VEHICLE_TRANSIT_TICKS * ms,
+		interp.delay_ticks() if interp != null else -1.0,
+		interp.delay_ms() if interp != null else -1.0
+	])
+	print("    mirror vs car while driving: %s m, %s deg (median/p95/max, %d ticks, %.1f m/s at the steer)" % [
+		_spread(moving_gaps_m), _spread(moving_gaps_deg), moving_gaps_m.size(), speed_at_steer
+	])
+	print("    mirror behind the car's own path: %s ticks (median/p95/max) = %.0f ms median" % [
+		_spread(behind_ticks, "%.0f"), _percentile(behind_ticks, 0.5) * ms
+	])
+	print("    mirror's per-tick step against the car's: %s cm (median/p95/max)" % [
+		_spread(step_err_cm)
+	])
+	print("    mirror's heading held still on %d of %d ticks while it turned" % [
+		held_ticks, turning_ticks
+	])
+	print("    throttle: car moves %d ticks after the key, mirror %d ticks (%.0f ms)" % [
+		throttle_car, throttle_mirror, throttle_mirror * ms
+	])
+	print("    steer:    car turns %d ticks after the key, mirror %d ticks (%.0f ms)" % [
+		steer_car, steer_mirror, steer_mirror * ms
+	])
+	print("    stopped: car at rest %d ticks after the brake key, mirror on it %d ticks (%.0f ms) later" % [
+		stopped_at + 1, converged_after, converged_after * ms
+	])
+
+	# Never before the server's car: a mirror that "responds" first was still moving from
+	# something else, and the first armed run caught exactly that at 16 ticks against 50.
+	_check(
+		throttle_mirror >= throttle_car and throttle_car > 0
+			and throttle_mirror <= KEY_TO_VISIBLE_LIMIT_TICKS,
+		"the driver sees their throttle within %d ticks over a lossy link"
+			% KEY_TO_VISIBLE_LIMIT_TICKS,
+		"mirror %d ticks, car %d" % [throttle_mirror, throttle_car]
+	)
+	_check(
+		steer_mirror >= steer_car and steer_car > 0
+			and steer_mirror <= KEY_TO_VISIBLE_LIMIT_TICKS,
+		"and their steering within %d" % KEY_TO_VISIBLE_LIMIT_TICKS,
+		"mirror %d ticks, car %d" % [steer_mirror, steer_car]
+	)
+	_check(
+		converged_after >= 0 and converged_after <= CONVERGE_LIMIT_TICKS,
+		"and the mirror lands on the car within %d ticks of it stopping" % CONVERGE_LIMIT_TICKS,
+		"%d ticks (stopped at %d)" % [converged_after, stopped_at]
+	)
+
+
+func _percentile(values: Array[float], q: float) -> float:
+	if values.is_empty():
+		return -1.0
+	var sorted := values.duplicate()
+	sorted.sort()
+	return sorted[clampi(int(ceil(q * sorted.size())) - 1, 0, sorted.size() - 1)]
+
+
+func _spread(values: Array[float], format: String = "%.2f") -> String:
+	return "/".join([
+		format % _percentile(values, 0.5),
+		format % _percentile(values, 0.95),
+		format % _percentile(values, 1.0),
+	])
 
 
 func _find_vehicle_node(game: Playground) -> PlaygroundVehicle:

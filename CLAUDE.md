@@ -1121,7 +1121,7 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 432 checks, 25 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
-godot --headless --path . res://examples/headless_net.tscn          # 268 checks, 28 sections
+godot --headless --path . res://examples/headless_net.tscn          # 271 checks, 28 sections
 godot --headless --path . res://examples/dedicated.tscn             # 217 checks, 24 sections
 ```
 
@@ -1216,6 +1216,28 @@ reflection. On two machines there is no such body.
 **Also worth knowing before writing a test here: a car crosses this sandbox in seconds.**
 The first version drove into the scenery at (24, 24) and then measured a stationary vehicle
 at full throttle. The corner at (-60, -60) is the flat, empty one.
+
+### What a driver feels (`[veh-3]`, measured 2026-09-27)
+
+dot-vehicle does not predict a vehicle, so the driver's keys go to the server and come back as a snapshot, and the car they sit in is the client's interpolated mirror of the server's. `headless_net`'s vehicle section measures it (`_measure_round_trip`) on a loopback holding every message **3 ticks each way (23 ms, a 47 ms round trip)** with **every third snapshot dropped**, at 128 Hz with 32 Hz snapshots; the adaptive interpolation buffer settles at **8 ticks (63 ms)**. Every run prints:
+
+| | median / p95 / max |
+|---|---|
+| mirror vs the server's car, driving (~4 m/s) | 0.20 / 0.35 / 0.42 m, 0.05 / 3.1 / 4.1 deg |
+| how far back along the car's own path the mirror is | 9 / 11 / 11 ticks (70 ms median) |
+| the mirror's per-tick step against the car's | 0.33 / 5.6 / 10.0 cm |
+
+- **Throttle, from rest:** the server's car moves (1 cm) 16 ticks after the key; the mirror, **24 ticks, 188 ms**. With no transit the car moves at 13, so 11 of those ticks are the car's own physics and **13 (about 100 ms) are the wire**: input lead, transit both ways, the wait for a snapshot and the interpolation buffer.
+- **Steer, at speed:** the car's heading leaves its line (1 deg) at 19 ticks; the mirror's at **29 ticks, 227 ms** — 14 of the car's own, **about 15 (117 ms) the wire**.
+- **The mirror's heading is not interpolated.** While turning it held still on **26 of 31 ticks**. `DotVehicleNetSync` sends the rotation as four `INT` quaternion components marked interpolated, and dot-net's `DotNetInterpolator._blend_value` blends only floats, vectors, quaternions and colours — an int is discrete and switches at the midpoint. So the position slides and the body snaps round at the snapshot rate (16 Hz across a drop). `net_steering` and `net_speed` are INT/UINT too and step the same way.
+
+Asserted, and armed: the mirror responds to throttle and to steering within 40 ticks and never before the server's car does (armed with 40 ticks of transit: both fail; the first armed run also caught the mirror "responding" at 16 ticks to a car that moved at 50, which is why the not-before-the-car half is there), and the mirror lands within 5 cm and 1 deg of the car within 64 ticks of it stopping (armed by dropping every snapshot while it brakes). The figures are printed beside the checks; the bounds are generous on purpose.
+
+**Decision: no renderer-side smoothing of the mirror's POSITION, and do not predict.** The position is already interpolated and moves an even step a tick (0.33 cm median error at 3 cm a tick). Every smoothing filter on top of it is more latency, and latency is the one thing the driver already has too much of: about 100-120 ms of wire on a 47 ms link, of which the interpolation buffer is the largest single term. **The heading is the thing worth fixing, and at the wire rather than in the renderer**: either `DotVehicleNetSync` declares its rotation as dot-net's `QUATERNION` type (the type is a string there, so it still names no dot-net class), or dot-net blends an interpolated `INT` linearly. Both are outside this repository; that is the next item. The other lever is the driver's OWN car drawn with a smaller interpolation buffer than everybody else's — about 60 ms off key-to-visible, bought with visible stepping whenever a snapshot is lost. That trade is Christian's.
+
+**The bus case, not measured here.** `mg-buses-from-hell`'s bus is four tonnes that take about a second to answer the throttle. The wire's share is the same ~100-120 ms whatever is being driven — it is the link, the snapshot rate and the buffer, not the vehicle — so on the buggy it more than doubles key-to-visible (11 ticks of car, 13 of wire) and on the bus it is about a tenth of a response that already takes a second. That is the argument that game's notes make, and these numbers support it. The heading snap is smaller per snapshot on a bus as well (its yaw rate is lower), and the camera behind a bus is further out, so the same snap covers fewer pixels. Measure it there before believing either sentence.
+
+**A harness trap found on the way:** `PlaygroundClient.present_frame` interpolates only while the client's manager is RUNNING, and this suite's client is not started until "somebody else has a body". Driven through `present_frame`, the first version of this measurement drew the newest snapshot every tick and reported a mirror stepping at the snapshot rate that no real client has. The measurement calls `interpolate_frame` directly for that reason.
 
 `F` gets in and out. Not `E`, which already spawns here — and the day this game gains a use
 verb, the two want swapping together.

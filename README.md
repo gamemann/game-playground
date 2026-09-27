@@ -137,8 +137,8 @@ It is networked the way every inventory should be and few are: the client moves 
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 415 checks
-godot --headless --path . res://examples/headless_net.tscn          # 256 checks over 27 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 432 checks
+godot --headless --path . res://examples/headless_net.tscn          # 271 checks over 28 sections
 godot --headless --path . res://examples/dedicated.tscn             # 217 checks over 24 sections
 godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
