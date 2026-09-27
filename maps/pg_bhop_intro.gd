@@ -44,7 +44,17 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ## the question the jumps on the other routes do; the ramps ask whether a player can
 ## carry a walk up a slope and off the crest into the next jump.
 ##
-## All four tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
+## [b]A fifth route, and it asks how HIGH rather than how far.[/b] "The ladder", on bonus
+## 4, is eleven jumps up a straight line of columns, and every one lands
+## [constant LADDER_RISE] higher than it left: 97% of [method climb_limit], the tallest
+## step any route here asks for (the jump course's 0.8 m was the tallest until now). The
+## gaps are short — the widest is under four fifths of `jump_reach(1.0)` — and that is the
+## trap: a jump that climbs that high is over the next top for only 0.24 s of its 0.46,
+## so the whole reach is 3.23 m against 4.75 flat, and a player who takes off a stride
+## before the lip meets the next column's face on the way down. Every other route asks
+## how far or where to; this one asks for the lip, every time.
+##
+## All five tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
 ## one start and one finish exercises none of dot-timer's per-stage machinery.
 
 const START_Z := 0.0
@@ -188,6 +198,62 @@ const ASCENT_PITCHES := [16.0, 24.0, 32.0, 40.0]
 const ASCENT_FIRST_GAP := 2.2
 const ASCENT_LAST_GAP := 3.4
 
+# --- Bonus 4: "the ladder" -----------------------------------------------------
+#
+# Every number below is read by `_build_the_ladder`, `ladder_route` and `_add_the_ladder`,
+# and nothing else describes where a column is. Walked edge to edge from the pad, for the
+# reason `switchback_route` gives.
+
+## The track it runs on.
+const LADDER_TRACK := DotTimerTrack.BONUS_FIRST + 3
+
+## The start pad's centre in X and Z, and the height of its top surface.
+##
+## West of the switchback, whose hillside and reset slab reach about x = -63, by enough
+## that this route's own reset (ten metres either side) clears it; level with the other
+## four starts in Z, so all five read as five ways out of one place.
+const LADDER_X := -76.0
+const LADDER_Z := 10.0
+const LADDER_Y := 2.0
+
+const LADDER_PAD := Vector3(6.0, 1.0, 6.0)
+
+## A rung's footprint: 3 m across the line, 2.5 m along it. Wide enough that the route is
+## about the height, not about holding a line; deep enough to land a jump that clears the
+## face by a metre and still stand.
+const LADDER_RUNG := Vector2(3.0, 2.5)
+
+## How many rungs between the pad and the finish.
+const LADDER_RUNGS := 10
+
+## How much every jump climbs, in metres.
+##
+## [b]Just under [method climb_limit], and the suite holds it there.[/b] The limit is
+## 1.035 m (the 1.15 m apex times the family's `CLIMB_MARGIN`); 1.0 is 97% of it, which is
+## a jump that works every time it is taken right and never when it is not. Anything past
+## the limit is a wall by the family's rule, and anything much under it is the jump course.
+const LADDER_RISE := 1.0
+
+## The clear air of the first jump and the last, in metres. Grows evenly.
+##
+## Sized against `jump_reach(1.0)`, 3.23 m: 2.5 is 77% of it. The FIRST is the other
+## bound: a 1.0 m climbing jump is still under the rung's top for its first 0.22 s — 1.52 m
+## of running at full speed — so a gap under that is one a player at full speed meets the
+## face of on the way UP, wherever they take off. 1.8 leaves 0.28 m, and the suite
+## asserts every gap is past it.
+##
+## [b]Measured, not assumed:[/b] with the rise at 1.10 m — past the climb limit, still
+## under the 1.15 m apex — the drive never gets past the first rung (seven respawns). The
+## margin in `climb_limit()` is the difference between this route and a wall.
+const LADDER_FIRST_GAP := 1.8
+const LADDER_LAST_GAP := 2.5
+
+## The finish's footprint, square.
+const LADDER_FINISH := Vector2(5.0, 5.0)
+
+## Which rungs carry the two splits: one every four metres of height.
+const LADDER_SPLIT_RUNGS := [4, 8]
+
 
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
@@ -225,6 +291,7 @@ func _build() -> void:
 	_build_the_narrows()
 	_build_the_switchback()
 	_build_the_ascent()
+	_build_the_ladder()
 
 
 ## The bonus route, alongside the main run and six metres above it.
@@ -317,6 +384,29 @@ func _build_the_ascent() -> void:
 			float(ramp["pitch"]),
 			Vector3.RIGHT
 		)
+
+
+## Bonus 4, built from [method ladder_route] and nothing else.
+##
+## Every rung is a column standing on the pad's underside, not a slab floating at its
+## height: a 3 m slab 12 m up is a speck in a frame, and a row of columns each a metre
+## taller than the last reads from anywhere on the map as the staircase it is. The two
+## split rungs are the ramp colour.
+func _build_the_ladder() -> void:
+	var route := ladder_route()
+
+	for i in range(route.size()):
+		var box: AABB = route[i]
+		var colour := PlaygroundGeometry.COLOUR_PLATFORM
+
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif i == route.size() - 1:
+			colour = PlaygroundGeometry.COLOUR_END
+		elif LADDER_SPLIT_RUNGS.has(i):
+			colour = PlaygroundGeometry.COLOUR_RAMP
+
+		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
 
 
 ## The gap after block [param index], in metres.
@@ -571,6 +661,48 @@ static func ascent_ramps() -> Array[Dictionary]:
 	return ramps
 
 
+# --- The ladder, as arithmetic ------------------------------------------------
+
+## The clear air before the box jump [param index] lands on, counted from 0.
+static func ladder_gap(index: int) -> float:
+	return lerpf(
+		LADDER_FIRST_GAP, LADDER_LAST_GAP, float(index) / float(maxi(LADDER_RUNGS, 1))
+	)
+
+
+## The bottom of every column on the ladder: the pad's underside.
+static func ladder_foot_y() -> float:
+	return LADDER_Y - LADDER_PAD.y
+
+
+## Bonus 4 as the boxes a player lands on, start pad to finish, in order: the pad, ten
+## rungs, the finish. Each rung and the finish is the WHOLE column, foot to top, because
+## that is what is built — a route box's top is what a player stands on and its sides are
+## what a short jump meets.
+static func ladder_route() -> Array[AABB]:
+	var foot := ladder_foot_y()
+	var route: Array[AABB] = [standable(
+		Vector3(LADDER_X, LADDER_Y - LADDER_PAD.y * 0.5, LADDER_Z), LADDER_PAD
+	)]
+
+	# The near (high-Z) edge of whatever comes next.
+	var z := LADDER_Z - LADDER_PAD.z * 0.5
+
+	for i in range(LADDER_RUNGS + 1):
+		var last := i == LADDER_RUNGS
+		var footprint := LADDER_FINISH if last else LADDER_RUNG
+		var top := LADDER_Y + LADDER_RISE * float(i + 1)
+
+		z -= ladder_gap(i)
+		route.append(AABB(
+			Vector3(LADDER_X - footprint.x * 0.5, foot, z - footprint.y),
+			Vector3(footprint.x, top - foot, footprint.y)
+		))
+		z -= footprint.y
+
+	return route
+
+
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
 
@@ -615,6 +747,7 @@ static func build_zones() -> DotTimerZoneSet:
 	_add_the_narrows(zones)
 	_add_the_switchback(zones)
 	_add_the_ascent(zones)
+	_add_the_ladder(zones)
 
 	return zones
 
@@ -878,5 +1011,62 @@ static func _add_the_ascent(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(ASCENT_X - 10.0, ASCENT_Y - 8.0, last.position.z - 10.0),
 		Vector3(ASCENT_X + 10.0, ASCENT_Y - 3.0, pad.end.z + 10.0)
+	)
+	zones.add(reset)
+
+
+## Everything on bonus 4: a spawn, a start, a split on rungs 4 and 8, a finish, and a
+## volume under the whole climb that puts a player who fell back on the pad.
+##
+## [b]The splits are on the rungs themselves.[/b] Nothing on this route can be skipped —
+## the rung after next is two metres up, twice [method climb_limit] — so a split on the
+## rung is one nobody passes without landing, and it spans two metres either side so a
+## player landing on the edge has still landed.
+static func _add_the_ladder(zones: DotTimerZoneSet) -> void:
+	var track := LADDER_TRACK
+	var route := ladder_route()
+	var pad: AABB = route[0]
+
+	# A stride behind the pad's middle, facing -Z: yaw 0 by `DotFpsMotor._view_basis`.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = pad.get_center() + Vector3(0.0, LADDER_PAD.y * 0.5 + 1.0, 1.5)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	# Timing begins when the player leaves the pad, which is the first jump.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	for n in range(LADDER_SPLIT_RUNGS.size()):
+		var rung: AABB = route[LADDER_SPLIT_RUNGS[n]]
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n + 1)
+		stage.set_box(
+			Vector3(rung.position.x - 2.0, rung.end.y - 0.5, rung.position.z),
+			Vector3(rung.end.x + 2.0, rung.end.y + 6.0, rung.end.z)
+		)
+		zones.add(stage)
+
+	# The finish: the whole column's top and the air above it, deep for `thin_zones`.
+	var last: AABB = route[route.size() - 1]
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(last.position.x, last.end.y - 1.0, last.position.z),
+		Vector3(last.end.x, last.end.y + 5.0, last.end.z)
+	)
+	zones.add(finish)
+
+	# Falling off: a slab five metres deep under the columns' feet, the whole climb long.
+	# The columns stand on the pad's underside, so a player who misses a rung drops
+	# between two of them and straight through it; ten metres either side stops it at
+	# x = -66, clear of the switchback's own slab.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(LADDER_X - 10.0, ladder_foot_y() - 7.0, last.position.z - 10.0),
+		Vector3(LADDER_X + 10.0, ladder_foot_y() - 2.0, pad.end.z + 10.0)
 	)
 	zones.add(reset)

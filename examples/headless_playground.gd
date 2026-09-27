@@ -48,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 432
+const CHECKS := 449
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 25
+const SECTIONS := 26
 
 var _passed := 0
 var _failed := 0
@@ -115,6 +115,7 @@ func _run() -> void:
 	await _test_the_ascent()
 	await _test_the_cascade()
 	await _test_the_stepping_stones()
+	await _test_the_ladder()
 	await _test_the_maps_are_surveyed()
 	await _test_the_client_boots()
 
@@ -1212,9 +1213,11 @@ func _the_old_tower_rule_passes_an_unjumpable_gap() -> void:
 ## spends grounded between the two boxes, which is on the ramp: a drive that finishes
 ## with none on some ramp got up it some other way.
 ##
-## Returns `{started, finished, splits, reached, ticks, respawns, walked}`; `reached` is
-## the highest box index stood on, reported so a failure names the jump; `walked` maps
-## each of [param walks] to its grounded ramp ticks.
+## Returns `{started, finished, splits, reached, ticks, respawns, walked, distance,
+## top_speed}`; `reached` is the highest box index stood on, reported so a failure names
+## the jump; `walked` maps each of [param walks] to its grounded ramp ticks; `distance` is
+## the horizontal ground the bot covered (respawn teleports left out) and `top_speed` its
+## fastest horizontal speed, both for `[bot-drive-1]`'s printed pace.
 func _drive_route(
 	player: PlaygroundPlayer, route: Array[AABB], max_ticks: int,
 	look_ahead: float = 0.3, walks: Array[int] = []
@@ -1241,6 +1244,12 @@ func _drive_route(
 	var reached := 0
 	var ticks := 0
 	var walked := {}
+	# `[bot-drive-1]`: how far the bot actually went and how fast, so a drive that
+	# finishes is also a drive whose pace is on the page. Horizontal, and a tick that
+	# moved further than any run can (a respawn's teleport) is not counted.
+	var distance := 0.0
+	var top_speed := 0.0
+	var last_at := player.global_position
 
 	for i in walks:
 		walked[i] = 0
@@ -1313,6 +1322,15 @@ func _drive_route(
 		player.controller.apply_command(command)
 		await get_tree().physics_frame
 
+		var moved := Vector2(
+			player.global_position.x - last_at.x, player.global_position.z - last_at.z
+		).length()
+		if moved < 1.0:
+			distance += moved
+		last_at = player.global_position
+		var now := player.controller.state.velocity
+		top_speed = maxf(top_speed, Vector2(now.x, now.z).length())
+
 		if finished[0]:
 			# The finish zone reaches a metre under the pad, so a run can end in the
 			# air over it before the bot has ever stood there.
@@ -1336,6 +1354,8 @@ func _drive_route(
 		"ticks": ticks,
 		"respawns": respawns[0],
 		"walked": walked,
+		"distance": distance,
+		"top_speed": top_speed,
 	}
 
 
@@ -2416,9 +2436,10 @@ func _test_the_narrows() -> void:
 			[
 				DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST,
 				PgBhopIntro.SWITCHBACK_TRACK, PgBhopIntro.ASCENT_TRACK,
+				PgBhopIntro.LADDER_TRACK,
 			]
 		),
-		"and all four of its routes can be run, the switchback and the ascent included",
+		"and all five of its routes can be run, the switchback, the ascent and the ladder included",
 		str(zones.playable_tracks())
 	)
 
@@ -3184,9 +3205,9 @@ func _test_the_switchback() -> void:
 	_check(
 		playground.tracks_on_this_map() == [
 			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track,
-			PgBhopIntro.ASCENT_TRACK,
+			PgBhopIntro.ASCENT_TRACK, PgBhopIntro.LADDER_TRACK,
 		],
-		"and the game sees four tracks on the map without being told",
+		"and the game sees five tracks on the map without being told",
 		str(playground.tracks_on_this_map())
 	)
 
@@ -3679,6 +3700,163 @@ func _test_the_stepping_stones() -> void:
 		int(drive["respawns"]) == 0,
 		"without once being put back on the pad",
 		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+# --- The ladder ---------------------------------------------------------------
+
+## `pg_bhop_intro`'s bonus 4, driven start to finish.
+##
+## [b]The route where every jump is as high as a jump is allowed to be.[/b] Eleven jumps,
+## each [constant PgBhopIntro.LADDER_RISE] up, which is held here between 95% and 100% of
+## `climb_limit()`: under it by the family's rule, and close enough to it that the route
+## is the highest-climbing one on any map here rather than the jump course again. Its
+## gaps are held at the other end too: each is longer than a full-speed jump covers while
+## still under the next rung's top, so no gap is one a player meets the face of whatever
+## they do.
+##
+## The drive prints the ground covered against the route's length and the pace against
+## `MOVE_SPEED` (`[bot-drive-1]`), and asserts the pace: a bot that crawled up would
+## finish too, and "it finished" alone would not say the gaps were jumps.
+func _test_the_ladder() -> void:
+	print("")
+	_section("the ladder — pg_bhop_intro's bonus 4, eleven jumps each nearly as high as a jump")
+
+	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
+	_check(loaded.ok, "the bhop map loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgBhopIntro.LADDER_TRACK
+	var zones := PgBhopIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2},
+		"bonus 4 has a start, a finish, a spawn, a respawn and two splits, on its own track",
+		str(kinds)
+	)
+	_check(
+		zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"and dot-timer finds nothing missing from any route on the map",
+		", ".join(zones.route_problems())
+	)
+
+	var route := PgBhopIntro.ladder_route()
+	_check_route_reach(route, "the ladder")
+
+	# What makes it this route: every rise within 5% of the climb limit, and every gap
+	# longer than the ground a full-speed jump covers before its feet are over the next
+	# top. The second is the ascending root of the same arithmetic `jump_reach` uses.
+	var limit := PgLobby.climb_limit()
+	var launch := sqrt(2.0 * PgLobby.MOVE_GRAVITY * PgLobby.JUMP_HEIGHT)
+	var shape := PackedStringArray()
+	var lowest := INF
+	var shortest_margin := INF
+	for i in range(1, route.size()):
+		var gap := PgLobby.gap_between(route[i - 1], route[i])
+		var rise := route[i].end.y - route[i - 1].end.y
+		lowest = minf(lowest, rise)
+		if rise < limit * 0.95 or rise > limit:
+			shape.append("#%d climbs %.2f m" % [i, rise])
+		var rising := (launch - sqrt(launch * launch - 2.0 * PgLobby.MOVE_GRAVITY * rise)) \
+			/ PgLobby.MOVE_GRAVITY * PgLobby.MOVE_SPEED
+		shortest_margin = minf(shortest_margin, gap - rising)
+		if gap <= rising:
+			shape.append("#%d is %.2f m of air, and a jump is under the top for %.2f m" % [
+				i, gap, rising])
+	print("    the ladder: %d jumps, each at least %.2f m up against a %.3f m climb limit; the shortest gap is %.2f m longer than a jump spends rising to the top" % [
+		route.size() - 1, lowest, limit, shortest_margin,
+	])
+	_check(shape.is_empty(),
+		"every jump climbs within 5% of the climb limit, over a gap longer than the climb",
+		", ".join(shape))
+
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	var covered := true
+	for box in route:
+		if reset.to.y > box.position.y or reset.from.x > box.position.x \
+				or reset.to.x < box.end.x or reset.from.z > box.position.z \
+				or reset.to.z < box.end.z:
+			covered = false
+	_check(
+		covered,
+		"and its reset is under the foot of every column, the whole route long",
+		"reset %s..%s" % [str(reset.from), str(reset.to)]
+	)
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	_check(player.timer.set_track(track), "the ladder's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	# The route's length: spawn to the first rung's middle and middle to middle after,
+	# along the ground. What a bot that took every jump straight covers.
+	var length := 0.0
+	var from := player.global_position
+	for i in range(1, route.size()):
+		var to := route[i].get_center()
+		length += Vector2(to.x - from.x, to.z - from.z).length()
+		from = to
+
+	var drive: Dictionary = await _drive_route(player, route, 3000, 0.1)
+	var seconds := float(drive["ticks"]) / float(Engine.physics_ticks_per_second)
+	var pace := float(drive["distance"]) / maxf(seconds, 0.001)
+
+	print("    the ladder: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
+	print("    the ladder: covered %.1f m of a %.1f m route in %.2f s: %.2f m/s against a %.1f m/s max, top %.2f" % [
+		float(drive["distance"]), length, seconds, pace, PgLobby.MOVE_SPEED,
+		float(drive["top_speed"]),
+	])
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 4")
+	_check(
+		drive["splits"] == [1, 2],
+		"it climbs through both rungs' splits, in order",
+		str(drive["splits"])
+	)
+	_check(
+		drive["finished"],
+		"and reaches the finish: the ladder run end to end",
+		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.x, player.global_position.y,
+				player.global_position.z, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		float(drive["distance"]) >= length * 0.95 and pace >= PgLobby.MOVE_SPEED * 0.6,
+		"covering the route at a jumping pace, not a crawl",
+		"%.1f m of %.1f at %.2f m/s" % [float(drive["distance"]), length, pace]
 	)
 	_check(
 		not player.timer.run.is_active(),

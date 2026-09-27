@@ -79,7 +79,7 @@ game/
 maps/
   pg_lobby.gd            the sandbox: the jump course, the tower, the circuit and the stepping stones on bonus 1-4
   pg_surf_intro.gd       two ramps and a valley, the plunge on bonus 1, the cascade on bonus 2
-  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3
+  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3, the ladder on bonus 4
   *.zones.json           generated from the maps, and checked against them
 tools/
   export_zones.gd        writes those files. Run it after changing a map
@@ -660,6 +660,14 @@ Bonus 3 on `pg_bhop_intro`, east of the narrows at x = 60: four sections, each a
 
 **Armed, and what arming it found.** With the last ramp at 50 degrees the walkability check and the ramp-grounded check both fail (0 grounded ticks on it) — **but the drive still finishes.** An airborne player holding forward into a face past `max_slope_angle` creeps up it at a steady ~0.97 m/s vertical: air acceleration refills the wish each tick, the clip turns it up the plane, and gravity never wins, so 2 m of 50 degrees is climbed in about 1.5 s. Whether that is the genre (high air acceleration pressed into a surf face) or a bug is dot-player-controller's call (reported from the 2026-09-24 nightly run as `[steep-climb-1]`); it is why "it finished" alone proves nothing here and the grounded-ticks check exists. `tools/screenshot.sh pg_bhop_intro` renders `pg_bhop_intro_ascent` (the profile, from beside) and `pg_bhop_intro_ascent_start` (from behind the pad).
 
+## `pg_bhop_intro`'s ladder: the first route where every jump is as high as a jump may be
+
+Bonus 4 on `pg_bhop_intro` (`LADDER_TRACK`), west of the switchback at x = -76, starting level with the other four routes at z = 10: a 6 m pad at 2 m, ten 3 x 2.5 m columns each exactly `LADDER_RISE` (1.0 m) above the last, and a 5 m finish column at 13 m — eleven jumps, 11 m up in 60 m. pg_bhop_intro had the oldest level of the three timer maps (the ascent, 2026-09-24), and every route on it so far asked how far (the main run, the narrows) or where to (the switchback) or whether you can walk it (the ascent). **This one asks how high**: 1.0 m is 97% of `climb_limit()` (1.035 m), the tallest step on any route here (the jump course's 0.8 m was), so the reach is 3.23 m against 4.75 flat and the widest gap, 2.5 m, is 77% of it — a player who takes off a stride before the lip meets the next column's face on the way down. The gaps grow 1.8 -> 2.5 m, and the lower bound is arithmetic too: a 1.0 m climbing jump at full speed is under the next top for its first 0.22 s, 1.52 m, so a gap shorter than that is met face-first on the way UP wherever it is taken; 1.8 leaves 0.28 m.
+
+**One description.** `PgBhopIntro.ladder_route()` is the boxes — each rung and the finish the whole column, from the pad's underside (`ladder_foot_y()`, 1 m) to its top, walked edge to edge from the pad — and the geometry (`_build_the_ladder`), the zones (`_add_the_ladder`: spawn a stride behind the pad's middle facing -Z, start on the pad, splits on rungs 4 and 8 — nothing here can be skipped, the rung after next is 2 m up — a deep finish, a reset slab 2 to 7 m under the columns' feet from x -86 to -66, clear of the switchback's) and the suite read that and nothing else. Columns rather than floating slabs for the stepping stones' reason: from beside, a row of columns each a metre taller than the last reads as the staircase it is. The survey finds pg_bhop_intro still clean with nothing new declared.
+
+`headless_playground`'s **the ladder** (17 checks): the five zone kinds on its own track and `route_problems()`; `_check_route_reach` (tightest #11, 2.50 m of air 1.00 m up against 3.23, 77%); every rise within 95-100% of `climb_limit()` over a gap longer than the rising part of the jump; the reset under every column's foot; the spawn and its yaw; and a `_drive_route` drive with a 0.1 m look-ahead — all eleven jumps and both splits in 1,011 ticks, no respawns. **The drive prints its pace (`[bot-drive-1]`)**: `_drive_route` now returns `distance` (horizontal ground covered, respawn teleports left out) and `top_speed`, and this section prints 53.2 m covered of a 55.7 m centre-to-centre route in 7.90 s, 6.73 m/s against a 7.0 max, and asserts the drive covered at least 95% of the route at 60% of `MOVE_SPEED`. The narrows and switchback sections now expect five tracks. Armed three ways, each with the section run alone: the last gap at 3.6 m fails the reach check and the bot stalls at rung 9 with two respawns; the rise at 1.10 m — past the climb limit, still under the 1.15 m apex — fails the wall check and the shape check, and **the bot never gets past the first rung (seven respawns)**, which is the family's `CLIMB_MARGIN` measured rather than assumed; and a bot wishing for 40% of its speed fails the pace check (2.23 m/s) along with the finish. `tools/screenshot.sh pg_bhop_intro` renders `pg_bhop_intro_ladder` (the profile, from the empty west side) and `pg_bhop_intro_ladder_start` (from behind the pad at a player's height).
+
 ## Bonus 3 is a circuit, and a track now says whether it is driven
 
 `pg_lobby` gained a **driving circuit** round the outside of the plate: a rounded
@@ -1118,7 +1126,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 432 checks, 25 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 449 checks, 26 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
 godot --headless --path . res://examples/headless_net.tscn          # 271 checks, 28 sections

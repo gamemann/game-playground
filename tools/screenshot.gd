@@ -140,6 +140,22 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(60.0, 5.5, 17.0),
 				"at": Vector3(60.0, 4.0, -20.0),
 			},
+			# Bonus 4, the ladder: eleven jumps a metre up each, along z at x = -76.
+			# From square beside it on the west, where nothing stands behind it, for
+			# the ascent's reason: the frame has to show the PROFILE, a staircase of
+			# columns each a metre taller than the last.
+			{
+				"name": "pg_bhop_intro_ladder",
+				"from": Vector3(-124.0, 12.0, -20.0),
+				"at": Vector3(-76.0, 7.0, -20.0),
+			},
+			# And from behind the pad at a player's height: the first rung a metre
+			# over the pad, and the climb going away up the line.
+			{
+				"name": "pg_bhop_intro_ladder_start",
+				"from": Vector3(-78.5, 4.5, 16.0),
+				"at": Vector3(-76.0, 7.0, -20.0),
+			},
 		]
 
 	if id == "pg_surf_intro":
