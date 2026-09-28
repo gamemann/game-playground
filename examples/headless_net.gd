@@ -53,7 +53,7 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 271
+const CHECKS := 272
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1960,6 +1960,15 @@ func _measure_round_trip(
 		converged_after >= 0 and converged_after <= CONVERGE_LIMIT_TICKS,
 		"and the mirror lands on the car within %d ticks of it stopping" % CONVERGE_LIMIT_TICKS,
 		"%d ticks (stopped at %d)" % [converged_after, stopped_at]
+	)
+	# `[veh-heading-1]`: the rotation crossed as four INTs, which the interpolator
+	# switches at the midpoint, so the body snapped round at the snapshot rate while its
+	# position slid -- still on 26 of 31 turning ticks. A few still ticks are the lossy
+	# link's stalls, not the format; armed with the INTs back, this fails.
+	_check(
+		turning_ticks > 10 and held_ticks * 5 <= turning_ticks,
+		"and the mirror's heading turns on nearly every tick, not once a snapshot",
+		"held still on %d of %d turning ticks" % [held_ticks, turning_ticks]
 	)
 
 
