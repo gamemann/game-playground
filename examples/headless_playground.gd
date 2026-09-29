@@ -48,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 462
+const CHECKS := 483
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 26
+const SECTIONS := 27
 
 var _passed := 0
 var _failed := 0
@@ -114,6 +114,7 @@ func _run() -> void:
 	await _test_the_switchback()
 	await _test_the_ascent()
 	await _test_the_cascade()
+	await _test_the_long_bank()
 	await _test_the_stepping_stones()
 	await _test_the_ladder()
 	await _test_the_maps_are_surveyed()
@@ -245,9 +246,10 @@ func _test_boots() -> void:
 		", ".join(zones.problems()))
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
-			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK]
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK,
+				PgSurfIntro.BANK_TRACK]
 		),
-		"and all three of its tracks can be run",
+		"and all four of its tracks can be run",
 		str(zones.playable_tracks())
 	)
 
@@ -2773,9 +2775,10 @@ func _test_the_plunge() -> void:
 		", ".join(zones.problems()))
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
-			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK]
+			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK,
+				PgSurfIntro.BANK_TRACK]
 		),
-		"and the surf map has three routes now rather than one",
+		"and the surf map has four routes now rather than one",
 		str(zones.playable_tracks())
 	)
 
@@ -3674,9 +3677,9 @@ func _test_the_cascade() -> void:
 	)
 	_check(
 		playground.tracks_on_this_map() == [
-			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track,
+			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track, PgSurfIntro.BANK_TRACK,
 		],
-		"and the game sees three tracks on the map without being told",
+		"and the game sees four tracks on the map without being told",
 		str(playground.tracks_on_this_map())
 	)
 
@@ -3775,6 +3778,263 @@ func _test_the_cascade() -> void:
 
 	playground.remove_player(&"bot")
 	_done()
+
+
+## Bonus 3 on `pg_surf_intro`: a face banked past standing and pitched along its length,
+## ridden from its pad to its finish by holding INTO it.
+##
+## [b]The bot holds right while it is below a line on the bank and lets go above it, and
+## never touches forward.[/b] That is the one surf skill a scripted bot has (game-g2gfast's
+## single bank is ridden the same way), and it is the whole skill this route asks: gravity
+## pulls a rider toward the low lip on every tick and the pitch carries them down the bank.
+## The line is the pad's centre, which the spawn stands on.
+##
+## What it decides: the rider stays on the bank to its far end, crosses both splits,
+## lands in the finish and is never put back; it is faster than running, and the descent
+## of the route came from the bank rather than from falling off it — `[surf-ramp-1]`'s
+## question, which the main run fails, asserted here because this route exists to pass it.
+func _test_the_long_bank() -> void:
+	print("")
+	_section("the long bank — pg_surf_intro's bonus 3, surfed by holding into it")
+
+	var loaded: DotResult = await playground.change_map(&"pg_surf_intro")
+	_check(loaded.ok, "the surf map loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgSurfIntro.BANK_TRACK
+	var zones := PgSurfIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2}
+			and zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"bonus 3 has a start, a finish, a spawn, a respawn and two splits, on its own track",
+		"%s %s" % [str(kinds), ", ".join(zones.route_problems())]
+	)
+	_check(
+		playground.tracks_on_this_map() == [
+			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK, track,
+		],
+		"and the game sees four tracks on the map without being told",
+		str(playground.tracks_on_this_map())
+	)
+	var thin := zones.thin_zones(30.0, playground.tick_rate)
+	_check(thin.is_empty(),
+		"and no zone is thin enough for a rider at 30 m/s to cross without entering",
+		"%d thin" % thin.size())
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	# Surf, asked of the face rather than of the roll written down: the face's own slope,
+	# with the pitch in it, against the slope the server lets a player stand on.
+	var normal := PgSurfIntro.bank_normal()
+	var slope := rad_to_deg(acos(normal.y))
+	var max_slope: float = player.controller.tunables.max_slope_angle
+	_check(
+		slope > max_slope + 5.0,
+		"the bank is steeper than a player can stand on, by more than five degrees",
+		"%.1f° against %.0f°" % [slope, max_slope]
+	)
+
+	# And it falls along the route: what the main run's ramps do not do.
+	var corners := PgSurfIntro.bank_corners()
+	var near_mid := (corners[0] + corners[1]) * 0.5
+	var far_mid := (corners[2] + corners[3]) * 0.5
+	var bank_drop := near_mid.y - far_mid.y
+	_check(
+		bank_drop > 10.0 and far_mid.z < near_mid.z - 100.0,
+		"and it falls along its length, so the bank is what makes a rider fast",
+		"%.1f m down over %.1f m" % [bank_drop, near_mid.z - far_mid.z]
+	)
+
+	# The finish pad: past the far edge (a rider arriving does not hit its face) and under
+	# it; and the reset under all of it.
+	var finish_pad := PgSurfIntro.bank_finish()
+	var far_z := PgSurfIntro.bank_far_z()
+	_check(
+		finish_pad.end.z < minf(corners[2].z, corners[3].z)
+			and finish_pad.end.y < far_mid.y - 1.0,
+		"the finish pad is beyond the bank's far edge and under it",
+		"pad z %.1f..%.1f top %.1f; far edge z %.1f, middle %.1f"
+			% [finish_pad.position.z, finish_pad.end.z, finish_pad.end.y, far_z, far_mid.y]
+	)
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	var lowest := finish_pad.position.y
+	for corner in corners:
+		lowest = minf(lowest, corner.y - 1.0)
+	_check(
+		reset.to.y < lowest,
+		"and its reset is under everything on the route",
+		"reset top %.2f, lowest %.2f" % [reset.to.y, lowest]
+	)
+
+	_check(player.timer.set_track(track), "the long bank's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	var ride: Dictionary = await _ride_the_bank(player, 3000)
+	var tally: Dictionary = ride["tally"]
+	var ticks := int(ride["ticks"])
+	var length := spawn.destination.z - (finish_pad.end.z - 2.0)
+
+	print("    the long bank: rode to z %.1f of %.1f, x %.1f..%.1f, splits %s, finish %s, %d ticks, %d respawns" % [
+		float(ride["rode_to"]), far_z, float(ride["x_low"]), float(ride["x_high"]),
+		str(ride["splits"]), str(ride["finished"]), ticks, int(ride["respawns"]),
+	])
+	var pace := _print_pace(
+		"the long bank", _tally_total(tally, "distance"), length, ticks,
+		PgSurfIntro.MOVE_SPEED, float(ride["top_speed"])
+	)
+	_print_where("the long bank", "the bank", tally, -bank_drop)
+
+	_check(ride["started"], "dropping off the pad starts a run on bonus 3")
+	_check(
+		float(ride["rode_to"]) <= far_z + 2.0,
+		"a bot holding into the bank rides it to its far end",
+		"left it at z %.1f of %.1f" % [float(ride["rode_to"]), far_z]
+	)
+	_check(ride["splits"] == [1, 2], "it crosses both splits, in order", str(ride["splits"]))
+	_check(
+		ride["finished"] and int(ride["respawns"]) == 0,
+		"and lands in the finish without once being put back",
+		"finished %s, %d respawns, at %s" % [
+			str(ride["finished"]), int(ride["respawns"]), str(player.global_position.round()),
+		]
+	)
+	_check_pace("the long bank", _tally_total(tally, "distance"), length, pace,
+		PgSurfIntro.MOVE_SPEED, BANK_PACE_FLOOR)
+	_check(
+		float(ride["top_speed"]) > 20.0,
+		"and the bank makes the rider fast, past 20 m/s",
+		"%.1f m/s" % float(ride["top_speed"])
+	)
+
+	# `[surf-ramp-1]`, asserted: the descent between the pad and the far edge came from
+	# riding the bank, not from falling. The drop to the finish pad is the air's.
+	var on_descent := float((tally["on"] as Dictionary)["descent"])
+	_check(
+		on_descent >= bank_drop * 0.9,
+		"most of the descent is on the bank, which is the whole reason this route exists",
+		"%.1f m on the bank of a %.1f m bank" % [on_descent, bank_drop]
+	)
+	_check_where("the long bank", "bank", tally)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+## The long bank's pace floor, as a fraction of `MOVE_SPEED`: set under what the bot
+## measured (see `_test_the_long_bank`). Over 1, because a surf route slower than running
+## is not one.
+const BANK_PACE_FLOOR := 2.0
+
+
+## Rides [param player] from the bank's pad to its finish. Returns what happened and a
+## `[surf-ramp-1]` tally of the run: "on" is the bank's face, "air" is airborne off it,
+## "else" is anything grounded.
+func _ride_the_bank(player: PlaygroundPlayer, max_ticks: int) -> Dictionary:
+	var started: Array[bool] = [false]
+	var finished: Array[bool] = [false]
+	var splits: Array[int] = []
+	var respawns: Array[int] = [0]
+
+	var on_start := func(_run: DotTimerRun) -> void: started[0] = true
+	var on_stage := func(number: int, _split: float) -> void: splits.append(number)
+	var on_finish := func(_run: DotTimerRun) -> void: finished[0] = true
+	var on_effect := func(id: StringName, zone: DotTimerZone) -> void:
+		if id == player.player_id and zone.kind == DotTimerZone.Kind.RESPAWN:
+			respawns[0] += 1
+
+	player.timer.run_started.connect(on_start)
+	player.timer.stage_reached.connect(on_stage)
+	player.timer.run_finished.connect(on_finish)
+	playground.timers.effect_requested.connect(on_effect)
+
+	var line := PgSurfIntro.BANK_PAD_X
+	var near_z := PgSurfIntro.BANK_NEAR_Z
+	var far_z := PgSurfIntro.bank_far_z()
+	var tally := _motion_tally()
+	var ticks := 0
+	var top := 0.0
+	var rode_to := INF
+	var x_low := INF
+	var x_high := -INF
+	var last := player.global_position
+
+	for i in range(max_ticks):
+		var at := player.global_position
+		var on_bank := _on_the_bank(at)
+		var command := DotFpsCommand.new()
+		command.yaw = 0.0
+
+		if player.controller.state.is_grounded() and not on_bank:
+			command.move = Vector2(0.0, 1.0)
+		else:
+			command.move = Vector2(1.0 if at.x < line else 0.0, 0.0)
+
+		player.controller.apply_command(command)
+		await get_tree().physics_frame
+		ticks = i + 1
+
+		var now := player.global_position
+		if started[0] and not finished[0]:
+			var where := "on" if on_bank else (
+				"else" if player.controller.state.is_grounded() else "air")
+			_tally_tick(tally, last, now, where)
+			top = maxf(top, player.speed())
+		if _on_the_bank(now):
+			rode_to = minf(rode_to, now.z)
+			x_low = minf(x_low, now.x)
+			x_high = maxf(x_high, now.x)
+		last = now
+
+		if finished[0] or respawns[0] > 0:
+			break
+
+	player.timer.run_started.disconnect(on_start)
+	player.timer.stage_reached.disconnect(on_stage)
+	player.timer.run_finished.disconnect(on_finish)
+	playground.timers.effect_requested.disconnect(on_effect)
+
+	# Let go of the stick: a bot keeps the last command it was given.
+	player.controller.apply_command(DotFpsCommand.new())
+
+	return {
+		"started": started[0], "finished": finished[0], "splits": splits,
+		"respawns": respawns[0], "ticks": ticks, "top_speed": top, "tally": tally,
+		"rode_to": rode_to, "x_low": x_low, "x_high": x_high,
+	}
+
+
+## Whether feet at [param at] are on the bank's face: over it, and at most 0.8 m above
+## it — a capsule resting on a 56-degree face stands its feet about 0.3 m off the plane.
+static func _on_the_bank(at: Vector3) -> bool:
+	var corners := PgSurfIntro.bank_corners()
+	var low_x := minf(corners[0].x, corners[2].x)
+	var high_x := maxf(corners[1].x, corners[3].x)
+	if at.z > PgSurfIntro.BANK_NEAR_Z or at.z < PgSurfIntro.bank_far_z():
+		return false
+	if at.x < low_x or at.x > high_x:
+		return false
+	var above := at.y - PgSurfIntro.bank_surface_y(at.x, at.z)
+	return above > -0.2 and above < 0.8
 
 
 func _test_the_stepping_stones() -> void:

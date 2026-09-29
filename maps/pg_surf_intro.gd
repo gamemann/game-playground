@@ -2,7 +2,7 @@ extends "../game/playground_map.gd"
 
 const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 
-## `pg_surf_intro` — three routes. A valley between two ramps, a face you fall down,
+## `pg_surf_intro` — four routes. A valley between two ramps, a face you fall down,
 ## and a staircase you jump down.
 ##
 ## [b]The main run is the shape every surf map is made of, reduced to its
@@ -167,6 +167,62 @@ const CASCADE_LAST_GAP := 3.8
 const CASCADE_SPLIT_BLOCKS := [4, 8]
 
 
+# --- Bonus 3: the long bank --------------------------------------------------
+#
+# [b]The first face on this map that is SURFED.[/b] The main run's ramps are banked and
+# level along their length, so they carry nobody anywhere (`[surf-ramp-1]`); the plunge
+# is pitched along the route and not banked, so it is a slide a player falls down
+# holding forward. Neither is the shape a surf map is made of, which is both at once: a
+# face banked past what a player can stand on, so the only way to stay on it is to hold
+# INTO it, and pitched down along its length, so the thing that makes a rider fast is
+# the face they are holding onto. This is that face, once, 140 m long.
+#
+# It asks the one question neither other surf route asks: can a player hold a height on
+# a face that is throwing them off its low lip the whole way down? Hold too little and
+# they slide off the lip into the pit; hold too much and they climb over the top edge.
+#
+# Built east of the plunge, whose face is 14 m wide at x = 60: the bank's low lip is at
+# x = 104, forty metres clear. One slab, one basis — [method bank_basis] — and every
+# number about where its surface is comes from [method bank_surface_y], which the
+# geometry, the zones and the suite all read.
+
+## The track it runs on.
+const BANK_TRACK := DotTimerTrack.BONUS_FIRST + 2
+
+## Where the middle of the bank's near edge is: its top surface passes through this point.
+const BANK_X := 110.0
+const BANK_NEAR_Z := START_Z
+const BANK_TOP_Y := START_Y - 3.0
+
+## How far the bank is rolled about its own length. Past the server's 46-degree
+## `max_slope_angle` by ten degrees, the main run's band, so no pitch here makes it
+## standable: the face's own slope is what the suite checks, not this number.
+const BANK_ROLL := 56.0
+
+## How far it falls along its length. 7 degrees is 2.4 m/s² of gravity along the route,
+## which takes a rider off the pad at a walk to about 27 m/s at the far end — the
+## plunge's band, from a face a player can steer on.
+const BANK_PITCH := 7.0
+
+## The slab: across the bank, thick, and along it, measured on the slab.
+const BANK_SIZE := Vector3(20.0, 1.0, 140.0)
+
+## The pad: centred a metre down the bank from its middle line, which is the line the
+## suite's bot rides, so stepping off its front lands a player on the bank 4.5 m below.
+const BANK_PAD := Vector3(8.0, 1.0, 10.0)
+const BANK_PAD_X := BANK_X - 1.0
+
+## The finish pad, after a clear gap past the bank's far end and this far under the
+## middle of that end. Long, because where a rider lands is a matter of how fast they
+## left: 27 m/s comes down about 13 m out, and a strafer twice as fast inside 30.
+const BANK_FINISH_DROP := 4.0
+const BANK_FINISH_GAP := 2.0
+const BANK_FINISH := Vector3(18.0, 1.0, 60.0)
+
+## Where along the bank the splits are, as fractions of its length.
+const BANK_SPLITS := [1.0 / 3.0, 2.0 / 3.0]
+
+
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
 
@@ -244,6 +300,7 @@ func _build() -> void:
 
 	_build_the_plunge()
 	_build_the_cascade()
+	_build_the_bank()
 
 
 ## Bonus 1. Built from its own constants, like the main run, and from the same
@@ -323,6 +380,92 @@ func _build_the_cascade() -> void:
 		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
 
 
+## Bonus 3: the pad, the bank and the finish pad. The bank is one slab placed by
+## [method bank_basis] with its top face through the point the constants name; nothing
+## else says where it is.
+func _build_the_bank() -> void:
+	PlaygroundGeometry.box(
+		self, bank_pad().get_center(), BANK_PAD, PlaygroundGeometry.COLOUR_START
+	)
+
+	var basis := bank_basis()
+	# The slab's centre: half its length down the bank from the near edge, and half
+	# its thickness under the top face along the face's own normal.
+	var centre := bank_near_centre() + basis * Vector3(0.0, -BANK_SIZE.y * 0.5, -BANK_SIZE.z * 0.5)
+	PlaygroundGeometry.box(self, centre, BANK_SIZE, PlaygroundGeometry.COLOUR_RAMP, basis)
+
+	PlaygroundGeometry.box(
+		self, bank_finish().get_center(), BANK_FINISH, PlaygroundGeometry.COLOUR_END
+	)
+
+
+## The bank's orientation: rolled [constant BANK_ROLL] about its length first, so its
+## +X edge is the high one, then pitched [constant BANK_PITCH] down toward -Z. Local +Y
+## is the face's normal, local -Z runs down the bank, local +X runs up it.
+static func bank_basis() -> Basis:
+	return (
+		Basis(Vector3.RIGHT, -deg_to_rad(BANK_PITCH))
+		* Basis(Vector3.BACK, deg_to_rad(BANK_ROLL))
+	)
+
+
+## The middle of the top face's near edge.
+static func bank_near_centre() -> Vector3:
+	return Vector3(BANK_X, BANK_TOP_Y, BANK_NEAR_Z)
+
+
+## The riding face's normal. Its Y is the cosine of the face's slope, which is what the
+## suite holds against `max_slope_angle`.
+static func bank_normal() -> Vector3:
+	return bank_basis() * Vector3.UP
+
+
+## Height of the riding face at ([param x], [param z]) — what a rider's feet are on.
+static func bank_surface_y(x: float, z: float) -> float:
+	var n := bank_normal()
+	var p := bank_near_centre()
+	return p.y - (n.x * (x - p.x) + n.z * (z - p.z)) / n.y
+
+
+## The four corners of the riding face: near low, near high, far low, far high.
+static func bank_corners() -> Array[Vector3]:
+	var basis := bank_basis()
+	var p := bank_near_centre()
+	var half := BANK_SIZE.x * 0.5
+	var along := basis * Vector3(0.0, 0.0, -BANK_SIZE.z)
+	var across := basis * Vector3(half, 0.0, 0.0)
+	return [p - across, p + across, p - across + along, p + across + along]
+
+
+## Z of the bank's far edge, at the middle of the face.
+static func bank_far_z() -> float:
+	return bank_near_centre().z + (bank_basis() * Vector3(0.0, 0.0, -BANK_SIZE.z)).z
+
+
+## The pad, as the box it is: its top level with the other starts, its front edge at
+## the bank's near edge.
+static func bank_pad() -> AABB:
+	return standable(
+		Vector3(BANK_PAD_X, START_Y - BANK_PAD.y * 0.5, BANK_NEAR_Z + 0.5 + BANK_PAD.z * 0.5),
+		BANK_PAD
+	)
+
+
+## The finish pad: [constant BANK_FINISH_GAP] past the far edge, [constant
+## BANK_FINISH_DROP] under the middle of it, centred on the pad's line.
+static func bank_finish() -> AABB:
+	var far_z := bank_far_z()
+	var top := bank_surface_y(BANK_X, far_z) - BANK_FINISH_DROP
+	return standable(
+		Vector3(
+			BANK_PAD_X,
+			top - BANK_FINISH.y * 0.5,
+			far_z - BANK_FINISH_GAP - BANK_FINISH.z * 0.5
+		),
+		BANK_FINISH
+	)
+
+
 ## Every start pad's backstop — the main run's, the plunge's and the cascade's — as a
 ## box: a 4 m wall behind the back edge, 3 m above the pad, so a player who walks
 ## backwards does not fall off the map before starting.
@@ -338,11 +481,15 @@ static func backstops() -> Array[AABB]:
 			Vector3(CASCADE_X, CASCADE_TOP_Y + 1.0, cascade_pad.end.z + 0.5),
 			Vector3(CASCADE_PAD.x, 4.0, 1.0)
 		),
+		standable(
+			Vector3(BANK_PAD_X, START_Y + 1.0, bank_pad().end.z + 0.5),
+			Vector3(BANK_PAD.x, 4.0, 1.0)
+		),
 	]
 
 
-## What `PlaygroundMapSurvey` may find unreached here: the tops of the three backstops,
-## 3 m over their pads. A lip is there to be run into, not stood on.
+## What `PlaygroundMapSurvey` may find unreached here: the tops of the four backstops,
+## 3 m over their pads (a lip is there to be run into, not stood on), and the long bank's high edge and finish.
 func survey_declared() -> Array:
 	var out: Array = []
 	for lip in backstops():
@@ -351,6 +498,26 @@ func survey_declared() -> Array:
 				Vector3(lip.size.x, 1.0, lip.size.z)),
 			"why": "a start pad's backstop, 3 m over the pad: run into, never stood on",
 		})
+
+	# The long bank's high edge: the slab's 1 m end face, which the roll tips to 34
+	# degrees — standable, and reached only by climbing over the top of a face nobody
+	# stands on. The same shape as pg_lobby's steep-ramp crest.
+	var corners := bank_corners()
+	var edge := AABB(corners[1], Vector3.ZERO).expand(corners[3])
+	out.append({
+		"box": edge.grow(1.5),
+		"why": "the long bank's high edge, the slab's 34-degree end face over a face nobody stands on",
+	})
+
+	# Its finish pad, which a rider reaches with the speed the bank gave them. The survey
+	# slides a player down a face's fall line — here straight off the low lip — and
+	# models no carried speed, as with pg_bhop_intro's main run past block 8.
+	var finish := bank_finish()
+	out.append({
+		"box": AABB(Vector3(finish.position.x, finish.end.y - 0.5, finish.position.z),
+			Vector3(finish.size.x, 1.0, finish.size.z)),
+		"why": "the long bank's finish, reached with the bank's speed, which the survey does not carry",
+	})
 	return out
 
 
@@ -488,6 +655,7 @@ static func build_zones() -> DotTimerZoneSet:
 
 	_add_plunge_zones(zones)
 	_add_the_cascade(zones)
+	_add_the_bank(zones)
 
 	return zones
 
@@ -622,5 +790,71 @@ static func _add_the_cascade(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(low.x - 10.0, low.y - 8.0, low.z - 10.0),
 		Vector3(high.x + 10.0, low.y - 3.0, high.z + 10.0)
+	)
+	zones.add(reset)
+
+
+## Bonus 3's zones: a spawn and a start on the pad, a split across the whole bank at
+## each of [constant BANK_SPLITS], a finish over the finish pad, and a reset under all of
+## it.
+##
+## [b]The splits are slabs across the whole face and far above and below it.[/b] The
+## bank is the only way from the pad to the finish, and a rider anywhere on it — at its
+## low lip or its high edge, or in the air off it — crosses each one.
+static func _add_the_bank(zones: DotTimerZoneSet) -> void:
+	var track := BANK_TRACK
+	var pad := bank_pad()
+	var corners := bank_corners()
+
+	var low := corners[0]
+	var high := corners[0]
+	for corner in corners:
+		low = low.min(corner)
+		high = high.max(corner)
+
+	# On the pad, a stride back from its front edge, on the riding line and facing
+	# down the bank; yaw 0 is -Z. See `_add_plunge_zones` for why it is written.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(BANK_PAD_X, pad.end.y + 1.0, pad.position.z + 2.0)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	# The pad and the air above it: the run begins when the rider drops onto the bank.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	var along := bank_basis() * Vector3(0.0, 0.0, -BANK_SIZE.z)
+	for n in range(BANK_SPLITS.size()):
+		var z: float = bank_near_centre().z + along.z * float(BANK_SPLITS[n])
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n + 1)
+		stage.set_box(
+			Vector3(low.x - 4.0, bank_surface_y(low.x, z) - 6.0, z - 1.5),
+			Vector3(high.x + 4.0, bank_surface_y(high.x, z) + 6.0, z + 1.5)
+		)
+		zones.add(stage)
+
+	# The finish pad and the air over it, its whole length: a faster rider lands
+	# further out, and every landing on it is a finish.
+	var finish_pad := bank_finish()
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(finish_pad.position.x, finish_pad.end.y - 0.5, finish_pad.position.z),
+		Vector3(finish_pad.end.x, finish_pad.end.y + 6.0, finish_pad.end.z)
+	)
+	zones.add(finish)
+
+	# Under everything by three metres and eight thick, and thirty metres wide of the
+	# low lip, which is where a rider who holds too little goes: off it at up to
+	# 20 m/s sideways, and falling 25 m before arriving here at 0.27 m a tick.
+	var bottom := minf(low.y, finish_pad.position.y)
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(low.x - 30.0, bottom - 11.0, finish_pad.position.z - 10.0),
+		Vector3(high.x + 20.0, bottom - 3.0, pad.end.z + 10.0)
 	)
 	zones.add(reset)

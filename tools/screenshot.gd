@@ -219,6 +219,21 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(-60.0, 48.0, 16.0),
 				"at": Vector3(-60.0, 30.0, -30.0),
 			},
+			# Bonus 3, the long bank: one face at x = 110, banked 56 degrees and falling
+			# 17 m over 140 m of Z. From the low side, above and behind the pad, looking
+			# along and across its face, so the frame shows the thing it is: a face tilted toward the
+			# camera that runs away downhill, with the finish pad past its far end.
+			{
+				"name": "pg_surf_intro_bank",
+				"from": Vector3(66.0, 66.0, 28.0),
+				"at": Vector3(110.0, 22.0, -70.0),
+			},
+			# Over the backstop, down the bank: what a rider on the pad is about to drop on.
+			{
+				"name": "pg_surf_intro_bank_start",
+				"from": Vector3(104.0, 47.0, 16.0),
+				"at": Vector3(110.0, 26.0, -60.0),
+			},
 		]
 
 	if id != "pg_lobby":
