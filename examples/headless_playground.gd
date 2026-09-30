@@ -48,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 483
+const CHECKS := 502
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 27
+const SECTIONS := 28
 
 var _passed := 0
 var _failed := 0
@@ -116,6 +116,7 @@ func _run() -> void:
 	await _test_the_cascade()
 	await _test_the_long_bank()
 	await _test_the_stepping_stones()
+	await _test_the_launch()
 	await _test_the_ladder()
 	await _test_the_maps_are_surveyed()
 	await _test_the_client_boots()
@@ -2289,8 +2290,9 @@ func _test_the_sandbox_and_its_course() -> void:
 			DotTimerTrack.BONUS_FIRST + 1,
 			PgLobby.CIRCUIT_TRACK,
 			PgLobby.STONES_TRACK,
+			PgLobby.LAUNCH_TRACK,
 		],
-		"the game can see all five tracks without being told about them",
+		"the game can see all six tracks without being told about them",
 		str(tracks)
 	)
 
@@ -4157,6 +4159,186 @@ func _test_the_stepping_stones() -> void:
 	_check(
 		drive["finished"],
 		"and reaches the finish pad: the stepping stones run end to end",
+		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
+			% [int(drive["reached"]), route.size() - 1,
+				player.global_position.x, player.global_position.y,
+				player.global_position.z, int(drive["ticks"])]
+	)
+	_check(
+		int(drive["respawns"]) == 0,
+		"without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"])
+	)
+	_check(
+		not player.timer.run.is_active(),
+		"and the run is over rather than still running"
+	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+# --- The launch ---------------------------------------------------------------
+
+## `pg_lobby`'s bonus 5, driven start to finish.
+##
+## [b]The one route here nobody can get round on their own legs[/b]: every deck is past a
+## jump (3 m up, or 6 m out), and every one is inside the throw of the booster before it,
+## a dot-timer PUSH zone that `PlaygroundPlayer` applies. So the checks are the two
+## halves of that: the geometry says no gap is a jump and every gap is inside
+## `PgLobby.launch_reach`, a booster's measured throw matches `launch_apex`, and a bot
+## that never presses jump walks onto each booster and is carried deck to deck.
+## Set just under what the drive measured; see `_check_pace`.
+const LAUNCH_PACE_FLOOR := 0.85
+
+
+func _test_the_launch() -> void:
+	print("")
+	_section("the launch — pg_lobby's bonus 5, thrown deck to deck by its boosters")
+
+	var loaded: DotResult = await playground.change_map(&"pg_lobby")
+	_check(loaded.ok, "the sandbox loads",
+		loaded.error.message if not loaded.ok else "")
+
+	var track := PgLobby.LAUNCH_TRACK
+	var zones := PgLobby.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+		"push": zones.of_kind(DotTimerZone.Kind.PUSH, track).size(),
+	}
+
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2, "push": 3},
+		"bonus 5 has a start, a finish, a spawn, a respawn, two splits and three boosters, on its own track",
+		str(kinds)
+	)
+	_check(
+		zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"and dot-timer finds nothing missing from any route on the map",
+		", ".join(zones.route_problems())
+	)
+
+	# The shape: no step is a jump, and every step is inside the throw with a metre of
+	# deck to come down on.
+	var route := PgLobby.launch_route()
+	var shape := PackedStringArray()
+	var widest := 0.0
+	for i in range(1, route.size()):
+		var gap := PgLobby.gap_between(route[i - 1], route[i])
+		var rise := route[i].end.y - route[i - 1].end.y
+		var reach := PgLobby.launch_reach(rise)
+		widest = maxf(widest, (gap + 1.0) / reach)
+		print("    the launch: #%d is %.2f m of air %.2f m up; a jump reaches %s, the booster %.2f m" % [
+			i, gap, rise,
+			"nothing" if rise > PgLobby.climb_limit() else "%.2f m" % PgLobby.jump_reach(rise),
+			reach,
+		])
+		if rise <= PgLobby.climb_limit() and gap <= PgLobby.jump_reach(rise):
+			shape.append("#%d can be jumped" % i)
+		if gap + 1.0 > reach:
+			shape.append("#%d: %.2f m + 1 against a %.2f m throw" % [i, gap, reach])
+	_check(shape.is_empty(),
+		"no deck can be jumped to, and every one is inside the booster's throw (tightest %.0f%%)" % (widest * 100.0),
+		", ".join(shape))
+
+	var pushes := zones.of_kind(DotTimerZone.Kind.PUSH, track)
+	var standing := PackedStringArray()
+	for i in range(pushes.size()):
+		var push: DotTimerZone = pushes[i]
+		var boost := PgLobby.launch_boost(i)
+		if (
+			absf(push.from.y - (boost.end.y - 0.5)) > 0.01
+			or push.from.z != boost.position.z or push.to.z != boost.end.z
+			or push.direction != Vector3(0.0, PgLobby.LAUNCH_BOOST_ACCEL, 0.0)
+		):
+			standing.append("#%d" % i)
+	_check(standing.is_empty(), "each booster's push stands on it and throws straight up",
+		", ".join(standing))
+
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	_check(
+		reset.from.y <= 0.0 and reset.to.y < route[0].end.y - 0.5,
+		"and its reset is the air on the plate under it, below every deck",
+		"reset %.2f..%.2f, pad top %.2f" % [reset.from.y, reset.to.y, route[0].end.y]
+	)
+
+	var player := playground.add_player(&"bot", "Bot")
+
+	_check(player.timer.set_track(track), "the launch's track switches")
+
+	# A throw, measured: stood still in the middle of the first booster, hands off.
+	var boost0 := PgLobby.launch_boost(0)
+	player.teleport(boost0.get_center() + Vector3(0.0, boost0.size.y * 0.5 + 0.05, 0.0), 180.0)
+	var base := boost0.end.y
+	var apex := base
+	var rising := false
+	for tick in range(200):
+		await get_tree().physics_frame
+		var vy := player.controller.state.velocity.y
+		apex = maxf(apex, player.global_position.y)
+		if vy > 1.0:
+			rising = true
+		elif rising and vy < 0.0:
+			break
+	var thrown := apex - base
+	print("    the launch: a booster throws a player standing on it %.2f m up; launch_apex says %.2f" % [
+		thrown, PgLobby.launch_apex()])
+	_check(
+		absf(thrown - PgLobby.launch_apex()) < PgLobby.launch_apex() * 0.15,
+		"a booster throws a player standing on it as high as launch_apex says",
+		"%.2f m against %.2f" % [thrown, PgLobby.launch_apex()]
+	)
+
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	_check(
+		player.aim_direction().dot(Vector3(0.0, 0.0, 1.0)) > 0.9,
+		"facing up the line",
+		"dot %.2f; yaw %.1f" % [player.aim_direction().dot(Vector3(0.0, 0.0, 1.0)),
+			player.controller.state.yaw]
+	)
+
+	# Every box is walked: the bot never presses jump, and walks off each deck's end
+	# through its booster.
+	var walks: Array[int] = [0, 1, 2]
+	var length := _route_length(player.global_position, route)
+	var drive: Dictionary = await _drive_route(player, route, 3000, 0.3, walks)
+
+	print("    the launch: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
+	var pace := _print_pace(
+		"the launch", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_check_pace("the launch", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, LAUNCH_PACE_FLOOR)
+	_print_where("the launch", "decks", drive["tally"], route[route.size() - 1].end.y - route[0].end.y)
+	_check_where("the launch", "decks", drive["tally"])
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 5")
+	_check(
+		drive["splits"] == [1, 2],
+		"it is thrown through both splits, in order",
+		str(drive["splits"])
+	)
+	_check(
+		drive["finished"],
+		"and onto the finish deck without once pressing jump: the launch runs end to end",
 		"got to box %d of %d at (%.1f, %.1f, %.1f) in %d ticks"
 			% [int(drive["reached"]), route.size() - 1,
 				player.global_position.x, player.global_position.y,

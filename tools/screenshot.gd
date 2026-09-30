@@ -289,6 +289,13 @@ func _shots_for(id: String) -> Array[Dictionary]:
 		# columns stand behind each other and read as one.
 		{"name": "pg_lobby_stones", "from": Vector3(34, 16, -34), "at": Vector3(34, 3.0, -56)},
 		{"name": "pg_lobby_stones_start", "from": Vector3(5, 9.0, -49), "at": Vector3(30, 4.0, -57)},
+
+		# Bonus 5, the launch: three decks and a finish at x = -50 from z 2 to 44.5, tops 2,
+		# 5, 8 and 8 m, each deck's far end an amber booster. From the empty east side, level
+		# with the middle deck, so the steps up read as more than a jump; and from behind the
+		# pad, where the boosters read as the way on.
+		{"name": "pg_lobby_launch", "from": Vector3(-24, 11.0, 23), "at": Vector3(-50, 5.0, 23)},
+		{"name": "pg_lobby_launch_start", "from": Vector3(-40, 13.0, -8), "at": Vector3(-50, 4.0, 22)},
 	]
 
 

@@ -327,6 +327,51 @@ const STONES_FINISH := Vector3(4.0, 1.0, 4.0)
 ## lands on the plate, inside it, and goes back to the pad.
 const STONES_FLOOR_Y := 1.5
 
+# --- Bonus 5: the launch -----------------------------------------------------
+#
+# [b]The first route here a player cannot get round on their own legs.[/b] Every other
+# course asks something of the movement: how far, where to, whether you can stop. This
+# one asks whether a player can ride something the MAP does to them. Three decks, each
+# a column whose last [constant LAUNCH_BOOST_LENGTH] m is an amber booster with a
+# dot-timer PUSH zone standing on it; the first two decks are [constant LAUNCH_RISES]
+# (3 m, 2.6 times a jump's apex) above the one before and the last is level but
+# [constant LAUNCH_GAPS] (6 m) out, past a running jump's 4.75. No gap on it can be
+# jumped (`launch_route` and the suite's check) and every one is inside
+# [method launch_reach]. It is the only PUSH zone in the game, and
+# `PlaygroundPlayer._on_simulated` is the only thing that applies one.
+
+## The track bonus 5 runs on.
+const LAUNCH_TRACK := DotTimerTrack.BONUS_FIRST + 4
+
+## The line the decks stand on (running +Z), the start pad's near edge, and its top.
+## West of the middle, clear of the tower's reset (z 48 on) and of the vehicle corner.
+const LAUNCH_X := -50.0
+const LAUNCH_START_Z := 2.0
+const LAUNCH_BASE_Y := 2.0
+
+## Every deck, the start pad included: width across the line, length along it.
+const LAUNCH_DECK := Vector2(6.0, 8.0)
+
+## The booster at the far end of each deck, and the PUSH zone standing on it: how far
+## up from the deck it reaches, and its acceleration. An acceleration rather than a
+## velocity (`DotTimerRules.apply_push`), so a player entering it at walking height
+## leaves its top at `sqrt(2 (a - g) h)` = 12.6 m/s and peaks `a h / g` = 5 m above the
+## deck, whichever way they came in.
+const LAUNCH_BOOST_LENGTH := 3.0
+const LAUNCH_BOOST_HEIGHT := 1.0
+const LAUNCH_BOOST_ACCEL := 100.0
+
+## For each launch: how much higher the next deck (or the finish) is, and the clear air
+## before it.
+const LAUNCH_RISES: Array[float] = [3.0, 3.0, 0.0]
+const LAUNCH_GAPS: Array[float] = [3.0, 3.5, 6.0]
+
+## The finish deck: width, length.
+const LAUNCH_FINISH := Vector2(6.0, 6.0)
+
+## The reset: the air just above the plate under the decks.
+const LAUNCH_FLOOR_Y := 1.2
+
 
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
@@ -360,6 +405,7 @@ func _build() -> void:
 	_build_tower()
 	_build_circuit()
 	_build_stones()
+	_build_launch()
 
 
 ## The movement corner's steep ramp: past `max_slope_angle`, so it is only ever surfed.
@@ -398,6 +444,17 @@ func survey_declared() -> Array:
 			Vector3(bounds.size.x, 1.0, bounds.size.z)),
 		"why": "the crest of the movement corner's steep ramp, 16 m up a face nobody can climb",
 	})
+
+	# Bonus 5's decks after the pad: every one is reached by a launch, which the survey
+	# does not model (it walks, drops, slides and jumps).
+	var launch := launch_route()
+	for i in range(1, launch.size()):
+		var deck: AABB = launch[i]
+		out.append({
+			"box": AABB(Vector3(deck.position.x, deck.end.y - 0.5, deck.position.z),
+				Vector3(deck.size.x, 1.0, deck.size.z)),
+			"why": "bonus 5's deck %d, reached only by the booster before it" % i,
+		})
 
 	return out
 
@@ -845,6 +902,7 @@ static func build_zones() -> DotTimerZoneSet:
 	_add_tower_zones(zones)
 	_add_circuit_zones(zones)
 	_add_stones_zones(zones)
+	_add_launch_zones(zones)
 
 	return zones
 
@@ -1276,5 +1334,153 @@ static func _add_stones_zones(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(STONES_START_X - STONES_PAD.x, 0.0, STONES_Z - 8.0),
 		Vector3(finish.x + STONES_FINISH.x * 2.0, STONES_FLOOR_Y, STONES_Z + 8.0)
+	)
+	zones.add(reset)
+
+
+# --- Bonus 5: the launch -----------------------------------------------------
+
+## Builds the decks: each a column from the plate to its top, split into a plain part
+## and the amber booster at its far end, so a player can see where the throw is.
+func _build_launch() -> void:
+	var route := launch_route()
+
+	for i in range(route.size()):
+		var deck: AABB = route[i]
+		var last := i == route.size() - 1
+		var colour := PlaygroundGeometry.COLOUR_PLATFORM
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif last:
+			colour = PlaygroundGeometry.COLOUR_END
+
+		var plain := deck
+		if not last:
+			plain.size.z -= LAUNCH_BOOST_LENGTH
+			var boost := launch_boost(i)
+			PlaygroundGeometry.box(
+				self, boost.get_center(), boost.size, PlaygroundGeometry.COLOUR_BOOST
+			)
+
+		PlaygroundGeometry.box(self, plain.get_center(), plain.size, colour)
+
+
+## Deck [param index] as the whole column, plate to top: 0 is the start pad, the last
+## is the finish. Walked edge to edge along the line from [constant LAUNCH_START_Z], so
+## a gap is the number in [constant LAUNCH_GAPS] rather than a centre distance.
+static func launch_deck(index: int) -> AABB:
+	var near := LAUNCH_START_Z
+	var top := LAUNCH_BASE_Y
+
+	for i in range(index):
+		near += LAUNCH_DECK.y + LAUNCH_GAPS[i]
+		top += LAUNCH_RISES[i]
+
+	var size := LAUNCH_FINISH if index == LAUNCH_GAPS.size() else LAUNCH_DECK
+
+	return AABB(
+		Vector3(LAUNCH_X - size.x * 0.5, 0.0, near), Vector3(size.x, top, size.y)
+	)
+
+
+## The booster at the far end of deck [param index], as a column like the deck.
+static func launch_boost(index: int) -> AABB:
+	var deck := launch_deck(index)
+	return AABB(
+		Vector3(deck.position.x, 0.0, deck.end.z - LAUNCH_BOOST_LENGTH),
+		Vector3(deck.size.x, deck.size.y, LAUNCH_BOOST_LENGTH)
+	)
+
+
+## Bonus 5 as the boxes a player lands on: the pad, two decks, the finish.
+static func launch_route() -> Array[AABB]:
+	var route: Array[AABB] = []
+
+	for i in range(LAUNCH_GAPS.size() + 1):
+		route.append(launch_deck(i))
+
+	return route
+
+
+## The clear air a player running at [constant MOVE_SPEED] into a booster from its near
+## edge crosses before coming down [param rise] above the deck they left.
+##
+## Closed form over the same constants the zone is built from: pushed through
+## [constant LAUNCH_BOOST_HEIGHT] at `a - g`, then a ballistic arc from its top. The
+## suite asserts every gap is past a jump and inside this, and measures the arc.
+static func launch_reach(rise: float) -> float:
+	var net := LAUNCH_BOOST_ACCEL - MOVE_GRAVITY
+	var exit_speed := sqrt(2.0 * net * LAUNCH_BOOST_HEIGHT)
+	var fall := launch_apex() - rise
+	var airborne := exit_speed / net + exit_speed / MOVE_GRAVITY + sqrt(2.0 * fall / MOVE_GRAVITY)
+
+	return MOVE_SPEED * airborne - LAUNCH_BOOST_LENGTH
+
+
+## How far above the deck a booster throws a player who walked onto it: `a h / g`.
+static func launch_apex() -> float:
+	return LAUNCH_BOOST_ACCEL * LAUNCH_BOOST_HEIGHT / MOVE_GRAVITY
+
+
+## Bonus 5's zones, from the same `launch_deck` the columns are built from.
+static func _add_launch_zones(zones: DotTimerZoneSet) -> void:
+	var track := LAUNCH_TRACK
+	var route := launch_route()
+	var pad := route[0]
+	var finish := route[route.size() - 1]
+
+	# A stride onto the pad from its near edge, facing up the line (+Z: yaw 180, by
+	# `_add_tower_zones`' `atan2(-dx, -dz)`).
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(LAUNCH_X, pad.end.y + 1.0, pad.position.z + 1.5)
+	spawn.destination_yaw = rad_to_deg(atan2(-0.0, -1.0))
+	zones.add(spawn)
+
+	# The pad short of its booster, so the clock starts on the walk onto the booster
+	# and a start zone never shares a volume with a push.
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z - LAUNCH_BOOST_LENGTH)
+	)
+	zones.add(start)
+
+	# One PUSH per booster, straight up, standing on it.
+	for i in range(route.size() - 1):
+		var boost := launch_boost(i)
+		var push := DotTimerZone.make(DotTimerZone.Kind.PUSH, track)
+		push.direction = Vector3(0.0, LAUNCH_BOOST_ACCEL, 0.0)
+		push.set_box(
+			Vector3(boost.position.x, boost.end.y - 0.5, boost.position.z),
+			Vector3(boost.end.x, boost.end.y + LAUNCH_BOOST_HEIGHT, boost.end.z)
+		)
+		zones.add(push)
+
+	# A split on each deck between the pad and the finish: a slab the deck's length,
+	# across the whole line and from the reset to far above the arc. A deck is only
+	# reached by the launch before it, and the next one only from this one.
+	for i in range(1, route.size() - 1):
+		var deck := route[i]
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(i)
+		stage.set_box(
+			Vector3(LAUNCH_X - 8.0, LAUNCH_FLOOR_Y, deck.position.z),
+			Vector3(LAUNCH_X + 8.0, deck.end.y + 10.0, deck.end.z)
+		)
+		zones.add(stage)
+
+	# Deep, for `thin_zones`' reason, like every finish here.
+	var end := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	end.set_box(
+		Vector3(finish.position.x, finish.end.y - 1.0, finish.position.z),
+		Vector3(finish.end.x, finish.end.y + 5.0, finish.end.z)
+	)
+	zones.add(end)
+
+	# The plate under the whole line, on bonus 5's track only.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(LAUNCH_X - 10.0, 0.0, pad.position.z - 4.0),
+		Vector3(LAUNCH_X + 10.0, LAUNCH_FLOOR_Y, finish.end.z + 4.0)
 	)
 	zones.add(reset)

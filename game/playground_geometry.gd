@@ -21,6 +21,8 @@ const COLOUR_RAMP := Color(0.26, 0.42, 0.55)
 const COLOUR_START := Color(0.22, 0.55, 0.28)
 const COLOUR_END := Color(0.60, 0.24, 0.24)
 const COLOUR_PLATFORM := Color(0.42, 0.40, 0.34)
+## A booster: something on the map that throws the player.
+const COLOUR_BOOST := Color(0.85, 0.60, 0.15)
 
 
 ## A static box with collision and a visible mesh.

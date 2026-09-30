@@ -605,6 +605,16 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 	if speed_zone != null:
 		state.velocity = DotTimerRules.apply_speed_limit(state.velocity, speed_zone)
 
+	# A PUSH zone (pg_lobby's boosters, bonus 5) is an acceleration, applied every tick
+	# the player is in it, on the tick, for the prespeed clamp's reason. Upward on the
+	# ground is a launch: the motor puts a player moving out of the floor in AIR.
+	var push_zone := timer.effect(DotTimerZone.Kind.PUSH)
+
+	if push_zone != null:
+		state.velocity = DotTimerRules.apply_push(
+			state.velocity, push_zone, 1.0 / float(maxi(1, controller.tick_rate))
+		)
+
 
 ## Gets in or out of a vehicle. Called by the ride's `on_seated` / `on_unseated`.
 ##
