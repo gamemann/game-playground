@@ -383,6 +383,12 @@ func remove_player(session_id: int) -> void:
 			net.interest.forget_peer(peer_id)
 
 	_broadcast(PlaygroundEvents.Kind.LEAVE, PlaygroundEvents.write_player(session_id))
+	# They are off the ready set by now, so the broadcast skipped them. A player removed
+	# while still connected — a kick that has not closed the socket yet, the loopback —
+	# is told they are gone as they always were; one whose socket is already closed is
+	# not sent to at all, which `rpc_id` would log as an unknown peer.
+	if was_ready and link != null and link.can_reach(peer_id):
+		_tell(peer_id, PlaygroundEvents.Kind.LEAVE, PlaygroundEvents.write_player(session_id))
 	roster_changed.emit(session_id)
 
 
@@ -1626,10 +1632,20 @@ func _apply_timer(reader: DotNetReader) -> void:
 
 # --- Sending ---------------------------------------------------------------
 
+## To every READY peer, one at a time, and never to peer 0.
+##
+## [b]Not `net.send(msg, 0)`, which is an `rpc()` to every socket.[/b] A peer is connected
+## — and dot-server fires `client_spawn` for it — as soon as [DotClientLink] has added the
+## game scene, but this game's client builds its `Server/Playground` node only once its
+## first map is up. The JOIN that `client_spawn` produces went out in that gap, and every
+## real join logged "Failed to get path from RPC: Server/Playground" and "Requested node
+## was not found" once. The joining peer loses nothing: [method _admit] tells it every
+## player, itself included, when it says READY. `pg-rpc-before-scene`.
 func _broadcast(kind: int, body: PackedByteArray) -> void:
 	if net == null or not net.is_server or body.is_empty():
 		return
-	net.send(PlaygroundEvent.new(kind, body), 0)
+	for peer_id in _ready_peers.keys():
+		net.send(PlaygroundEvent.new(kind, body), int(peer_id))
 
 
 ## To one peer, and never to peer 0.

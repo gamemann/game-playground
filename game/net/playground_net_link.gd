@@ -103,6 +103,16 @@ func _live() -> bool:
 	return live
 
 
+## Whether [param peer_id] is somebody a send could still reach: always over the loopback,
+## and over a socket only while that peer is connected.
+func can_reach(peer_id: int) -> bool:
+	if loopback.is_valid():
+		return true
+	if not is_inside_tree() or multiplayer == null or not multiplayer.has_multiplayer_peer():
+		return false
+	return multiplayer.get_peers().has(peer_id)
+
+
 ## Whether sends were being dropped at the last [method _live]. See there.
 var _dropping := false
 

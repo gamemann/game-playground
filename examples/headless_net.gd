@@ -53,13 +53,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 272
+const CHECKS := 276
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 28
+const SECTIONS := 29
 
 var _passed := 0
 var _failed := 0
@@ -146,6 +146,7 @@ func _run() -> void:
 		await _test_inventory_lost()
 		await _test_inventory_from_the_server()
 		await _test_inventory_is_private()
+		await _test_nothing_before_ready()
 		await _test_inventory_flood()
 		await _test_inventory_rejoin()
 		await _test_leave()
@@ -2989,6 +2990,72 @@ func _test_inventory_is_private() -> void:
 		not inv.has_bag(net_half.bag_key(other)) and not inv.has_bag(net_half.bag_key(bot)),
 		"and a bag that belonged to a session goes with it"
 	)
+	_done()
+
+
+## Every EVENT kind the server sent to [param peer_id] while recording.
+func _event_kinds(peer_id: int) -> Array[int]:
+	var out: Array[int] = []
+	for sent in _server_events:
+		if int(sent["peer"]) != peer_id:
+			continue
+		var decoded := _client_net.messages.decode(DotNetReader.new(sent["payload"]), 1, false)
+		if decoded.ok and decoded.value is PlaygroundEvent:
+			out.append((decoded.value as PlaygroundEvent).kind)
+	return out
+
+
+## A peer dot-server has spawned but that has not said READY hears NOTHING on this link.
+##
+## [b]A real join, in the order a real one happens.[/b] [DotClientLink] reports LOADED the
+## moment it has added the game scene, which fires `client_spawn` and adds the player; the
+## client builds `Server/Playground` only once its first map is up, and says READY after
+## that. The JOIN the add produced went out as `rpc()` to every socket, and on every real
+## join the new one logged "Failed to get path from RPC: Server/Playground". The loopback
+## hands a broadcast over as peer 0, so "nothing to peer 0" is what that looks like here.
+## `pg-rpc-before-scene`.
+func _test_nothing_before_ready() -> void:
+	_section("a spawned peer that has not said READY is sent nothing on the link")
+
+	var late_peer := CLIENT_PEER + 5
+	var late := SESSION + 5
+
+	_server_events.clear()
+	_recording = true
+	var added := _server_bridge.add_player(late_peer, late, "Di")
+	await _steps(2)
+
+	_check(
+		added.ok and _event_kinds(0).is_empty() and _event_kinds(late_peer).is_empty(),
+		"the join is broadcast to nobody, and the joining peer is told nothing yet",
+		"to 0: %s, to them: %s" % [_event_kinds(0), _event_kinds(late_peer)]
+	)
+	_check(
+		_event_kinds(CLIENT_PEER).has(PlaygroundEvents.Kind.JOIN),
+		"while a peer that is already in is told about them",
+		str(_event_kinds(CLIENT_PEER))
+	)
+
+	_server_events.clear()
+	_server_bridge.link.deliver(&"request", late_peer, _request_bytes(PlaygroundEvents.Ask.READY))
+	await _steps(2)
+	var theirs := _event_kinds(late_peer)
+	_check(
+		theirs.has(PlaygroundEvents.Kind.HELLO) and theirs.has(PlaygroundEvents.Kind.JOIN),
+		"and READY is what tells them, their own JOIN included",
+		str(theirs)
+	)
+
+	_server_events.clear()
+	_server_bridge.remove_player(late)
+	await _steps(2)
+	_check(
+		_event_kinds(0).is_empty() and _event_kinds(CLIENT_PEER).has(PlaygroundEvents.Kind.LEAVE),
+		"their leaving is told peer by peer too",
+		"to 0: %s, to us: %s" % [_event_kinds(0), _event_kinds(CLIENT_PEER)]
+	)
+	_recording = false
+	_server_events.clear()
 	_done()
 
 
