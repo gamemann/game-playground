@@ -626,6 +626,16 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 			state.velocity, push_zone, 1.0 / float(maxi(1, controller.tick_rate))
 		)
 
+	# A GRAVITY zone (pg_bhop_intro's float, bonus 5) scales gravity in the air by its
+	# number: the motor took a whole tick of it off the vertical speed, and this gives the
+	# unwanted part back. Air only, because on the ground gravity is what holds a player to
+	# the floor and nothing is falling. Where the player is, for the push's reason.
+	var gravity_zone := effect_zone_at(state.position, DotTimerZone.Kind.GRAVITY)
+
+	if gravity_zone != null and not state.is_grounded() and controller.tunables != null:
+		state.velocity.y += controller.tunables.gravity * (1.0 - gravity_zone.number) \
+			/ float(maxi(1, controller.tick_rate))
+
 
 ## The EFFECT zone of [param kind] at [param point], or null. Read off the timer's zone index
 ## rather than its effects, so it depends on nothing but the point; overlapping zones of one

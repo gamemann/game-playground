@@ -166,6 +166,22 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(-78.5, 4.5, 16.0),
 				"at": Vector3(-76.0, 7.0, -20.0),
 			},
+			# Bonus 5, the float: seven jumps too far for the ground, along z at x = 120.
+			# From the east, where nothing stands behind it (the ascent's profile camera
+			# is at x = 100, on the other side), so the frame is the gaps: columns far
+			# further apart than anywhere else on the map, every other one 2 m up.
+			{
+				"name": "pg_bhop_intro_float",
+				"from": Vector3(176.0, 12.0, -30.0),
+				"at": Vector3(120.0, 5.0, -30.0),
+			},
+			# And from behind the pad at a player's height: the first gap, which reads
+			# as one nobody can jump, because outside the zone nobody can.
+			{
+				"name": "pg_bhop_intro_float_start",
+				"from": Vector3(122.5, 4.5, 16.0),
+				"at": Vector3(120.0, 4.0, -20.0),
+			},
 		]
 
 	if id == "pg_surf_intro":

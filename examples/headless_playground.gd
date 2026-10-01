@@ -48,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 502
+const CHECKS := 521
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 28
+const SECTIONS := 29
 
 var _passed := 0
 var _failed := 0
@@ -92,6 +92,15 @@ func _run() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+	if OS.has_environment("PG_ONLY"): # TEMPSCRATCH
+		await _test_the_float() # TEMPSCRATCH
+		await _test_the_maps_are_surveyed() # TEMPSCRATCH
+		print("%d passed, %d failed" % [_passed, _failed]) # TEMPSCRATCH
+		for line in _failures: # TEMPSCRATCH
+			print("  FAIL  %s" % line) # TEMPSCRATCH
+		get_tree().quit(1 if _failed > 0 else 0) # TEMPSCRATCH
+		return # TEMPSCRATCH
+
 	await _test_boots()
 	await _test_tick_rate_comes_from_the_engine()
 	await _test_zone_file_matches_the_map()
@@ -118,6 +127,7 @@ func _run() -> void:
 	await _test_the_stepping_stones()
 	await _test_the_launch()
 	await _test_the_ladder()
+	await _test_the_float()
 	await _test_the_maps_are_surveyed()
 	await _test_the_client_boots()
 
@@ -2576,10 +2586,10 @@ func _test_the_narrows() -> void:
 			[
 				DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST,
 				PgBhopIntro.SWITCHBACK_TRACK, PgBhopIntro.ASCENT_TRACK,
-				PgBhopIntro.LADDER_TRACK,
+				PgBhopIntro.LADDER_TRACK, PgBhopIntro.FLOAT_TRACK,
 			]
 		),
-		"and all five of its routes can be run, the switchback, the ascent and the ladder included",
+		"and all six of its routes can be run, the switchback, the ascent, the ladder and the float included",
 		str(zones.playable_tracks())
 	)
 
@@ -3390,9 +3400,9 @@ func _test_the_switchback() -> void:
 	_check(
 		playground.tracks_on_this_map() == [
 			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track,
-			PgBhopIntro.ASCENT_TRACK, PgBhopIntro.LADDER_TRACK,
+			PgBhopIntro.ASCENT_TRACK, PgBhopIntro.LADDER_TRACK, PgBhopIntro.FLOAT_TRACK,
 		],
-		"and the game sees five tracks on the map without being told",
+		"and the game sees six tracks on the map without being told",
 		str(playground.tracks_on_this_map())
 	)
 
@@ -4503,6 +4513,176 @@ func _test_the_ladder() -> void:
 		not player.timer.run.is_active(),
 		"and the run is over rather than still running"
 	)
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+# --- The float ----------------------------------------------------------------
+
+## A float drive's pace floor, as a fraction of `MOVE_SPEED`. Measured 6.05 m/s (86%), so the
+## floor sits just under it.
+const FLOAT_PACE_FLOOR := 0.8
+
+
+## `pg_bhop_intro`'s bonus 5, driven start to finish.
+##
+## [b]The route nobody can run on their own legs.[/b] Seven jumps, every one either wider
+## than a running jump on the ground or a step higher than a jump's apex, inside one
+## GRAVITY zone at `FLOAT_GRAVITY` that the game applies in the air. So the checks come in
+## pairs: every jump is OUT of the ground's reach (the zone is what the route is made of),
+## and every jump is INSIDE the float's reach with room to spare; and a bot standing on
+## the pad and jumping once peaks where `float_apex` says, measured. Then the drive, which
+## never touches anything but forward and jump, and its pace.
+func _test_the_float() -> void:
+	print("")
+	_section("the float — pg_bhop_intro's bonus 5, seven jumps nobody can make outside its gravity")
+
+	var loaded: DotResult = await playground.change_map(&"pg_bhop_intro")
+	_check(loaded.ok, "the bhop map loads", loaded.error.message if not loaded.ok else "")
+
+	var track := PgBhopIntro.FLOAT_TRACK
+	var zones := PgBhopIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+		"gravity": zones.of_kind(DotTimerZone.Kind.GRAVITY, track).size(),
+	}
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2, "gravity": 1}
+			and zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"bonus 5 has a start, a finish, a spawn, a respawn, two splits and a gravity zone, on its own track",
+		"%s %s" % [str(kinds), ", ".join(zones.route_problems())]
+	)
+
+	var route := PgBhopIntro.float_route()
+	var gravity := zones.first_of_kind(DotTimerZone.Kind.GRAVITY, track)
+	_check(
+		gravity != null and is_equal_approx(gravity.number, PgBhopIntro.FLOAT_GRAVITY),
+		"its gravity zone carries the route's multiplier (%.1f)" % PgBhopIntro.FLOAT_GRAVITY
+	)
+
+	# Every jump, both ways: out of the ground's reach, inside the float's.
+	var outside := PackedStringArray()
+	var inside := PackedStringArray()
+	var worst := 0.0
+	var worst_at := -1
+	var tallest := 0.0
+	for i in range(1, route.size()):
+		var gap := PgLobby.gap_between(route[i - 1], route[i])
+		var rise := route[i].end.y - route[i - 1].end.y
+		tallest = maxf(tallest, rise)
+		var ground := PgLobby.jump_reach(rise) if rise <= PgLobby.climb_limit() else 0.0
+		var floated := PgBhopIntro.float_reach(rise)
+		print("    the float: #%d is %.2f m of air %.2f m up; on the ground a jump reaches %s, in the float %.2f m (%.0f%%)" % [
+			i, gap, rise, ("%.2f m" % ground) if ground > 0.0 else "nothing", floated,
+			gap / floated * 100.0 if floated > 0.0 else INF])
+		if ground > 0.0 and gap <= ground:
+			outside.append("#%d (%.2f m, a jump reaches %.2f)" % [i, gap, ground])
+		if floated <= 0.0 or gap > floated * 0.9:
+			inside.append("#%d (%.2f m of %.2f)" % [i, gap, floated])
+		if floated > 0.0 and gap / floated > worst:
+			worst = gap / floated
+			worst_at = i
+	_check(outside.is_empty(),
+		"no jump on the float can be made on the ground: each is too far or too high",
+		", ".join(outside))
+	_check(inside.is_empty(),
+		"and every one is inside 90%% of the float's reach (tightest #%d, %.0f%%)" % [worst_at, worst * 100.0],
+		", ".join(inside))
+	_check(
+		tallest <= PgBhopIntro.float_apex() * DotFpsTunables.CLIMB_MARGIN,
+		"and no step is a wall even in the float",
+		"tallest %.2f m against %.2f" % [tallest, PgBhopIntro.float_apex() * DotFpsTunables.CLIMB_MARGIN]
+	)
+
+	var zone_box := AABB(gravity.from, gravity.to - gravity.from)
+	var covered := true
+	for box in route:
+		var air := AABB(
+			Vector3(box.position.x, box.end.y, box.position.z),
+			Vector3(box.size.x, PgBhopIntro.float_apex(), box.size.z)
+		)
+		if not zone_box.encloses(air):
+			covered = false
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	_check(
+		covered and reset.to.y <= gravity.from.y,
+		"the gravity zone covers every column and a full float jump over it, and the reset is under it",
+		"zone %s..%s, reset top %.2f" % [str(gravity.from), str(gravity.to), reset.to.y]
+	)
+
+	var player := playground.add_player(&"bot", "Bot")
+	_check(player.timer.set_track(track), "the float's track switches")
+
+	# One jump, measured: stood still in the middle of the pad, jump pressed once.
+	var pad: AABB = route[0]
+	player.teleport(pad.get_center() + Vector3(0.0, pad.size.y * 0.5 + 0.05, 0.0), 0.0)
+	for _i in range(32):
+		player.controller.apply_command(DotFpsCommand.new())
+		await get_tree().physics_frame
+	var apex := player.controller.state.position.y
+	var base := apex
+	var airborne := 0
+	var settled := player.controller.state.is_grounded()
+	for tick in range(600):
+		var command := DotFpsCommand.new()
+		# Held until it leaves the ground: one press is on the tick the controller reads it.
+		command.set_button(DotFpsCommand.BUTTON_JUMP, airborne == 0)
+		player.controller.apply_command(command)
+		await get_tree().physics_frame
+		apex = maxf(apex, player.controller.state.position.y)
+		if not player.controller.state.is_grounded():
+			airborne += 1
+		elif airborne > 2:
+			break
+	var seconds := float(airborne) / float(Engine.physics_ticks_per_second)
+	print("    the float: a jump from the pad peaks %.2f m up (float_apex %.2f, the ground's %.2f) and lands %.2f s later" % [
+		apex - base, PgBhopIntro.float_apex(), PgLobby.JUMP_HEIGHT, seconds])
+	_check(
+		settled and absf((apex - base) - PgBhopIntro.float_apex()) < PgBhopIntro.float_apex() * 0.1,
+		"a jump in the float peaks where float_apex says",
+		"%.2f m against %.2f" % [apex - base, PgBhopIntro.float_apex()]
+	)
+
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and the spawn puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	var length := _route_length(player.global_position, route)
+	var drive: Dictionary = await _drive_route(player, route, 4000, 0.1)
+	print("    the float: box %d of %d, splits %s, finish %s, %d ticks, %d respawns" % [
+		int(drive["reached"]), route.size() - 1, str(drive["splits"]),
+		str(drive["finished"]), int(drive["ticks"]), int(drive["respawns"]),
+	])
+	var pace := _print_pace(
+		"the float", float(drive["distance"]), length, int(drive["ticks"]),
+		PgLobby.MOVE_SPEED, float(drive["top_speed"])
+	)
+	_print_where("the float", "columns", drive["tally"], route[route.size() - 1].end.y - route[0].end.y)
+
+	_check(drive["started"], "leaving the pad starts a run on bonus 5")
+	_check(drive["splits"] == [1, 2], "it floats through both splits, in order", str(drive["splits"]))
+	_check(
+		drive["finished"],
+		"and reaches the finish: the float run end to end",
+		"got to box %d of %d at %s in %d ticks" % [
+			int(drive["reached"]), route.size() - 1, str(player.global_position), int(drive["ticks"])]
+	)
+	_check(int(drive["respawns"]) == 0, "without once being put back on the pad",
+		"%d respawns" % int(drive["respawns"]))
+	_check_pace("the float", float(drive["distance"]), length, pace, PgLobby.MOVE_SPEED, FLOAT_PACE_FLOOR)
+	_check_where("the float", "columns", drive["tally"])
+	_check(not player.timer.run.is_active(), "and the run is over rather than still running")
 
 	playground.remove_player(&"bot")
 	_done()

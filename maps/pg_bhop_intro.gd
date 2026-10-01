@@ -54,7 +54,16 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ## before the lip meets the next column's face on the way down. Every other route asks
 ## how far or where to; this one asks for the lip, every time.
 ##
-## All five tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
+## [b]A sixth route, and the map does something to the player rather than in front of
+## them.[/b] "The float", on bonus 5, is seven jumps none of which a player can make on
+## their own legs — every gap is wider than a running jump (6 m and up, against 4.75) and
+## every other step is 2 m up (against a 1.15 m apex) — inside one dot-timer GRAVITY zone
+## at [constant FLOAT_GRAVITY]. It is the first GRAVITY zone the game applies
+## (`PlaygroundPlayer._on_simulated`, beside the boosters' PUSH): gravity is the one
+## number every other route here is sized against, and this one asks a player to re-learn
+## a jump that takes two and a half times as long to come down.
+##
+## All six tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
 ## one start and one finish exercises none of dot-timer's per-stage machinery.
 
 const START_Z := 0.0
@@ -254,6 +263,56 @@ const LADDER_FINISH := Vector2(5.0, 5.0)
 ## Which rungs carry the two splits: one every four metres of height.
 const LADDER_SPLIT_RUNGS := [4, 8]
 
+# --- Bonus 5: "the float" -------------------------------------------------------
+#
+# Every number below is read by `_build_the_float`, `float_route` and `_add_the_float`,
+# and nothing else describes where a column is. Walked edge to edge from the pad, for the
+# reason `switchback_route` gives.
+
+## The track it runs on.
+const FLOAT_TRACK := DotTimerTrack.BONUS_FIRST + 4
+
+## The start pad's centre in X and Z, and the height of its top surface.
+##
+## East of the ascent, whose reset reaches x = 70 and whose profile is shot from x = 100,
+## by enough that this route and its own reset (ten metres either side) are behind that
+## camera; level with the other five starts in Z.
+const FLOAT_X := 120.0
+const FLOAT_Z := 10.0
+const FLOAT_Y := 2.0
+
+const FLOAT_PAD := Vector3(6.0, 1.0, 6.0)
+
+## The gravity inside the route, as the multiplier a dot-timer GRAVITY zone carries.
+##
+## At 0.4 a jump's launch is unchanged and everything after it is slower: the apex is
+## 1.15 / 0.4 = 2.88 m and a running jump crosses 11.9 m level and 9.2 m onto a 2 m step
+## ([method float_reach]), two and a half times the ground's.
+const FLOAT_GRAVITY := 0.4
+
+## A column's footprint, square.
+const FLOAT_BLOCK := Vector2(4.0, 4.0)
+
+## How much each jump climbs, in order, the last onto the finish. Every other one is
+## [constant FLOAT_STEP]: nearly twice the ground's apex, so a step nobody climbs without
+## the float, and 77% of the float's own climb limit.
+const FLOAT_STEP := 2.0
+const FLOAT_RISES: Array[float] = [0.0, FLOAT_STEP, 0.0, FLOAT_STEP, 0.0, FLOAT_STEP, 0.0]
+
+## The clear air of the first jump and the last, in metres. Grows evenly.
+##
+## The FIRST is the floor of the idea: 6.0 m is 126% of a running jump on the ground, so
+## not one gap here can be crossed without the float. The LAST is 67% of the float's
+## level reach, and the tightest climbing jump (#6, 7.67 m onto a 2 m step) is 83%.
+const FLOAT_FIRST_GAP := 6.0
+const FLOAT_LAST_GAP := 8.0
+
+## The finish's footprint, square.
+const FLOAT_FINISH := Vector2(6.0, 6.0)
+
+## Which columns carry the two splits: the first two that are a step up.
+const FLOAT_SPLIT_BLOCKS := [2, 4]
+
 
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
@@ -292,6 +351,7 @@ func _build() -> void:
 	_build_the_switchback()
 	_build_the_ascent()
 	_build_the_ladder()
+	_build_the_float()
 
 
 ## The bonus route, alongside the main run and six metres above it.
@@ -409,6 +469,26 @@ func _build_the_ladder() -> void:
 		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
 
 
+## The float's columns, each the whole column from the pad's underside. A different
+## colour from every other route's blocks, because what makes them different is invisible:
+## the zone they stand in.
+func _build_the_float() -> void:
+	var route := float_route()
+
+	for i in range(route.size()):
+		var box: AABB = route[i]
+		var colour := PlaygroundGeometry.COLOUR_FLOAT
+
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif i == route.size() - 1:
+			colour = PlaygroundGeometry.COLOUR_END
+		elif FLOAT_SPLIT_BLOCKS.has(i):
+			colour = PlaygroundGeometry.COLOUR_RAMP
+
+		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
+
+
 ## The gap after block [param index], in metres.
 static func gap_at(index: int) -> float:
 	return lerpf(FIRST_GAP, LAST_GAP, float(index) / float(maxi(BLOCKS - 1, 1)))
@@ -437,6 +517,12 @@ func survey_declared() -> Array:
 			Vector3(BLOCK_WIDTH, 2.0, near - far)
 		),
 		"why": "the main run past block %d: gaps wider than a running jump, crossed with bhop speed" % first,
+	}, {
+		# Every column after the pad: each is further than a running jump or higher
+		# than a jump's apex, and is reached only in the float's gravity, which the
+		# survey does not model. A bot drives it end to end instead.
+		"box": float_columns_box(),
+		"why": "the float's columns: reached only in its GRAVITY zone (%.1f)" % FLOAT_GRAVITY,
 	}]
 
 
@@ -703,6 +789,85 @@ static func ladder_route() -> Array[AABB]:
 	return route
 
 
+# --- The float, as arithmetic -------------------------------------------------
+
+## The clear air before the box jump [param index] lands on, counted from 0.
+static func float_gap(index: int) -> float:
+	return lerpf(
+		FLOAT_FIRST_GAP, FLOAT_LAST_GAP,
+		float(index) / float(maxi(FLOAT_RISES.size() - 1, 1))
+	)
+
+
+## The bottom of every column on the float: the pad's underside.
+static func float_foot_y() -> float:
+	return FLOAT_Y - FLOAT_PAD.y
+
+
+## The clear air a player running at [constant MOVE_SPEED] crosses in one jump inside the
+## float, landing [param rise] metres higher. 0.0 for a rise it cannot reach.
+##
+## [method jump_reach]'s arithmetic under the zone's gravity: the launch speed is the
+## ground's (`sqrt(2 g h)`, set on the ground before the zone has anything to slow), so
+## under `g * FLOAT_GRAVITY` it is a jump of `h / FLOAT_GRAVITY`.
+static func float_reach(rise: float) -> float:
+	var airtime := DotFpsTunables.airtime_for(
+		MOVE_GRAVITY * FLOAT_GRAVITY, JUMP_HEIGHT / FLOAT_GRAVITY, rise
+	)
+	return MOVE_SPEED * airtime if airtime > 0.0 else 0.0
+
+
+## The float's apex over the ground a jump leaves: 2.88 m.
+static func float_apex() -> float:
+	return JUMP_HEIGHT / FLOAT_GRAVITY
+
+
+## Bonus 5 as the boxes a player lands on, start pad to finish, in order: the pad, six
+## columns, the finish. Each column and the finish is the WHOLE column, foot to top.
+static func float_route() -> Array[AABB]:
+	var foot := float_foot_y()
+	var route: Array[AABB] = [standable(
+		Vector3(FLOAT_X, FLOAT_Y - FLOAT_PAD.y * 0.5, FLOAT_Z), FLOAT_PAD
+	)]
+
+	var z := FLOAT_Z - FLOAT_PAD.z * 0.5
+	var top := FLOAT_Y
+
+	for i in range(FLOAT_RISES.size()):
+		var last := i == FLOAT_RISES.size() - 1
+		var footprint := FLOAT_FINISH if last else FLOAT_BLOCK
+		top += FLOAT_RISES[i]
+
+		z -= float_gap(i)
+		route.append(AABB(
+			Vector3(FLOAT_X - footprint.x * 0.5, foot, z - footprint.y),
+			Vector3(footprint.x, top - foot, footprint.y)
+		))
+		z -= footprint.y
+
+	return route
+
+
+## Every column after the pad, as one box: what the survey is told it cannot reach.
+static func float_columns_box() -> AABB:
+	var route := float_route()
+	var box: AABB = route[1]
+	for i in range(2, route.size()):
+		box = box.merge(route[i])
+	return box.grow(0.5)
+
+
+## The GRAVITY zone's box: the whole route and the air over it, pad included, wide enough
+## that a player drifting in the air is still in it.
+static func float_zone_box() -> AABB:
+	var route := float_route()
+	var pad: AABB = route[0]
+	var last: AABB = route[route.size() - 1]
+	var from := Vector3(FLOAT_X - 6.0, float_foot_y(), last.position.z - 2.0)
+	var to := Vector3(FLOAT_X + 6.0, last.end.y + float_apex() + 4.0, pad.end.z + 1.0)
+	return AABB(from, to - from)
+
+
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
 
@@ -748,6 +913,7 @@ static func build_zones() -> DotTimerZoneSet:
 	_add_the_switchback(zones)
 	_add_the_ascent(zones)
 	_add_the_ladder(zones)
+	_add_the_float(zones)
 
 	return zones
 
@@ -1068,5 +1234,64 @@ static func _add_the_ladder(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(LADDER_X - 10.0, ladder_foot_y() - 7.0, last.position.z - 10.0),
 		Vector3(LADDER_X + 10.0, ladder_foot_y() - 2.0, pad.end.z + 10.0)
+	)
+	zones.add(reset)
+
+
+## Bonus 5's zones: the five every route has, and the GRAVITY zone that makes it a route.
+##
+## The splits are on the step-up columns, two metres either side: the column after one is
+## further than any jump, so nobody passes a split without landing.
+static func _add_the_float(zones: DotTimerZoneSet) -> void:
+	var track := FLOAT_TRACK
+	var route := float_route()
+	var pad: AABB = route[0]
+
+	# A stride behind the pad's middle, facing -Z: yaw 0 by `DotFpsMotor._view_basis`.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = pad.get_center() + Vector3(0.0, FLOAT_PAD.y * 0.5 + 1.0, 1.5)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	for n in range(FLOAT_SPLIT_BLOCKS.size()):
+		var block: AABB = route[FLOAT_SPLIT_BLOCKS[n]]
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n + 1)
+		stage.set_box(
+			Vector3(block.position.x - 2.0, block.end.y - 0.5, block.position.z),
+			Vector3(block.end.x + 2.0, block.end.y + 6.0, block.end.z)
+		)
+		zones.add(stage)
+
+	var last: AABB = route[route.size() - 1]
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(last.position.x, last.end.y - 1.0, last.position.z),
+		Vector3(last.end.x, last.end.y + 5.0, last.end.z)
+	)
+	zones.add(finish)
+
+	# On the route's track, though dot-timer applies an EFFECT zone to whoever stands in it
+	# whatever their track: the track is where it is drawn, and a reader looking for what
+	# bonus 5 is finds it here.
+	var gravity := DotTimerZone.make(DotTimerZone.Kind.GRAVITY, track)
+	gravity.number = FLOAT_GRAVITY
+	var box := float_zone_box()
+	gravity.set_box(box.position, box.end)
+	zones.add(gravity)
+
+	# Falling off: a slab five metres deep under the columns' feet, below the gravity
+	# zone, ten metres either side of the line.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(FLOAT_X - 10.0, float_foot_y() - 7.0, last.position.z - 10.0),
+		Vector3(FLOAT_X + 10.0, float_foot_y() - 2.0, pad.end.z + 10.0)
 	)
 	zones.add(reset)

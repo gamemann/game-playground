@@ -23,6 +23,8 @@ const COLOUR_END := Color(0.60, 0.24, 0.24)
 const COLOUR_PLATFORM := Color(0.42, 0.40, 0.34)
 ## A booster: something on the map that throws the player.
 const COLOUR_BOOST := Color(0.85, 0.60, 0.15)
+## pg_bhop_intro's float: columns standing in a low-gravity zone, which is invisible.
+const COLOUR_FLOAT := Color(0.55, 0.45, 0.75)
 
 
 ## A static box with collision and a visible mesh.
