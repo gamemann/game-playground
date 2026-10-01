@@ -462,6 +462,7 @@ func _build_extras() -> DotResult:
 	bridge.voice_requested.connect(_on_voice_requested)
 	bridge.vote_requested.connect(_on_vote_requested)
 	bridge.loadout_requested.connect(_on_loadout_requested)
+	bridge.peer_admitted.connect(_on_peer_admitted)
 	services.command_entered.connect(_on_chat_command)
 	services.chat.message_accepted.connect(_on_chat_accepted)
 
@@ -998,9 +999,23 @@ func _on_client_spawn(event: DotEvent) -> void:
 	if arena != null and arena.enabled:
 		arena.admit(id, session.label())
 
-	_welcome(session)
+	# Not welcomed here: on a real join the peer is not ready yet, so [method _welcome]
+	# would find nobody to send to. [method _on_peer_admitted] does it when READY lands.
 
 	log_info("player joined the game", {"player": String(id)})
+
+
+## The bridge has admitted a peer: now they can be told what they missed.
+##
+## [b]Found 2026-10-01 reviewing `[pg-rpc-before-scene]`:[/b] `_welcome` was called from
+## `client_spawn` and returned at once unless the peer was READY, which on a real join it
+## never is yet, so no connected player had ever been sent the chat backlog, the join line
+## or the match clock.
+func _on_peer_admitted(peer_id: int) -> void:
+	var session := server.session_of(peer_id) if server != null else null
+	if session == null or not _joined.has(session.userid):
+		return
+	_welcome(session)
 
 
 ## What somebody is told once they are in: the backlog, and the clock.

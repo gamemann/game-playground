@@ -84,6 +84,14 @@ signal loadout_requested(peer_id: int, pairs: Array)
 ## [method DotVoiceRouter.relay] is what stamps the speaker.
 signal voice_requested(peer_id: int, payload: PackedByteArray)
 
+## A peer said READY for the first time and has been told the world. Server side.
+##
+## [b]The one moment anything else may be sent to it.[/b] dot-server's `client_spawn` comes
+## BEFORE this on every real join (the client says READY only once its scene is up), so
+## anything a module gates on [method peer_is_ready] at spawn finds the peer not ready and
+## has to be sent from here instead.
+signal peer_admitted(peer_id: int)
+
 ## Client side.
 signal chat_received(wire: Dictionary)
 signal voice_arrived(payload: PackedByteArray)
@@ -377,7 +385,12 @@ func remove_player(session_id: int) -> void:
 	game.remove_player(_player_key(session_id))
 
 	if net != null and peer_id > 0:
-		if was_ready:
+		# By whether dot-net has the peer, not by `was_ready`: a real disconnect reaches
+		# here through the module, which has already called [method mark_not_ready] (so
+		# chat and LEAVE skip a closed socket), and keying this on the ready set left
+		# every disconnected peer in `net.peers()`, built a snapshot for and holding its
+		# input buffer, acks and per-behaviour records for the life of the server.
+		if net.peers().has(peer_id):
 			net.remove_peer(peer_id)
 		if net.interest != null:
 			net.interest.forget_peer(peer_id)
@@ -801,6 +814,7 @@ func _admit(peer_id: int) -> void:
 	if peer_id <= 0 or not _player_of_peer.has(peer_id):
 		return
 
+	var fresh := not _ready_peers.has(peer_id)
 	_ready_peers[peer_id] = true
 	if not net.peers().has(peer_id):
 		net.add_peer(peer_id)
@@ -841,6 +855,10 @@ func _admit(peer_id: int) -> void:
 	# what it is carrying would show an empty grid until it bought something.
 	if inventory_net != null:
 		inventory_net.admit(peer_id, session_id)
+
+	# Once, so a READY said twice does not replay the backlog and the join line.
+	if fresh:
+		peer_admitted.emit(peer_id)
 
 
 func _join_body(session_id: int) -> PackedByteArray:

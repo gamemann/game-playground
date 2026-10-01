@@ -4,7 +4,10 @@ const Playground := preload("../game/playground.gd")
 const PlaygroundArena := preload("../game/playground_arena.gd")
 const PlaygroundConfig := preload("../game/playground_config.gd")
 const PlaygroundDowns := preload("../game/playground_downs.gd")
+const PlaygroundEvent := preload("../game/net/playground_event.gd")
 const PlaygroundEvents := preload("../game/net/playground_events.gd")
+const PlaygroundNetBridge := preload("../game/net/playground_net_bridge.gd")
+const PlaygroundRequest := preload("../game/net/playground_request.gd")
 const PlaygroundPlatform := preload("../game/playground_platform.gd")
 const PlaygroundProgress := preload("../game/playground_progress.gd")
 const PlaygroundServices := preload("../game/playground_services.gd")
@@ -42,8 +45,8 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## This suite had neither until 2026-09-24. Each section calls [method _section_done] as
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
-const SECTIONS := 24
-const CHECKS := 217
+const SECTIONS := 25
+const CHECKS := 224
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -122,6 +125,7 @@ func _run() -> void:
 		await _test_live_tools()
 		await _test_blind_and_beacon()
 		_test_inventory_commands()
+		_test_welcome_waits_for_ready()
 		_test_disconnect_is_handled()
 		await _test_module_unloads_cleanly()
 		_test_no_message_preloads_itself()
@@ -1851,6 +1855,79 @@ func _test_inventory_commands() -> void:
 
 	var _released := server.release_session(session.peer_id)
 	game.remove_player(&"u79")
+	_section_done()
+
+
+## A joiner is welcomed when it says READY, which on every real join is AFTER `client_spawn`.
+##
+## [b]The module's own half of `[pg-rpc-before-scene]`.[/b] `_welcome` (the chat backlog and
+## the join line) ran from `client_spawn` and returned unless the bridge had the peer READY,
+## which it never does at spawn, because the client says READY only once its scene is up. So
+## no connected player had ever been sent either. This drives the real order: a session,
+## `client_spawn`, then READY through the bridge, recording what goes to that one peer.
+func _test_welcome_waits_for_ready() -> void:
+	print("a joiner is welcomed when it says READY, and not before")
+
+	var bridge: PlaygroundNetBridge = _module().get("bridge")
+	var services: PlaygroundServices = _module().get("services")
+	var peer := 7909
+	var session := DotClientSession.new()
+	session.peer_id = peer
+	session.userid = 79
+	session.display_name = "Wren"
+	var _adopted := server.adopt_session(session)
+	var _said: Variant = services.chat.announce("said before Wren came", PlaygroundServices.CHANNEL_ALL)
+
+	var kinds: Array[int] = []
+	var old_send: Callable = bridge.net.send_fn
+	bridge.net.send_fn = func(peer_id: int, payload: PackedByteArray, _delivery: int) -> void:
+		if peer_id != peer:
+			return
+		var decoded: DotResult = bridge.net.messages.decode(DotNetReader.new(payload), 1, false)
+		if decoded.ok and decoded.value is PlaygroundEvent:
+			kinds.append((decoded.value as PlaygroundEvent).kind)
+
+	var _spawned: DotEvent = server.events.fire("client_spawn", {"userid": 79})
+	_check(game.players.has(&"u79"), "client_spawn puts the joiner in the game")
+	_check(
+		kinds.is_empty(),
+		"and sends them nothing, because they have not said READY",
+		str(kinds)
+	)
+
+	var writer := DotNetWriter.new()
+	var _encoded: DotResult = bridge.net.messages.encode(
+		PlaygroundRequest.new(PlaygroundEvents.Ask.READY, PackedByteArray()), writer
+	)
+	var _ready: DotResult = bridge.receive_request(peer, writer.to_bytes())
+	var chats := kinds.count(PlaygroundEvents.Kind.CHAT)
+	_check(
+		kinds.has(PlaygroundEvents.Kind.HELLO) and chats >= 2,
+		"READY sends HELLO and then the welcome: the backlog and the join line (%d chat)" % chats,
+		str(kinds)
+	)
+
+	kinds.clear()
+	var _again: DotResult = bridge.receive_request(peer, writer.to_bytes())
+	_check(
+		kinds.count(PlaygroundEvents.Kind.CHAT) == 0,
+		"a READY said twice does not welcome them twice",
+		str(kinds)
+	)
+
+	_check(bridge.net.peers().has(peer), "and dot-net now replicates to them")
+
+	bridge.net.send_fn = old_send
+	server.client_disconnected.emit(session, "closed")
+	_check(not game.players.has(&"u79"), "and they leave cleanly")
+	# The module takes them off the ready set BEFORE the bridge removes the player, and
+	# the bridge used to ask that same set whether to tell dot-net: every peer that ever
+	# disconnected stayed in `net.peers()`, built a snapshot for every tick.
+	_check(
+		not bridge.net.peers().has(peer),
+		"and dot-net stops replicating to them",
+		str(bridge.net.peers())
+	)
 	_section_done()
 
 
