@@ -26,6 +26,9 @@ const CHANNEL := "playground.player"
 ## every one of 128 ticks a second.
 var _assisted := false
 
+## Reused by [method effect_zone_at], which runs every tick.
+var _effect_found: Array[DotTimerZone] = []
+
 ## The run finished. The world files it; the player just reports.
 signal finished(run: DotTimerRun)
 
@@ -608,12 +611,35 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 	# A PUSH zone (pg_lobby's boosters, bonus 5) is an acceleration, applied every tick
 	# the player is in it, on the tick, for the prespeed clamp's reason. Upward on the
 	# ground is a launch: the motor puts a player moving out of the floor in AIR.
-	var push_zone := timer.effect(DotTimerZone.Kind.PUSH)
+	#
+	# [b]Where the player IS this tick, not `timer.effect(PUSH)`.[/b] The timer's effect is
+	# where it last sampled them, and a predicting client replays a run of ticks after every
+	# snapshot with the timer standing at the newest one: each replay across a booster's edge
+	# pushed ticks that were outside it (or the reverse), and a connected client was
+	# corrected on every launch. Asked of the zone index at the state's own position, the
+	# answer is a function of the state, so a replayed tick gets the push it got the first
+	# time, and the server computes it the same way. `[playground-push-1]`.
+	var push_zone := effect_zone_at(state.position, DotTimerZone.Kind.PUSH)
 
 	if push_zone != null:
 		state.velocity = DotTimerRules.apply_push(
 			state.velocity, push_zone, 1.0 / float(maxi(1, controller.tick_rate))
 		)
+
+
+## The EFFECT zone of [param kind] at [param point], or null. Read off the timer's zone index
+## rather than its effects, so it depends on nothing but the point; overlapping zones of one
+## kind resolve as the timer's own effects do, the last one found winning. EFFECT zones are
+## not track-filtered in dot-timer, and neither is this.
+func effect_zone_at(point: Vector3, kind: DotTimerZone.Kind) -> DotTimerZone:
+	if timer == null or timer.index == null:
+		return null
+	timer.index.zones_at(point, _effect_found)
+	var found: DotTimerZone = null
+	for zone in _effect_found:
+		if zone.kind == kind:
+			found = zone
+	return found
 
 
 ## Gets in or out of a vehicle. Called by the ride's `on_seated` / `on_unseated`.

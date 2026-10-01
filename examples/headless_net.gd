@@ -20,6 +20,7 @@ const PlaygroundCharacter := preload("../game/playground_character.gd")
 const PlaygroundInventory := preload("../game/playground_inventory.gd")
 const PlaygroundInventoryNet := preload("../game/net/playground_inventory_net.gd")
 const PlaygroundRequest := preload("../game/net/playground_request.gd")
+const PgLobby := preload("res://maps/pg_lobby.gd")
 
 ## game-playground over the wire: a real server, a real client, and a lossy loopback
 ## between them.
@@ -53,13 +54,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 276
+const CHECKS := 282
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 29
+const SECTIONS := 30
 
 var _passed := 0
 var _failed := 0
@@ -147,6 +148,9 @@ func _run() -> void:
 		await _test_inventory_from_the_server()
 		await _test_inventory_is_private()
 		await _test_nothing_before_ready()
+		# After every section that cares where the player stands: it sends them to the
+		# launch and back. Nothing it does adds a body.
+		await _test_push_over_the_wire()
 		await _test_inventory_flood()
 		await _test_inventory_rejoin()
 		await _test_leave()
@@ -3056,6 +3060,116 @@ func _test_nothing_before_ready() -> void:
 	)
 	_recording = false
 	_server_events.clear()
+	_done()
+
+
+## A walk from pg_lobby's launch pad, holding forward on [param yaw] for [param limit]
+## ticks or (with [param stop_on_deck]) until the server's player stands past deck 1's
+## near edge. Returns what it measured.
+func _launch_walk(yaw: float, limit: int, stop_on_deck: bool) -> Dictionary:
+	var mine := _client_player()
+	var theirs := _server_player()
+	var pad := PgLobby.launch_deck(0)
+	var deck1 := PgLobby.launch_deck(1)
+
+	theirs.teleport(Vector3(PgLobby.LAUNCH_X, pad.end.y + 0.05, pad.position.z + 1.5), yaw)
+	await _steps(48)
+
+	var c := _forward()
+	c.yaw = yaw
+	var corrections_before := _corrections_and_snaps()
+	var top := pad.end.y
+	var client_top := pad.end.y
+	var ticks := 0
+	for i in range(limit):
+		await _step(c)
+		ticks += 1
+		top = maxf(top, theirs.controller.state.position.y)
+		client_top = maxf(client_top, mine.controller.state.position.y)
+		if stop_on_deck and theirs.controller.state.position.z > deck1.position.z + 1.0 \
+				and theirs.controller.state.is_grounded():
+			break
+	var corrections := _corrections_and_snaps() - corrections_before
+	var at := theirs.controller.state.position
+	await _steps(32)
+	return {
+		"corrections": corrections,
+		"ticks": ticks,
+		"thrown": top - pad.end.y,
+		"client_thrown": client_top - pad.end.y,
+		"at": at,
+		"gap": mine.controller.state.position.distance_to(theirs.controller.state.position),
+	}
+
+
+## A connected client rides a booster, and is thrown where the server throws it.
+##
+## [b]`PlaygroundPlayer._on_simulated` applies a PUSH zone on the tick (pg_lobby's launch,
+## bonus 5), and a predicted client runs the same code.[/b] Its timer is fed by
+## `tick_timers_only` after its predicted players simulate, where the server's is fed inside
+## `tick_once`, and a replay after a correction reads the effect in force now rather than at
+## the replayed tick. Any of that out by a tick is a launch that is a correction every time.
+## So two walks of the same length from the launch's pad: up the line, over the booster and
+## onto deck 1, and back off the pad's other end onto the plate (the usual: a walk and a 2 m
+## drop, no booster). The throw may cost no more corrections than the walk.
+##
+## No track is set: dot-timer's EFFECT zones are not track-filtered (`DotTimer._rebuild_effects`
+## takes every zone the player is in), so a booster throws anybody on any track, on both
+## ends alike. `[playground-push-1]`.
+func _test_push_over_the_wire() -> void:
+	_section("a booster throws a connected client where the server throws it")
+
+	var mine := _client_player()
+	var theirs := _server_player()
+	if mine == null or theirs == null:
+		_check(false, "a connected player to launch")
+		return
+	var home := theirs.controller.state.position
+	var home_yaw := theirs.controller.state.yaw
+
+	var launched: Dictionary = await _launch_walk(180.0, 360, true)
+	var usual: Dictionary = await _launch_walk(0.0, int(launched["ticks"]), false)
+	print("    the launch over the wire: thrown %.2f m by the server and %.2f m by the client's prediction, onto deck 1 in %d ticks with %d corrections, ending %.4f m from the server; the same %d ticks walked off the pad's back: %d corrections, thrown %.2f m" % [
+		float(launched["thrown"]), float(launched["client_thrown"]), int(launched["ticks"]),
+		int(launched["corrections"]), float(launched["gap"]), int(usual["ticks"]),
+		int(usual["corrections"]), float(usual["thrown"])])
+
+	_check(
+		float(launched["thrown"]) > PgLobby.launch_apex() * 0.8,
+		"the server throws the player about launch_apex up",
+		"%.2f m against %.2f" % [float(launched["thrown"]), PgLobby.launch_apex()]
+	)
+	_check(
+		absf(float(launched["client_thrown"]) - float(launched["thrown"])) < 0.1,
+		"and the client predicted the same throw",
+		"%.2f m against the server's %.2f" % [
+			float(launched["client_thrown"]), float(launched["thrown"])]
+	)
+	var at: Vector3 = launched["at"]
+	var deck1 := PgLobby.launch_deck(1)
+	_check(
+		at.z > deck1.position.z and absf(at.y - deck1.end.y) < 0.2,
+		"onto deck 1, 3 m up, without pressing jump",
+		"at %s, deck top %.2f" % [str(at), deck1.end.y]
+	)
+	_check(
+		float(usual["thrown"]) < 0.5,
+		"the walk it is measured against goes nowhere near a booster",
+		"%.2f m up" % float(usual["thrown"])
+	)
+	_check(
+		int(launched["corrections"]) <= int(usual["corrections"]),
+		"and the throw costs no more corrections than that walk",
+		"%d against %d" % [int(launched["corrections"]), int(usual["corrections"])]
+	)
+	_check(
+		float(launched["gap"]) < 0.05,
+		"and the client ends the throw where the server has them",
+		"%.4f m" % float(launched["gap"])
+	)
+
+	theirs.teleport(home, home_yaw)
+	await _steps(48)
 	_done()
 
 
