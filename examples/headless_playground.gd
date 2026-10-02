@@ -48,7 +48,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 545
+const CHECKS := 546
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -3912,6 +3912,16 @@ func _test_the_long_bank() -> void:
 		"a bot holding into the bank rides it to its far end",
 		"left it at z %.1f of %.1f" % [float(ride["rode_to"]), far_z]
 	)
+	# [fps-face-edge-stop]: leaving over the far END grazed the edge, and the motor used to
+	# answer that graze by zeroing the velocity. "Rode to" cannot see it -- it stops at the
+	# edge either way -- so ask the speed on each side of it.
+	_check(
+		float(ride["edge_speed"]) > 15.0
+			and float(ride["past_speed"]) > 0.9 * float(ride["edge_speed"]),
+		"and leaves over the far edge without losing its speed there",
+		"%.1f m/s on the last tick over the bank, %.1f on the first past it" % [
+			float(ride["edge_speed"]), float(ride["past_speed"])]
+	)
 	_check(ride["splits"] == [1, 2], "it crosses both splits, in order", str(ride["splits"]))
 	_check(
 		ride["finished"] and int(ride["respawns"]) == 0,
@@ -3980,6 +3990,10 @@ func _ride_the_bank(player: PlaygroundPlayer, max_ticks: int) -> Dictionary:
 	var ticks := 0
 	var top := 0.0
 	var rode_to := INF
+	# The speed on the last tick over the bank and the first tick past its far edge: a
+	# rider that leaves at speed and one stopped dead on the edge both "ride to" it.
+	var edge_speed := -1.0
+	var past_speed := -1.0
 	var x_low := INF
 	var x_high := -INF
 	var last := player.global_position
@@ -4007,6 +4021,9 @@ func _ride_the_bank(player: PlaygroundPlayer, max_ticks: int) -> Dictionary:
 			top = maxf(top, player.speed())
 		if _on_the_bank(now):
 			rode_to = minf(rode_to, now.z)
+			edge_speed = player.speed()
+		elif past_speed < 0.0 and now.z < far_z and rode_to < INF:
+			past_speed = player.speed()
 			x_low = minf(x_low, now.x)
 			x_high = maxf(x_high, now.x)
 		last = now
@@ -4026,6 +4043,7 @@ func _ride_the_bank(player: PlaygroundPlayer, max_ticks: int) -> Dictionary:
 		"started": started[0], "finished": finished[0], "splits": splits,
 		"respawns": respawns[0], "ticks": ticks, "top_speed": top, "tally": tally,
 		"rode_to": rode_to, "x_low": x_low, "x_high": x_high,
+		"edge_speed": edge_speed, "past_speed": past_speed,
 	}
 
 
