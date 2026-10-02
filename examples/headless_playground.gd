@@ -48,13 +48,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 521
+const CHECKS := 545
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 29
+const SECTIONS := 30
 
 var _passed := 0
 var _failed := 0
@@ -92,15 +92,6 @@ func _run() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	if OS.has_environment("PG_ONLY"): # TEMPSCRATCH
-		await _test_the_float() # TEMPSCRATCH
-		await _test_the_maps_are_surveyed() # TEMPSCRATCH
-		print("%d passed, %d failed" % [_passed, _failed]) # TEMPSCRATCH
-		for line in _failures: # TEMPSCRATCH
-			print("  FAIL  %s" % line) # TEMPSCRATCH
-		get_tree().quit(1 if _failed > 0 else 0) # TEMPSCRATCH
-		return # TEMPSCRATCH
-
 	await _test_boots()
 	await _test_tick_rate_comes_from_the_engine()
 	await _test_zone_file_matches_the_map()
@@ -124,6 +115,7 @@ func _run() -> void:
 	await _test_the_ascent()
 	await _test_the_cascade()
 	await _test_the_long_bank()
+	await _test_the_transfer()
 	await _test_the_stepping_stones()
 	await _test_the_launch()
 	await _test_the_ladder()
@@ -258,9 +250,9 @@ func _test_boots() -> void:
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
 			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK,
-				PgSurfIntro.BANK_TRACK]
+				PgSurfIntro.BANK_TRACK, PgSurfIntro.TRANSFER_TRACK]
 		),
-		"and all four of its tracks can be run",
+		"and all five of its tracks can be run",
 		str(zones.playable_tracks())
 	)
 
@@ -2788,9 +2780,9 @@ func _test_the_plunge() -> void:
 	_check(
 		zones.playable_tracks() == PackedInt32Array(
 			[DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK,
-				PgSurfIntro.BANK_TRACK]
+				PgSurfIntro.BANK_TRACK, PgSurfIntro.TRANSFER_TRACK]
 		),
-		"and the surf map has four routes now rather than one",
+		"and the surf map has five routes now rather than one",
 		str(zones.playable_tracks())
 	)
 
@@ -3690,8 +3682,9 @@ func _test_the_cascade() -> void:
 	_check(
 		playground.tracks_on_this_map() == [
 			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, track, PgSurfIntro.BANK_TRACK,
+			PgSurfIntro.TRANSFER_TRACK,
 		],
-		"and the game sees four tracks on the map without being told",
+		"and the game sees five tracks on the map without being told",
 		str(playground.tracks_on_this_map())
 	)
 
@@ -3831,8 +3824,9 @@ func _test_the_long_bank() -> void:
 	_check(
 		playground.tracks_on_this_map() == [
 			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK, track,
+			PgSurfIntro.TRANSFER_TRACK,
 		],
-		"and the game sees four tracks on the map without being told",
+		"and the game sees five tracks on the map without being told",
 		str(playground.tracks_on_this_map())
 	)
 	var thin := zones.thin_zones(30.0, playground.tick_rate)
@@ -4047,6 +4041,285 @@ static func _on_the_bank(at: Vector3) -> bool:
 		return false
 	var above := at.y - PgSurfIntro.bank_surface_y(at.x, at.z)
 	return above > -0.2 and above < 0.8
+
+
+## Bonus 4 on pg_surf_intro, the transfer: two faces side by side facing each other across
+## a gap, the second lower and starting a third of the way down the first.
+##
+## [b]Ridden by the long bank's rule, with the side switched for the jump.[/b] On the first
+## face the bot holds right while it is below the riding line; [constant
+## PgSurfIntro.TRANSFER_AT] metres into the second face's length it lets go and holds LEFT,
+## off the first face's low lip and across; on the second it holds left while it is below
+## that face's line (below is +X there). It never touches forward on either. Which hand it
+## held on which face is asserted, because the switch is what this route asks for.
+func _test_the_transfer() -> void:
+	print("")
+	_section("the transfer — pg_surf_intro's bonus 4, two faces facing each other across a gap")
+
+	var loaded: DotResult = await playground.change_map(&"pg_surf_intro")
+	_check(loaded.ok, "the surf map loads", loaded.error.message if not loaded.ok else "")
+
+	var track := PgSurfIntro.TRANSFER_TRACK
+	var zones := PgSurfIntro.build_zones()
+	var kinds := {
+		"start": zones.of_kind(DotTimerZone.Kind.START, track).size(),
+		"end": zones.of_kind(DotTimerZone.Kind.END, track).size(),
+		"spawn": zones.of_kind(DotTimerZone.Kind.SPAWN, track).size(),
+		"respawn": zones.of_kind(DotTimerZone.Kind.RESPAWN, track).size(),
+		"stage": zones.of_kind(DotTimerZone.Kind.STAGE, track).size(),
+	}
+	_check(
+		kinds == {"start": 1, "end": 1, "spawn": 1, "respawn": 1, "stage": 2}
+			and zones.route_tracks().has(track) and zones.route_problems().is_empty(),
+		"bonus 4 has a start, a finish, a spawn, a respawn and two splits, on its own track",
+		"%s %s" % [str(kinds), ", ".join(zones.route_problems())]
+	)
+	_check(
+		playground.tracks_on_this_map() == [
+			DotTimerTrack.MAIN, DotTimerTrack.BONUS_FIRST, PgSurfIntro.CASCADE_TRACK,
+			PgSurfIntro.BANK_TRACK, track,
+		],
+		"and the game sees five tracks on the map without being told",
+		str(playground.tracks_on_this_map())
+	)
+	var thin := zones.thin_zones(30.0, playground.tick_rate)
+	_check(thin.is_empty(),
+		"and no zone is thin enough for a rider at 30 m/s to cross without entering",
+		"%d thin" % thin.size())
+
+	var player := playground.add_player(&"bot", "Bot")
+	var max_slope: float = player.controller.tunables.max_slope_angle
+	var n0 := PgSurfIntro.transfer_normal(0)
+	var n1 := PgSurfIntro.transfer_normal(1)
+	var slope0 := rad_to_deg(acos(n0.y))
+	var slope1 := rad_to_deg(acos(n1.y))
+	_check(
+		slope0 > max_slope + 5.0 and slope1 > max_slope + 5.0,
+		"both faces are steeper than a player can stand on, by more than five degrees",
+		"%.1f° and %.1f° against %.0f°" % [slope0, slope1, max_slope]
+	)
+	_check(
+		n0.x < -0.5 and n1.x > 0.5,
+		"and they lean opposite ways: the first is high on the right, the second on the left",
+		"normals %s and %s" % [str(n0), str(n1)]
+	)
+
+	var line0 := PgSurfIntro.transfer_line_x(0)
+	var line1 := PgSurfIntro.transfer_line_x(1)
+	var far0 := PgSurfIntro.transfer_far_z(0)
+	var near1 := PgSurfIntro.transfer_near_centre(1).z
+	var far1 := PgSurfIntro.transfer_far_z(1)
+	var lip0 := PgSurfIntro.transfer_lip_x(0)
+	var lip1 := PgSurfIntro.transfer_lip_x(1)
+	var drop0 := PgSurfIntro.transfer_surface_y(0, line0, PgSurfIntro.TRANSFER_NEAR_Z) \
+		- PgSurfIntro.transfer_surface_y(0, line0, far0)
+	var drop1 := PgSurfIntro.transfer_surface_y(1, line1, near1) \
+		- PgSurfIntro.transfer_surface_y(1, line1, far1)
+	var under := PgSurfIntro.transfer_surface_y(0, lip0, near1) \
+		- PgSurfIntro.transfer_surface_y(1, lip1, near1)
+	_check(
+		drop0 > 6.0 and drop1 > drop0 and far1 < far0 - 40.0,
+		"each falls along its length, and the second, after the transfer, falls further and runs on past the first",
+		"%.1f m then %.1f m; far edges z %.1f and %.1f" % [drop0, drop1, far0, far1]
+	)
+	_check(
+		lip0 - lip1 >= 1.5 and under > 2.0 and near1 < 0.0 and near1 > far0 + 30.0,
+		"the second face starts alongside the first, across a clear gap and under its low lip",
+		"gap %.1f m, %.1f m under, starting at z %.1f" % [lip0 - lip1, under, near1]
+	)
+
+	var finish_pad := PgSurfIntro.transfer_finish()
+	var c1 := PgSurfIntro.transfer_corners(1)
+	_check(
+		finish_pad.end.z < minf(c1[2].z, c1[3].z)
+			and finish_pad.end.y < PgSurfIntro.transfer_surface_y(1, line1, far1) - 1.0,
+		"the finish pad is beyond the second face's far edge and under it",
+		"pad z %.1f..%.1f top %.1f" % [finish_pad.position.z, finish_pad.end.z, finish_pad.end.y]
+	)
+	var reset := zones.first_of_kind(DotTimerZone.Kind.RESPAWN, track)
+	var lowest := finish_pad.position.y
+	for face in range(2):
+		for corner in PgSurfIntro.transfer_corners(face):
+			lowest = minf(lowest, corner.y - 1.0)
+	_check(reset.to.y < lowest, "and its reset is under everything on the route",
+		"reset top %.2f, lowest %.2f" % [reset.to.y, lowest])
+
+	_check(player.timer.set_track(track), "the transfer's track switches")
+	playground.spawn_player(&"bot")
+	await get_tree().physics_frame
+	var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+	_check(
+		player.global_position.distance_to(spawn.destination) < 0.5,
+		"and puts the bot on its pad",
+		"%.2f m away" % player.global_position.distance_to(spawn.destination)
+	)
+	await _the_spawn_yaw_survives_a_tick(player, spawn)
+
+	var ride: Dictionary = await _ride_the_transfer(player, 3000)
+	var tally: Dictionary = ride["tally"]
+	var ticks := int(ride["ticks"])
+	var length := spawn.destination.z - (finish_pad.end.z - 2.0)
+	var held: Dictionary = ride["held"]
+
+	print("    the transfer: first face to z %.1f of %.1f, second to z %.1f of %.1f, held %s, splits %s, finish %s, %d ticks, %d respawns" % [
+		float(ride["rode_to"][0]), far0, float(ride["rode_to"][1]), far1, str(held),
+		str(ride["splits"]), str(ride["finished"]), ticks, int(ride["respawns"]),
+	])
+	var pace := _print_pace(
+		"the transfer", _tally_total(tally, "distance"), length, ticks,
+		PgSurfIntro.MOVE_SPEED, float(ride["top_speed"])
+	)
+	_print_where("the transfer", "the two faces", tally, -(drop0 + drop1))
+
+	_check(ride["started"], "dropping off the pad starts a run on bonus 4")
+	_check(
+		float(ride["rode_to"][0]) < near1 - PgSurfIntro.TRANSFER_AT + 1.0
+			and float(ride["rode_to"][1]) <= far1 + PgSurfIntro.TRANSFER_FINISH_LINE + 1.0,
+		"a bot rides the first face past where the second begins, crosses, and rides the second to its end",
+		"first to z %.1f, second to z %.1f of %.1f"
+			% [float(ride["rode_to"][0]), float(ride["rode_to"][1]), far1]
+	)
+	_check(
+		int(held["right_first"]) > 0 and int(held["left_second"]) > 0
+			and int(held["right_second"]) == 0,
+		"holding right on the first face and left on the second, never right on the second",
+		str(held)
+	)
+	_check(ride["splits"] == [1, 2], "it crosses both splits, the gap first", str(ride["splits"]))
+	_check(
+		ride["finished"] and int(ride["respawns"]) == 0,
+		"and lands in the finish without once being put back",
+		"finished %s, %d respawns, at %s" % [
+			str(ride["finished"]), int(ride["respawns"]), str(player.global_position.round()),
+		]
+	)
+	_check_pace("the transfer", _tally_total(tally, "distance"), length, pace,
+		PgSurfIntro.MOVE_SPEED, BANK_PACE_FLOOR)
+	_check(
+		float(ride["top_speed"]) > 20.0,
+		"and the faces make the rider fast, past 20 m/s",
+		"%.1f m/s" % float(ride["top_speed"])
+	)
+	# `[surf-ramp-1]`, asserted with the air this route is built to have: the transfer is a
+	# fall of at least TRANSFER_DROP between the lips and the finish is TRANSFER_FINISH_DROP
+	# under the far end, so the air's share is real here. More of the descent is still the
+	# faces', and nothing is anything else's.
+	var on_descent := float((tally["on"] as Dictionary)["descent"])
+	var air_descent := float((tally["air"] as Dictionary)["descent"])
+	_check(
+		on_descent > air_descent and on_descent >= drop1,
+		"more of the descent is ridden on the faces than fallen between them",
+		"%.1f m on the faces, %.1f m in the air, the second face falls %.1f m"
+			% [on_descent, air_descent, drop1]
+	)
+	_check_where("the transfer", "faces", tally)
+	_check(not player.timer.run.is_active(), "and the run is over rather than still running")
+
+	playground.remove_player(&"bot")
+	_done()
+
+
+## Rides [param player] from the transfer's pad to its finish: the long bank's rule on
+## each face, with the side the face leans. Returns what happened, the `[surf-ramp-1]`
+## tally ("on" is either face), the furthest Z reached on each face, and how many ticks
+## it held each hand on each.
+func _ride_the_transfer(player: PlaygroundPlayer, max_ticks: int) -> Dictionary:
+	var started: Array[bool] = [false]
+	var finished: Array[bool] = [false]
+	var splits: Array[int] = []
+	var respawns: Array[int] = [0]
+
+	var on_start := func(_run: DotTimerRun) -> void: started[0] = true
+	var on_stage := func(number: int, _split: float) -> void: splits.append(number)
+	var on_finish := func(_run: DotTimerRun) -> void: finished[0] = true
+	var on_effect := func(id: StringName, zone: DotTimerZone) -> void:
+		if id == player.player_id and zone.kind == DotTimerZone.Kind.RESPAWN:
+			respawns[0] += 1
+
+	player.timer.run_started.connect(on_start)
+	player.timer.stage_reached.connect(on_stage)
+	player.timer.run_finished.connect(on_finish)
+	playground.timers.effect_requested.connect(on_effect)
+
+	var line0 := PgSurfIntro.transfer_line_x(0)
+	var line1 := PgSurfIntro.transfer_line_x(1)
+	var lip0 := PgSurfIntro.transfer_lip_x(0)
+	var let_go_z := PgSurfIntro.transfer_near_centre(1).z - PgSurfIntro.TRANSFER_AT
+	var crossed := false
+	var tally := _motion_tally()
+	var ticks := 0
+	var top := 0.0
+	var rode_to := [INF, INF]
+	var held := {"right_first": 0, "left_first": 0, "right_second": 0, "left_second": 0}
+	var last := player.global_position
+
+	for i in range(max_ticks):
+		var at := player.global_position
+		var face := _on_a_transfer_face(at)
+		var command := DotFpsCommand.new()
+		command.yaw = 0.0
+
+		crossed = crossed or at.x < lip0 - 0.5
+		if player.controller.state.is_grounded() and face < 0:
+			command.move = Vector2(0.0, 1.0)
+		elif crossed:
+			command.move = Vector2(-1.0 if at.x > line1 else 0.0, 0.0)
+		elif at.z > let_go_z:
+			command.move = Vector2(1.0 if at.x < line0 else 0.0, 0.0)
+		else:
+			command.move = Vector2(-1.0, 0.0)
+
+		if face >= 0 and command.move.x != 0.0:
+			var key := ("right_" if command.move.x > 0.0 else "left_") \
+				+ ("first" if face == 0 else "second")
+			held[key] = int(held[key]) + 1
+
+		player.controller.apply_command(command)
+		await get_tree().physics_frame
+		ticks = i + 1
+
+		var now := player.global_position
+		var face_now := _on_a_transfer_face(now)
+		if started[0] and not finished[0]:
+			var where := "on" if face_now >= 0 else (
+				"else" if player.controller.state.is_grounded() else "air")
+			_tally_tick(tally, last, now, where)
+			top = maxf(top, player.speed())
+		if face_now >= 0:
+			rode_to[face_now] = minf(float(rode_to[face_now]), now.z)
+		last = now
+
+		if finished[0] or respawns[0] > 0:
+			break
+
+	player.timer.run_started.disconnect(on_start)
+	player.timer.stage_reached.disconnect(on_stage)
+	player.timer.run_finished.disconnect(on_finish)
+	playground.timers.effect_requested.disconnect(on_effect)
+	player.controller.apply_command(DotFpsCommand.new())
+
+	return {
+		"started": started[0], "finished": finished[0], "splits": splits,
+		"respawns": respawns[0], "ticks": ticks, "top_speed": top, "tally": tally,
+		"rode_to": rode_to, "held": held,
+	}
+
+
+## Which transfer face feet at [param at] are on (0 or 1), or -1: over it, and at most
+## 0.8 m above it, as [method _on_the_bank].
+static func _on_a_transfer_face(at: Vector3) -> int:
+	for face in range(2):
+		var c := PgSurfIntro.transfer_corners(face)
+		var low_x := minf(minf(c[0].x, c[1].x), minf(c[2].x, c[3].x))
+		var high_x := maxf(maxf(c[0].x, c[1].x), maxf(c[2].x, c[3].x))
+		if at.z > PgSurfIntro.transfer_near_centre(face).z or at.z < PgSurfIntro.transfer_far_z(face):
+			continue
+		if at.x < low_x or at.x > high_x:
+			continue
+		var above := at.y - PgSurfIntro.transfer_surface_y(face, at.x, at.z)
+		if above > -0.2 and above < 0.8:
+			return face
+	return -1
 
 
 func _test_the_stepping_stones() -> void:
@@ -5520,3 +5793,4 @@ func _circuit_progress(at: Vector3, from: float) -> float:
 			best = s
 
 	return best
+

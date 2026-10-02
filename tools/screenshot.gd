@@ -250,6 +250,21 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(104.0, 47.0, 16.0),
 				"at": Vector3(110.0, 26.0, -60.0),
 			},
+			# Bonus 4, the transfer: two faces facing each other across a gap, the first
+			# (right, x 165..177) from the pad and the second (left, x 152..163) lower and
+			# starting a third of the way down it. From behind and above the pair, down the
+			# valley between them, so the frame shows the gap a rider crosses.
+			{
+				"name": "pg_surf_intro_transfer",
+				"from": Vector3(163.0, 66.0, 34.0),
+				"at": Vector3(161.0, 14.0, -80.0),
+			},
+			# Over the backstop, down the first face, with the second face across the gap.
+			{
+				"name": "pg_surf_intro_transfer_start",
+				"from": Vector3(170.0, 47.0, 16.0),
+				"at": Vector3(164.0, 24.0, -60.0),
+			},
 		]
 
 	if id != "pg_lobby":

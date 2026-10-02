@@ -223,6 +223,77 @@ const BANK_FINISH := Vector3(18.0, 1.0, 60.0)
 const BANK_SPLITS := [1.0 / 3.0, 2.0 / 3.0]
 
 
+# --- Bonus 4: the transfer ---------------------------------------------------
+#
+# [b]The first route here where a rider goes from one face to another.[/b] The long bank
+# is one face with its high edge on the right the whole way down, so its whole skill is
+# holding right. A surf map is a succession of faces, and the moment between two of them
+# is what a player has to learn: this is two faces side by side and FACING each other
+# across a gap — the first high on the right, the second high on the left, lower, and
+# starting a third of the way down the first. A rider holds right down the first, then
+# lets go and pushes left: off the first face's low lip, across the gap, onto the second,
+# where the only way to stay on is to hold LEFT. Too early and the second face is not
+# there yet; too late and the first one ends under them.
+#
+# Not two faces in line, which is what this was first built as: a rider leaving a face
+# over its far END is stopped dead by the motor at that edge (the long bank's rider is
+# too, 0.1 m short of its far edge, and slides off onto the finish pad below, which is
+# why nobody saw it — see CLAUDE.md). Leaving over the LOW LIP keeps the speed, because
+# the clip there is along the lip, which is the way the rider is going.
+#
+# The second face is pitched steeper than the first, so the half after the transfer is
+# where the speed is. Built east of the long bank, whose high edge is at x = 116: the
+# transfer spans x = 151..177. Every number below comes from the faces' bases
+# ([method transfer_basis]) and near edges ([method transfer_near_centre]), which the
+# geometry, the zones and the suite all read.
+
+## The track it runs on.
+const TRANSFER_TRACK := DotTimerTrack.BONUS_FIRST + 3
+
+## The riding line on the first face: the pad's centre, and a metre down from its middle.
+const TRANSFER_LINE_X := 170.0
+const TRANSFER_NEAR_Z := START_Z
+
+## Both faces' roll, the long bank's: past `max_slope_angle` by ten degrees. The first is
+## rolled one way and the second the other.
+const TRANSFER_ROLL := 56.0
+
+## How far each face falls along its length, the second steeper, so the transfer is the
+## gate to the fast half. Both steeper than the long bank's 7: a route of 120 m rather than
+## 145 has less run to build speed in, and at 7 and 9 the bot finished at 11 m/s.
+const TRANSFER_PITCHES := [10.0, 12.0]
+
+## Each face: across, thick, along.
+const TRANSFER_FACES := [Vector3(20.0, 1.0, 70.0), Vector3(20.0, 1.0, 90.0)]
+
+## Where the second face's near edge is along Z: a third of the way down the first.
+const TRANSFER_SECOND_NEAR_Z := -24.0
+
+## The clear gap across X between the first face's low lip and the second's, and how far
+## the second's lip is under the first's at the second's near edge. A rider off the
+## first lip is falling steeply: a lip at the same height would be one they pass under.
+const TRANSFER_GAP := 2.0
+const TRANSFER_DROP := 4.0
+
+## Where the suite's bot lets go of the first face: this far into the second face's length.
+const TRANSFER_AT := 10.0
+
+## The pad, the long bank's: stepping off its front edge lands a rider on the first face.
+const TRANSFER_PAD := Vector3(8.0, 1.0, 10.0)
+
+## The finish pad, past the second face's far end and under its riding line.
+const TRANSFER_FINISH_DROP := 4.0
+const TRANSFER_FINISH_GAP := 4.0
+const TRANSFER_FINISH := Vector3(18.0, 1.0, 60.0)
+
+## How far before the second face's far edge the finish begins.
+const TRANSFER_FINISH_LINE := 4.0
+
+## Where along the second face its split is, as a fraction of its length. The first
+## split is the gap between the lips.
+const TRANSFER_SECOND_SPLIT := 0.5
+
+
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
 
@@ -301,6 +372,7 @@ func _build() -> void:
 	_build_the_plunge()
 	_build_the_cascade()
 	_build_the_bank()
+	_build_the_transfer()
 
 
 ## Bonus 1. Built from its own constants, like the main run, and from the same
@@ -466,6 +538,125 @@ static func bank_finish() -> AABB:
 	)
 
 
+func _build_the_transfer() -> void:
+	PlaygroundGeometry.box(
+		self, transfer_pad().get_center(), TRANSFER_PAD, PlaygroundGeometry.COLOUR_START
+	)
+
+	for face in range(2):
+		var basis := transfer_basis(face)
+		var size: Vector3 = TRANSFER_FACES[face]
+		var centre := transfer_near_centre(face) + basis * Vector3(0.0, -size.y * 0.5, -size.z * 0.5)
+		PlaygroundGeometry.box(self, centre, size, PlaygroundGeometry.COLOUR_RAMP, basis)
+
+	PlaygroundGeometry.box(
+		self, transfer_finish().get_center(), TRANSFER_FINISH, PlaygroundGeometry.COLOUR_END
+	)
+
+
+## Which way [param face] leans: +1 for the first, whose high edge is +X (the right of a
+## rider facing -Z), and -1 for the second, whose high edge is -X — so the two face each
+## other across the gap.
+static func transfer_side(face: int) -> float:
+	return 1.0 if face == 0 else -1.0
+
+
+## [param face]'s orientation, built as [method bank_basis] is: rolled about its length so
+## the [method transfer_side] edge is the high one, then pitched down toward -Z. Local +Y
+## is the riding face's normal and local -Z runs down it.
+static func transfer_basis(face: int) -> Basis:
+	return (
+		Basis(Vector3.RIGHT, -deg_to_rad(float(TRANSFER_PITCHES[face])))
+		* Basis(Vector3.BACK, transfer_side(face) * deg_to_rad(TRANSFER_ROLL))
+	)
+
+
+static func transfer_normal(face: int) -> Vector3:
+	return transfer_basis(face) * Vector3.UP
+
+
+## Half a face's width, across X, as built.
+static func _transfer_half_x() -> float:
+	return cos(deg_to_rad(TRANSFER_ROLL)) * TRANSFER_FACES[0].x * 0.5
+
+
+## The X of [param face]'s low lip: the first's is on its -X side and the second's on +X,
+## [constant TRANSFER_GAP] apart.
+static func transfer_lip_x(face: int) -> float:
+	var first_lip := TRANSFER_LINE_X + 1.0 - _transfer_half_x()
+	return first_lip if face == 0 else first_lip - TRANSFER_GAP
+
+
+## The riding line on [param face]: a metre down it from its middle.
+static func transfer_line_x(face: int) -> float:
+	return TRANSFER_LINE_X if face == 0 else transfer_lip_x(1) - _transfer_half_x() + 1.0
+
+
+## The middle of [param face]'s near edge on its top surface. The second's is placed from
+## the first: its low lip [constant TRANSFER_DROP] under the first's, at its near edge.
+static func transfer_near_centre(face: int) -> Vector3:
+	var first := Vector3(TRANSFER_LINE_X + 1.0, START_Y - 3.0, TRANSFER_NEAR_Z)
+	if face == 0:
+		return first
+	var z := TRANSFER_SECOND_NEAR_Z
+	var lip_y := _face_surface_y(transfer_basis(0), first, transfer_lip_x(0), z) - TRANSFER_DROP
+	var x := transfer_lip_x(1) - _transfer_half_x()
+	var n := transfer_normal(1)
+	# On the second face at its near edge: y(lip) = p.y - n.x * (lip - p.x) / n.y.
+	return Vector3(x, lip_y + n.x * (transfer_lip_x(1) - x) / n.y, z)
+
+
+## Height of [param face]'s riding surface at ([param x], [param z]).
+static func transfer_surface_y(face: int, x: float, z: float) -> float:
+	return _face_surface_y(transfer_basis(face), transfer_near_centre(face), x, z)
+
+
+## Z of [param face]'s far edge, at its middle.
+static func transfer_far_z(face: int) -> float:
+	var length: float = TRANSFER_FACES[face].z
+	return transfer_near_centre(face).z + (transfer_basis(face) * Vector3(0.0, 0.0, -length)).z
+
+
+## [param face]'s four top corners: near, near, far, far. Which of each pair is the high
+## one is not the same index on both faces.
+static func transfer_corners(face: int) -> Array[Vector3]:
+	var basis := transfer_basis(face)
+	var p := transfer_near_centre(face)
+	var size: Vector3 = TRANSFER_FACES[face]
+	var along := basis * Vector3(0.0, 0.0, -size.z)
+	var across := basis * Vector3(size.x * 0.5, 0.0, 0.0)
+	return [p - across, p + across, p - across + along, p + across + along]
+
+
+static func transfer_pad() -> AABB:
+	return standable(
+		Vector3(
+			TRANSFER_LINE_X, START_Y - TRANSFER_PAD.y * 0.5,
+			TRANSFER_NEAR_Z + 0.5 + TRANSFER_PAD.z * 0.5
+		),
+		TRANSFER_PAD
+	)
+
+
+static func transfer_finish() -> AABB:
+	var far_z := transfer_far_z(1)
+	var line := transfer_line_x(1)
+	var top := transfer_surface_y(1, line, far_z) - TRANSFER_FINISH_DROP
+	return standable(
+		Vector3(
+			line,
+			top - TRANSFER_FINISH.y * 0.5,
+			far_z - TRANSFER_FINISH_GAP - TRANSFER_FINISH.z * 0.5
+		),
+		TRANSFER_FINISH
+	)
+
+
+static func _face_surface_y(basis: Basis, p: Vector3, x: float, z: float) -> float:
+	var n := basis * Vector3.UP
+	return p.y - (n.x * (x - p.x) + n.z * (z - p.z)) / n.y
+
+
 ## Every start pad's backstop — the main run's, the plunge's and the cascade's — as a
 ## box: a 4 m wall behind the back edge, 3 m above the pad, so a player who walks
 ## backwards does not fall off the map before starting.
@@ -484,6 +675,10 @@ static func backstops() -> Array[AABB]:
 		standable(
 			Vector3(BANK_PAD_X, START_Y + 1.0, bank_pad().end.z + 0.5),
 			Vector3(BANK_PAD.x, 4.0, 1.0)
+		),
+		standable(
+			Vector3(TRANSFER_LINE_X, START_Y + 1.0, transfer_pad().end.z + 0.5),
+			Vector3(TRANSFER_PAD.x, 4.0, 1.0)
 		),
 	]
 
@@ -517,6 +712,22 @@ func survey_declared() -> Array:
 		"box": AABB(Vector3(finish.position.x, finish.end.y - 0.5, finish.position.z),
 			Vector3(finish.size.x, 1.0, finish.size.z)),
 		"why": "the long bank's finish, reached with the bank's speed, which the survey does not carry",
+	})
+
+	# The transfer: each face's high edge, for the long bank's reason, and its finish.
+	for face in range(2):
+		var c := transfer_corners(face)
+		var high_near: Vector3 = c[0] if c[0].y > c[1].y else c[1]
+		var high_far: Vector3 = c[2] if c[2].y > c[3].y else c[3]
+		out.append({
+			"box": AABB(high_near, Vector3.ZERO).expand(high_far).grow(1.5),
+			"why": "a transfer face's high edge, the slab's end face over a face nobody stands on",
+		})
+	var transfer_end := transfer_finish()
+	out.append({
+		"box": AABB(Vector3(transfer_end.position.x, transfer_end.end.y - 0.5, transfer_end.position.z),
+			Vector3(transfer_end.size.x, 1.0, transfer_end.size.z)),
+		"why": "the transfer's finish, reached with the second face's speed",
 	})
 	return out
 
@@ -656,6 +867,7 @@ static func build_zones() -> DotTimerZoneSet:
 	_add_plunge_zones(zones)
 	_add_the_cascade(zones)
 	_add_the_bank(zones)
+	_add_the_transfer(zones)
 
 	return zones
 
@@ -856,5 +1068,88 @@ static func _add_the_bank(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(low.x - 30.0, bottom - 11.0, finish_pad.position.z - 10.0),
 		Vector3(high.x + 20.0, bottom - 3.0, pad.end.z + 10.0)
+	)
+	zones.add(reset)
+
+
+## Bonus 4's zones: a spawn and a start on the pad, a split across the whole gap between
+## the faces (crossing it IS the transfer) and one across the second face, a finish over the
+## finish pad, and a reset under all of it and wide of both low lips.
+static func _add_the_transfer(zones: DotTimerZoneSet) -> void:
+	var track := TRANSFER_TRACK
+	var pad := transfer_pad()
+
+	var low := transfer_corners(0)[0]
+	var high := low
+	for face in range(2):
+		for corner in transfer_corners(face):
+			low = low.min(corner)
+			high = high.max(corner)
+
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(TRANSFER_LINE_X, pad.end.y + 1.0, pad.position.z + 2.0)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	# Split 1 fills the gap between the two low lips, from the second face's near edge to
+	# the first's far one, and from under both to far over both: nobody reaches the second
+	# face without crossing it.
+	var second_near := transfer_near_centre(1).z
+	var gap_split := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+	gap_split.number = 1.0
+	gap_split.set_box(
+		Vector3(transfer_lip_x(1) + 0.2, low.y - 6.0, transfer_far_z(0)),
+		Vector3(transfer_lip_x(0) - 0.2, high.y + 6.0, second_near)
+	)
+	zones.add(gap_split)
+
+	var z := second_near + (transfer_far_z(1) - second_near) * TRANSFER_SECOND_SPLIT
+	var side := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+	side.number = 2.0
+	var y_a := transfer_surface_y(1, low.x, z)
+	var y_b := transfer_surface_y(1, high.x, z)
+	side.set_box(
+		Vector3(low.x - 4.0, minf(y_a, y_b) - 6.0, z - 1.5),
+		Vector3(high.x + 4.0, maxf(y_a, y_b) + 6.0, z + 1.5)
+	)
+	zones.add(side)
+
+	# The finish is the last few metres of the second face as well as the pad and the air
+	# over it. [b]Not the pad alone, as the long bank's is[/b]: the motor stops a rider dead
+	# at a face's far edge, and a finish that waited for them to slide off it and fall onto
+	# the pad timed a second and more of standing still. Reaching the end of the face is
+	# finishing; the pad is where they come down.
+	var finish_pad := transfer_finish()
+	var c1 := transfer_corners(1)
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(
+			minf(finish_pad.position.x, minf(c1[2].x, c1[3].x)) - 1.0,
+			finish_pad.end.y - 0.5,
+			finish_pad.position.z
+		),
+		Vector3(
+			maxf(finish_pad.end.x, maxf(c1[2].x, c1[3].x)) + 1.0,
+			maxf(c1[2].y, c1[3].y) + 6.0,
+			transfer_far_z(1) + TRANSFER_FINISH_LINE
+		)
+	)
+	zones.add(finish)
+
+	# Thirty metres wide of either low lip: the first face's is on the left and the second's
+	# on the right, and a rider who lands the transfer holding the wrong way goes off the
+	# second one sideways.
+	var bottom := minf(low.y, finish_pad.position.y)
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(low.x - 30.0, bottom - 11.0, finish_pad.position.z - 10.0),
+		Vector3(high.x + 30.0, bottom - 3.0, pad.end.z + 10.0)
 	)
 	zones.add(reset)
