@@ -54,7 +54,7 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 282
+const CHECKS := 285
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -91,6 +91,8 @@ var _last_due_to_server: int = 0
 ## ones the loopback below does not deliver included. What "nobody else was told" is
 ## checked against: a message filtered out before delivery is still a message that was sent.
 var _server_events: Array[Dictionary] = []
+## Peers the server sent a voice frame to while recording.
+var _server_voice: Array = []
 var _recording := false
 var _snapshot_count: int = 0
 var _tick: int = 0
@@ -605,6 +607,8 @@ func _build() -> bool:
 func _on_server_send(method: StringName, peer_id: int, payload: PackedByteArray) -> void:
 	if _recording and method == &"event":
 		_server_events.append({"peer": peer_id, "payload": payload})
+	if _recording and method == &"voice":
+		_server_voice.append(peer_id)
 	if method == &"snapshot":
 		_snapshot_count += 1
 		if _drop_every > 0 and _snapshot_count % _drop_every == 0:
@@ -3040,6 +3044,28 @@ func _test_nothing_before_ready() -> void:
 		str(_event_kinds(CLIENT_PEER))
 	)
 
+	# Voice is the one send that is not an EVENT. The module adds a peer to the voice
+	# router at `client_spawn`, which is this add; somebody talking in the gap relayed to
+	# the joiner over the link before it had the node a frame lands on.
+	var services := PlaygroundServices.new()
+	services.name = "VoiceServices"
+	services.service_scope = &"server"
+	services.bridge = _server_bridge
+	services.punishments_path = NET_PUNISHMENTS
+	_server_bridge.get_parent().add_child(services)
+	var _up: DotResult = services.setup(null, _server_game, _server_bridge)
+	services.add_peer(CLIENT_PEER)
+	services.add_peer(late_peer)
+	_server_voice.clear()
+	var heard: DotResult = services.voice.relay(CLIENT_PEER, _voice_frame())
+	_check(
+		heard.ok and int(heard.value) == 1 and not _server_voice.has(late_peer)
+			and not _server_voice.has(0) and services.voice_held == 1,
+		"somebody talking is addressed to them and NOT sent over the link yet",
+		"%s, to: %s, held %d" % [str(heard.value) if heard.ok else str(heard.error),
+			_server_voice, services.voice_held]
+	)
+
 	_server_events.clear()
 	_server_bridge.link.deliver(&"request", late_peer, _request_bytes(PlaygroundEvents.Ask.READY))
 	await _steps(2)
@@ -3048,6 +3074,21 @@ func _test_nothing_before_ready() -> void:
 		theirs.has(PlaygroundEvents.Kind.HELLO) and theirs.has(PlaygroundEvents.Kind.JOIN),
 		"and READY is what tells them, their own JOIN included",
 		str(theirs)
+	)
+
+	_server_voice.clear()
+	heard = services.voice.relay(CLIENT_PEER, _voice_frame())
+	_check(
+		heard.ok and _server_voice == [late_peer] and services.voice_held == 1,
+		"and after READY they hear the next frame",
+		"to: %s, held %d" % [_server_voice, services.voice_held]
+	)
+	services.get_parent().remove_child(services)
+	services.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(NET_PUNISHMENTS))
+	_check(
+		not DotRegistry.has(DotModerationManager.MUTE_SERVICE),
+		"and the voice section's services leave no mute source behind"
 	)
 
 	_server_events.clear()
@@ -3061,6 +3102,15 @@ func _test_nothing_before_ready() -> void:
 	_recording = false
 	_server_events.clear()
 	_done()
+
+
+## One well-formed frame of this server's voice format, on the everybody channel.
+func _voice_frame() -> PackedByteArray:
+	var packet := DotVoicePacket.new()
+	packet.channel = DotVoiceRouter.Channel.ALL
+	packet.sample_count = PlaygroundServices.voice_config().frame_samples()
+	packet.payload.resize(packet.sample_count / 2)
+	return packet.to_bytes()
 
 
 ## A walk from pg_lobby's launch pad, holding forward on [param yaw] for [param limit]

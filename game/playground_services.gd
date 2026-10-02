@@ -264,9 +264,25 @@ func _send_chat(wire: Dictionary, recipients: PackedInt32Array) -> void:
 
 
 ## Voice rides the bridge's link rather than the bridge itself, which has no voice method.
+##
+## [b]To a READY peer only, like every other send.[/b] The module adds a peer to the voice
+## router at `client_spawn`, so a frame relayed in the window before its client has built
+## `Server/Playground` is addressed to it — and over a socket that is one "Failed to get
+## path from RPC" per frame for as long as anybody talks while somebody joins. The router
+## keeps the peer (it is a listener the moment it can hear); the link is what waits. A
+## dropped frame is speech the joiner was not there for, which is what it would be anyway.
+## `pg-rpc-before-scene`.
 func _send_voice(peer_id: int, payload: PackedByteArray) -> void:
-	if bridge != null and bridge.link != null:
-		bridge.link.send_voice(peer_id, payload)
+	if bridge == null or bridge.link == null:
+		return
+	if bridge.net != null and bridge.net.is_server and not bridge.peer_is_ready(peer_id):
+		voice_held += 1
+		return
+	bridge.link.send_voice(peer_id, payload)
+
+
+## Voice frames addressed to a peer that had not said READY, and so not sent.
+var voice_held: int = 0
 
 
 ## False: the backlog is sent by `PlaygroundModule._welcome`, once the bridge says the peer
