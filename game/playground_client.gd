@@ -523,11 +523,19 @@ func _net_physics(delta: float) -> void:
 	if sampler == null:
 		return
 
-	for _i in range(ticks):
+	# [b]Each pass is its own tick.[/b] `advance` has already moved the clock by all of
+	# them, so `input_tick()` is the LAST one on every pass: a frame worth two ticks sent
+	# the second twice and the first never, the server repeated a stale command for the
+	# one it never got, and the predictor's replay stopped at the hole and drew the player
+	# short of where they were -- after every hitch, and on every frame the display and
+	# the tick rate do not line up. Arithmetic here rather than a new dot-net call,
+	# because a pack has to run on whatever client shell the player already has.
+	for i in range(ticks):
 		if net.clock.is_synced():
+			var tick := net.clock.input_tick() - (ticks - 1 - i)
 			var command := sampler.sample(delta)
 			command.buttons |= _net_buttons
-			bridge.client_tick(net.clock.input_tick(), command)
+			bridge.client_tick(tick, command)
 
 			# The hands, from the same command the server will run. No authority: what it
 			# fires is drawn and heard here and decided there.
@@ -537,7 +545,7 @@ func _net_physics(delta: float) -> void:
 					PlaygroundZee.command_for(
 						command.buttons, command.yaw, command.pitch, PlaygroundZee.slot_of(rig)
 					),
-					net.clock.input_tick()
+					tick
 				)
 
 
