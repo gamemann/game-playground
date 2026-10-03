@@ -1,6 +1,7 @@
 extends Node3D
 
 const PlaygroundPaths := preload("playground_paths.gd")
+const PlaygroundZee := preload("playground_zee.gd")
 
 const PlaygroundConfig := preload("playground_config.gd")
 const PlaygroundEntity := preload("entities/playground_entity.gd")
@@ -264,6 +265,8 @@ func _ready() -> void:
 	add_child(world)
 
 	weapons = PlaygroundWeapons.built_in()
+	# zee-dot-weapons after the toys, so the menu's first weapons are still this game's own.
+	weapons.append_array(PlaygroundZee.defs())
 
 	_build_styles()
 	_build_leaderboards()
@@ -1267,15 +1270,61 @@ func spawn_player(id: StringName) -> void:
 			# Degrees out, for the same reason radians went in: `DotFpsState.yaw` is in
 			# degrees and `DotFpsController` converts at exactly this boundary too.
 			player.teleport(
-				choice.transform.origin,
+				_clear_of_players(choice.transform.origin, id),
 				rad_to_deg(choice.transform.basis.get_euler().y)
 			)
 			return
 
 	if map != null:
-		player.teleport(map.spawn_for(track), map.spawn_yaw_for(track))
+		player.teleport(_clear_of_players(map.spawn_for(track), id), map.spawn_yaw_for(track))
 	else:
-		player.teleport(Vector3(0.0, 2.0, 0.0), 0.0)
+		player.teleport(_clear_of_players(Vector3(0.0, 2.0, 0.0), id), 0.0)
+
+
+## How close two players may stand at a spawn, and how far one may be stepped aside.
+const SPAWN_SPACING := 1.5
+const SPAWN_RINGS := 2
+
+## [param at], or the nearest point on a ring round it that nobody else is standing on.
+##
+## [b]Every start here is a single point, and every player was put on it.[/b] Two people
+## joining the sandbox stood inside each other at (0, 1, 0), facing the same way, so each
+## one's first-person camera was inside the other's head: a connected client that drew
+## the other player perfectly showed a wall of their colour, and stepping off the spot was
+## the only way either found out anybody else was there. dot-spawn's occupancy does not
+## help with one site — it can only choose between sites. Two rings of eight at 1.5 m
+## stay on the smallest start pad (6 m), and a crowd past seventeen shares the centre
+## rather than being thrown off a course.
+func _clear_of_players(at: Vector3, id: StringName) -> Vector3:
+	for ring in range(SPAWN_RINGS + 1):
+		var steps := 1 if ring == 0 else 8
+
+		for step in range(steps):
+			var angle := TAU * float(step) / float(steps)
+			var spot := at + Vector3(cos(angle), 0.0, sin(angle)) * SPAWN_SPACING * ring
+
+			if not _someone_at(spot, id):
+				return spot
+
+	return at
+
+
+func _someone_at(spot: Vector3, id: StringName) -> bool:
+	for other_id: Variant in players:
+		if other_id == id:
+			continue
+
+		var other: PlaygroundPlayer = players[other_id]
+
+		if other == null or other.controller == null or other.controller.state == null:
+			continue
+
+		var there := other.controller.state.position
+		if Vector2(there.x - spot.x, there.z - spot.z).length() < SPAWN_SPACING * 0.9 \
+				and absf(there.y - spot.y) < 2.0:
+			return true
+
+	return false
 
 
 ## Puts a player on a style, both halves.

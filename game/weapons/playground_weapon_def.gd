@@ -58,7 +58,9 @@ func validate() -> DotResult:
 	if id == &"":
 		return DotResult.fail(DotError.CODE_INVALID, "A weapon needs an id.")
 
-	if script_path == "":
+	# A zee-dot-weapons entry has no script: dot-weapon's machinery is behind it, named by
+	# `meta.zee` (see PlaygroundZee).
+	if script_path == "" and not meta.has("zee"):
 		return DotResult.fail(
 			DotError.CODE_INVALID, "A weapon needs a script.", String(id)
 		)

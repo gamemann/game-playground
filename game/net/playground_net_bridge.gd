@@ -13,6 +13,7 @@ const PlaygroundPropNet := preload("playground_prop_net.gd")
 const PlaygroundRequest := preload("playground_request.gd")
 const PlaygroundSpawnables := preload("../playground_spawnables.gd")
 const PlaygroundVehicleNet := preload("playground_vehicle_net.gd")
+const PlaygroundZee := preload("../playground_zee.gd")
 
 ## Joins a [Playground] to a [DotNetManager]. The netcode seam, and the only file in
 ## this project that names both.
@@ -678,6 +679,22 @@ func _drive_tools(session_id: int, behaviour: PlaygroundPlayerNet) -> void:
 
 	var tool_id: StringName = _tool_of.get(session_id, &"phys")
 
+	# A zee weapon owns all three buttons while it is in hand, and the physics gun none of
+	# them: falling through to it would grab a crate with every shot.
+	var rig := player.zee_rig as ZeeWeaponRig
+	if rig != null and is_instance_valid(rig):
+		var command := PlaygroundZee.command_for(
+			buttons, behaviour.last_move.yaw, behaviour.last_move.pitch,
+			PlaygroundZee.slot_of(rig)
+		)
+		var outcome := rig.simulate_tick(command, game.current_tick())
+		var _moved := PlaygroundZee.shove_props(player, outcome, may_touch)
+
+		if shot_fn.is_valid():
+			for shot: DotShot in outcome.shots:
+				shot_fn.call(player.player_id, shot)
+		return
+
 	if tool_id == &"grav":
 		if primary_pressed:
 			player.grav_gun.punt(space, origin, aim, may_touch)
@@ -1071,6 +1088,15 @@ var charge_fn: Callable = Callable()
 ## then the only check.
 var may_charge_fn: Callable = Callable()
 
+## Handed every shot a zee weapon fires on this server, once the props it hit are shoved.
+##
+## [code](player_id: StringName, shot: DotShot) -> void[/code]
+##
+## The arena's dot-combat, set by the module while `pg_arena` is on. A callable for the
+## shop's reason: health is the arena layer's, which is the module's, and the bridge must
+## not know whether there is a fight. Unset, a shot moves props and hurts nobody.
+var shot_fn: Callable = Callable()
+
 
 ## Charge for something, or say why not. Success when nothing is charging.
 func _charge(id: StringName, thing_id: StringName) -> DotResult:
@@ -1176,6 +1202,20 @@ func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> voi
 			PlaygroundEvents.write_notice(session_id, paid.error.message))
 		return
 
+	# [b]A zee weapon is run HERE, and that is the difference.[/b] The toys are actuated by
+	# the client that holds them; a gun the server did not run is a client deciding what
+	# it hit. So the server holds a rig of its own, and `_drive_tools` ticks it.
+	var def := game.weapon_def(weapon_id)
+	if PlaygroundZee.is_zee(def):
+		player.phys_gun.release()
+		player.grav_gun.drop()
+		if PlaygroundZee.arm(
+			player, def, ZeeWeaponRig.Role.SERVER, true, game.tick_rate, game.current_tick()
+		) != null:
+			_tool_of[session_id] = weapon_id
+	else:
+		PlaygroundZee.disarm(player)
+
 	_broadcast(PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(session_id, weapon_id))
 
 
@@ -1192,6 +1232,7 @@ func _select_tool(session_id: int, id: StringName, tool_id: StringName) -> void:
 	if player != null:
 		player.phys_gun.release()
 		player.grav_gun.drop()
+		PlaygroundZee.disarm(player)
 
 	_tool_of[session_id] = tool_id
 	_broadcast(PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(session_id, tool_id))

@@ -54,13 +54,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 285
+const CHECKS := 289
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 30
+const SECTIONS := 31
 
 var _passed := 0
 var _failed := 0
@@ -155,6 +155,7 @@ func _run() -> void:
 		await _test_push_over_the_wire()
 		await _test_inventory_flood()
 		await _test_inventory_rejoin()
+		await _test_zee_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -3220,6 +3221,60 @@ func _test_push_over_the_wire() -> void:
 
 	theirs.teleport(home, home_yaw)
 	await _steps(48)
+	_done()
+
+
+## A zee-dot-weapons gun is run by the SERVER, from the buttons the client holds.
+##
+## [b]Unlike the toys, which a client actuates itself.[/b] A gun the server did not run is a
+## client deciding what it hit, so `_give_weapon` puts a deciding rig on the server's copy of
+## the player and `_drive_tools` ticks it. Armed by skipping that branch: the two firing
+## checks fail (0 uses in 256 ticks).
+func _test_zee_over_the_wire() -> void:
+	_section("a zee weapon is run by the server")
+
+	var theirs := _server_player()
+	_client_bridge.ask_weapon(&"zee_smg")
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(4)
+
+	var rig: Variant = theirs.zee_rig if theirs != null else null
+	_check(
+		rig is ZeeWeaponRig and (rig as ZeeWeaponRig).authority
+			and (rig as ZeeWeaponRig).role == ZeeWeaponRig.Role.SERVER,
+		"the server puts a deciding rig in the asker's hands"
+	)
+
+	# Arrays, because a lambda captures a scalar by value.
+	var uses: Array[int] = []
+	var resolved: Array[int] = []
+	_server_bridge.shot_fn = func(_id: StringName, _shot: DotShot) -> void: resolved.append(1)
+	if rig is ZeeWeaponRig:
+		(rig as ZeeWeaponRig).used.connect(
+			func(o: DotWeaponOutcome) -> void: uses.append(o.shots.size())
+		)
+
+	var fire := DotFpsCommand.new()
+	fire.set_button(DotFpsCommand.BUTTON_USER_0, true)
+	await _steps(256, fire)
+	await _steps(8)
+
+	_check(uses.size() > 1, "the server fires it from the buttons the client holds",
+		"%d uses in 256 ticks" % uses.size())
+	_check(resolved.size() >= uses.size() and resolved.size() > 0,
+		"and hands every shot to whatever resolves it", "%d shots" % resolved.size())
+
+	_client_bridge.ask_tool(&"phys")
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(4)
+	_check(theirs != null and theirs.zee_rig == null,
+		"the physics gun takes it back out of their hands on the server")
+
+	_server_bridge.shot_fn = Callable()
 	_done()
 
 

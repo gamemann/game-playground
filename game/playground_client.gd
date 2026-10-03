@@ -12,6 +12,8 @@ const PlaygroundSpawnMenu := preload("playground_spawn_menu.gd")
 const PlaygroundVoice := preload("client/playground_voice.gd")
 const PlaygroundWeapon := preload("weapons/playground_weapon.gd")
 const PlaygroundWeapons := preload("playground_weapons.gd")
+const PlaygroundZee := preload("playground_zee.gd")
+const PlaygroundWeaponDef := preload("weapons/playground_weapon_def.gd")
 
 ## Boots a playable playground: one local player, a camera, a HUD, a spawn menu and
 ## the keys.
@@ -42,6 +44,9 @@ const PlaygroundWeapons := preload("playground_weapons.gd")
 ## [/codeblock]
 
 const CHANNEL := "playground.client"
+
+## Where dot-server's client publishes its [DotClientLink] before a game scene loads.
+const LINK_SERVICE := &"dot_client_link"
 
 ## Ids the tools are addressed by, here and in [PlaygroundSpawnMenu].
 const TOOL_PHYS := &"phys"
@@ -142,6 +147,13 @@ var tool: StringName = TOOL_PHYS
 ## player's cooldown into another's hands the moment this becomes a server.
 var weapon: PlaygroundWeapon = null
 
+## The hands and the gun, under the first-person camera, while a zee weapon is in them.
+var zee_view: Node3D = null
+
+## Fire, alt and reload for a zee weapon offline, as command bits. A connected client sends
+## the same bits in [member _net_buttons] instead, and the server runs the shot.
+var _zee_buttons: int = 0
+
 ## Where the style key is in the list.
 var _style_index: int = 0
 
@@ -183,6 +195,21 @@ func _ready() -> void:
 	# believing it owned the world.
 	if config == null:
 		config = PlaygroundConfig.new()
+
+	# zee-dot-weapons' art is this game's copy of it, wherever this game is mounted.
+	PlaygroundZee.use_this_games_art()
+
+	# [b]Looked up when nobody handed it over, because in a delivered game nobody does.[/b]
+	# The shell sets [member link] on a BUILT-IN client scene, and this game has been a
+	# pack since 2026-09-23 — and `DotClientLink._on_load_game` instantiates a pack's
+	# client scene itself and sets nothing on it. So every connected client booted as the
+	# local sandbox: authoritative, a player of its own, connected to a server it never
+	# spoke to, and every person on the server alone in a private copy of the map. Every
+	# other game in the family reads the registry; this one only had the export. The
+	# export still wins, so two shells in one process keep their own links.
+	if link == null and not OS.get_cmdline_user_args().has("--offline"):
+		link = DotRegistry.get_node_service(LINK_SERVICE)
+
 	if link != null:
 		config.authoritative = false
 
@@ -501,6 +528,17 @@ func _net_physics(delta: float) -> void:
 			var command := sampler.sample(delta)
 			command.buttons |= _net_buttons
 			bridge.client_tick(net.clock.input_tick(), command)
+
+			# The hands, from the same command the server will run. No authority: what it
+			# fires is drawn and heard here and decided there.
+			var rig := _zee_rig()
+			if rig != null:
+				var _drawn := rig.simulate_tick(
+					PlaygroundZee.command_for(
+						command.buttons, command.yaw, command.pitch, PlaygroundZee.slot_of(rig)
+					),
+					net.clock.input_tick()
+				)
 
 
 func _build_view() -> void:
@@ -863,6 +901,8 @@ func _process(_delta: float) -> void:
 	if not player.is_inside_tree():
 		return
 
+	_present_zee()
+
 	# The camera follows the SIMULATED eye position rather than being parented to
 	# something the movement drives. Parenting works and hides a real difference: the
 	# simulation runs at a fixed tick and the camera is drawn every frame, so a
@@ -1092,6 +1132,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		_on_menu_key(key)
 		return
 
+	# R reloads while a gun is in hand, as it does in every shooter, and unfreezes
+	# everything otherwise. Held and read on both edges like a trigger.
+	if key.physical_keycode == KEY_R and _zee_rig() != null:
+		_set_reload(key.pressed)
+		return
+
 	if not key.is_pressed() or key.is_echo():
 		return
 
@@ -1301,7 +1347,16 @@ func _set_tool(id: StringName) -> void:
 		else:
 			bridge.ask_weapon(id)
 
-	if id != TOOL_PHYS and id != TOOL_GRAV:
+	_disarm_zee()
+
+	if PlaygroundZee.is_zee(playground.weapon_def(id)):
+		# A real gun: dot-weapon's machinery, drawn here and decided by the server when
+		# there is one. Asked for above like any weapon, so the shop still charges.
+		if not _arm_zee(playground.weapon_def(id)):
+			tool = TOOL_PHYS
+			if hud != null:
+				hud.notice("That weapon could not be armed.")
+	elif id != TOOL_PHYS and id != TOOL_GRAV:
 		# A weapon. Built from its definition, which loads its script by path — see
 		# PlaygroundWeapons for why a path and not a class.
 		var def := playground.weapon_def(id)
@@ -1333,6 +1388,10 @@ func _set_tool(id: StringName) -> void:
 func _tool_name() -> String:
 	if weapon != null and weapon.def != null:
 		return weapon.def.name_or_id()
+
+	var held := playground.weapon_def(tool) if playground != null else null
+	if held != null:
+		return held.name_or_id()
 
 	return PlaygroundSpawnMenu.name_of_tool(tool)
 
@@ -1368,6 +1427,10 @@ func _primary_down() -> void:
 		_net_buttons |= DotFpsCommand.BUTTON_USER_0
 		return
 
+	if _zee_rig() != null:
+		_zee_buttons |= DotFpsCommand.BUTTON_USER_0
+		return
+
 	if weapon != null:
 		_report(weapon.primary(
 			_space(), player.eye_position(), player.aim_direction()
@@ -1382,6 +1445,8 @@ func _primary_down() -> void:
 
 
 func _primary_up() -> void:
+	_zee_buttons &= ~DotFpsCommand.BUTTON_USER_0
+
 	if bridge != null:
 		_net_buttons &= ~DotFpsCommand.BUTTON_USER_0
 		return
@@ -1394,6 +1459,10 @@ func _primary_up() -> void:
 func _secondary_down() -> void:
 	if bridge != null:
 		_net_buttons |= DotFpsCommand.BUTTON_USER_1
+		return
+
+	if _zee_rig() != null:
+		_zee_buttons |= DotFpsCommand.BUTTON_USER_1
 		return
 
 	if weapon != null:
@@ -1424,6 +1493,8 @@ func _secondary_down() -> void:
 
 
 func _secondary_up() -> void:
+	_zee_buttons &= ~DotFpsCommand.BUTTON_USER_1
+
 	if bridge != null:
 		_net_buttons &= ~DotFpsCommand.BUTTON_USER_1
 		return
@@ -1521,6 +1592,18 @@ func _physics_process(delta: float) -> void:
 			_space(), player.eye_position(), player.aim_direction(), delta
 		)
 
+	# Offline the client IS the server: its rig has the authority and its shots shove.
+	var rig := _zee_rig()
+	if rig != null:
+		var state := player.controller.state
+		var outcome := rig.simulate_tick(
+			PlaygroundZee.command_for(
+				_zee_buttons, state.yaw, state.pitch, PlaygroundZee.slot_of(rig)
+			),
+			Engine.get_physics_frames()
+		)
+		var _moved := PlaygroundZee.shove_props(player, outcome, playground.may_touch_others())
+
 
 # --- Props -----------------------------------------------------------------
 
@@ -1584,8 +1667,12 @@ func _apply_server_tool(id: StringName) -> void:
 		weapon = null
 
 	tool = id
+	_disarm_zee()
 
-	if id != TOOL_PHYS and id != TOOL_GRAV:
+	if PlaygroundZee.is_zee(playground.weapon_def(id)):
+		if not _arm_zee(playground.weapon_def(id)):
+			tool = TOOL_PHYS
+	elif id != TOOL_PHYS and id != TOOL_GRAV:
 		var def := playground.weapon_def(id)
 		weapon = PlaygroundWeapons.make(def)
 
@@ -1826,3 +1913,79 @@ func _next_map() -> void:
 		return
 
 	await playground.change_map(next.id)
+
+
+# --- zee-dot-weapons --------------------------------------------------------
+
+## The rig in this client's own player's hands, or null.
+func _zee_rig() -> ZeeWeaponRig:
+	if player == null or not is_instance_valid(player):
+		return null
+	var rig: Variant = player.zee_rig
+	if rig is ZeeWeaponRig and is_instance_valid(rig):
+		return rig as ZeeWeaponRig
+	return null
+
+
+## Builds the hands under the camera and a rig to drive them.
+##
+## [b]The rig has the authority only offline.[/b] Connected, the server holds the rig that
+## decides (`PlaygroundNetBridge._give_weapon`) and this one is the gun that moves: a
+## player whose weapon never deploys, kicks or reloads cannot tell one that is ready from
+## one that is not.
+func _arm_zee(def: PlaygroundWeaponDef) -> bool:
+	if player == null or camera == null:
+		return false
+
+	zee_view = ZeeViewModel.new()
+	zee_view.name = "ZeeViewModel"
+	camera.add_child(zee_view)
+
+	var rig := PlaygroundZee.arm(
+		player, def, ZeeWeaponRig.Role.LOCAL, bridge == null,
+		playground.tick_rate, Engine.get_physics_frames(), zee_view
+	)
+
+	if rig == null:
+		_disarm_zee()
+		return false
+
+	return true
+
+
+func _disarm_zee() -> void:
+	if player != null and is_instance_valid(player):
+		PlaygroundZee.disarm(player)
+
+	if zee_view != null and is_instance_valid(zee_view):
+		zee_view.queue_free()
+	zee_view = null
+
+	_zee_buttons = 0
+	_net_buttons &= ~DotFpsCommand.BUTTON_USER_2
+
+
+func _set_reload(down: bool) -> void:
+	if down:
+		_zee_buttons |= DotFpsCommand.BUTTON_USER_2
+		_net_buttons |= DotFpsCommand.BUTTON_USER_2
+	else:
+		_zee_buttons &= ~DotFpsCommand.BUTTON_USER_2
+		_net_buttons &= ~DotFpsCommand.BUTTON_USER_2
+
+
+## Sway, bob and the hands hidden in third person, once a frame.
+func _present_zee() -> void:
+	var rig := _zee_rig()
+
+	if rig == null or zee_view == null:
+		return
+
+	zee_view.visible = player.view_mode() != &"tp"
+	var state := player.controller.state
+	rig.drive_view(Vector2.ZERO, player.speed(), state.is_grounded(), state.is_crouched())
+
+
+func _exit_tree() -> void:
+	# A static outlives the game: the next one the shell loads must not look for its art here.
+	PlaygroundZee.release_art()

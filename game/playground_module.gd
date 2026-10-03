@@ -522,6 +522,8 @@ func _build_extras() -> DotResult:
 	bridge.charge_fn = shop.charge
 	# Asked before a spawn, which is charged only once it exists. See _spawn_for.
 	bridge.may_charge_fn = shop.may_have
+	# A zee weapon's shot reaches dot-combat through this and nothing else.
+	bridge.shot_fn = _resolve_shot
 
 	spectate = PlaygroundSpectate.new()
 	spectate.name = "Spectate"
@@ -2108,3 +2110,18 @@ func _refuse_peer(peer_id: int, error: DotError) -> void:
 	var session: DotClientSession = server.session_of(peer_id) if server != null else null
 	if session != null:
 		server.kick(session, error.message, error)
+
+
+## One zee weapon's shot, on this server. Hurts only while the arena is on.
+##
+## [b]Asked per shot rather than wired when the arena turns on[/b], because `pg_arena` is a
+## cvar flipped at runtime and a callable set at the switch is one more thing the switch
+## has to remember to unset. Off, the shot has already shoved whatever prop it hit and
+## that is all a gun does in a sandbox.
+func _resolve_shot(player_id: StringName, shot: DotShot) -> void:
+	if arena == null or not arena.enabled or arena.combat == null:
+		return
+
+	shot.attacker = arena.entity_id_of(player_id)
+	shot.tick = game.current_tick()
+	var _resolved := arena.combat.resolve_shot(shot)

@@ -61,6 +61,7 @@ game/
   playground_spawnables.gd  the catalogue, and what "kind" a definition is
   playground_prop.gd     one prop, built from its DotPropDef. One scene, fourteen props
   playground_weapons.gd  the arsenal, and how a script becomes a weapon
+  playground_zee.gd      zee-dot-weapons beside the toys: defs, a rig per player, shots that shove
   entities/
     playground_entity.gd   a prop with a script, ticked by the simulation
     npc_*.gd               the shipped NPCs. `extends` a PATH, deliberately
@@ -1185,10 +1186,10 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 545 checks, 30 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 562 checks, 31 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 285 checks, 30 sections
+godot --headless --path . res://examples/headless_net.tscn          # 289 checks, 31 sections
 godot --headless --path . res://examples/dedicated.tscn             # 224 checks, 25 sections
 ```
 
@@ -1660,6 +1661,28 @@ And a remote body kept whatever way it faced when built, because `drive_characte
 `headless_net`'s **this client predicts its own player, and nobody else** is the section that sees it: the local mirror owned by the local peer and the one entity in `predicted()`; a second player, on a peer with no client here, mirrored as the server's and not predicted; a key moving the player — state and node — on the tick it is pressed with no server tick and no snapshot in between, while the server has not moved; key to motion over the link at zero ticks; a teleport only the server made (3 m) corrected by the predictor and converged to within 5 cm, in the state and on the node; and both arrival orders — a mirror handed back to the server and claimed again by HELLO, and a mirror forgotten and rebuilt owned by a JOIN after HELLO. Armed four ways: the old code (ten fail), the claim alone removed (nine), the owned JOIN alone removed (one, the HELLO-first rebuild), and predicting everybody (four: the second player, the count, and the remote body's even step and facing in "somebody else has a body", which a client simulating somebody it has no keys for spoils). Every other section still passes with the local player predicted — the vehicle ride included, whose `riding` branches in `PlaygroundPlayerNet` were written for a predicted entity and had never had one.
 
 **For the deployed game:** nothing on the wire and no `@rpc` set changed, and no `class_name` was added, so the client shell does not need a rebuild; the playground pack needs republishing from dot-server-deploy for clients to get it. A shell whose dot-player-controller predates `render_state` supporting `Drive.EXTERNAL` gets the raw tick state back from it — the stepping above, not a lurch.
+
+## A connected client was alone in a copy of the map (2026-10-03)
+
+**Until 2026-10-03 nobody on a delivered playground server could see anybody else, because every client was playing offline.** `PlaygroundClient` became networked by having its `link` export set, and the shell sets it only on a BUILT-IN client scene (`client/shell.gd`). Since the game became a pack (2026-09-23) its scene has been instantiated by `DotClientLink._on_load_game`, which sets nothing on it, so every client connected, downloaded, mounted, and then booted `authoritative=true` with a local player of its own. The server had both players and nobody had the server. Every other game reads `DotRegistry.get_node_service(&"dot_client_link")`; this one now does too when the export is unset (the export still wins, so two shells in one process keep their own links, and `--offline` skips the lookup). It went unnoticed because every suite here builds the bridge by hand or sets `link` itself, and `tools/screenshot_net.sh` is a one-process rig with no shell in it. **It was found by running the real thing**: `./server --game playground --content-url <local dist>` and two `client/shell.tscn -- --connect` processes under one Xvfb display, read with `playground starting authoritative=…` in each client's log. Without `--content-url` a local client fetches the PRODUCTION pack from the content origin, whatever `dist/` says, which is how the first fixed run still showed the bug.
+
+**And with that fixed, both stood inside each other.** Every start here is one point, and `Playground.spawn_player` put every player on it: two people joining the lobby both stood at (0, 1, 0) facing the same way, so each first-person camera was inside the other's head and the screen was a wall of the other player's colour. dot-spawn's occupancy only chooses between sites. `_clear_of_players` steps a spawn to the nearest free point on two rings of eight at `SPAWN_SPACING` (1.5 m), which stays on the smallest start pad; past seventeen people the centre is shared rather than anybody being thrown off a course. Rendered after both fixes: the second player 1.5 m beside the first, and drawn in front of them once the first stepped back.
+
+## zee-dot-weapons, beside the toys (2026-10-03)
+
+Twenty-seven real weapons in the Q menu's Weapons tab, after the launcher, remover and impulse gun, under five categories taken from the pack's slots (melee, sidearms, primaries, heavy, thrown). `PlaygroundZee.defs()` maps the pack's catalogue to `PlaygroundWeaponDef`s with `meta.zee` and no script, ids prefixed `zee_` because both lists have a `launcher`, so the menu, the shop (350 credits, like every weapon) and the arena's loadout see one list. `addons/dot_weapon` and `addons/zee_weapons` are linked and in `.gitignore`; the CC0 art is vendored in `assets/{blaster-kit,melee,arms}` as mg-smash-copter does.
+
+**A zee weapon is not a SWEP and is not wrapped as one.** A toy is a prop tool the holder runs. A zee gun is dot-weapon's: held buttons per tick, its own cadence, reload and ammunition, and shots the game resolves. So `_give_weapon` puts a SERVER rig with the authority on the server's copy of the player, and `_drive_tools` ticks it from the same USER_0/1/2 bits the tools ride (fire, bash, reload), and returns before the physics gun sees them. The client builds a `ZeeViewModel` under its first-person camera and a LOCAL rig: no authority when connected (the gun that moves), the authority offline (the client is the server). R reloads while a zee gun is in hand and unfreezes everything otherwise. The hands are hidden in third person.
+
+**A shot hurts only while `pg_arena` is on.** Off, it shoves the prop it hits (`PlaygroundZee.shove_props`, through the gravity gun's own ray and `may_act_on`, so a shot moves exactly what a punt could). On, the module's `_resolve_shot` hands it to the arena's dot-combat through `PlaygroundNetBridge.shot_fn`, asked per shot because `pg_arena` flips at runtime.
+
+**`PlaygroundPlayer.component()` is load-bearing.** dot-weapon's player bridge takes a shot's origin and aim from a controller found through it, and without it every shot leaves the feet pointing north, fires, costs ammunition and hits nothing: mg-smash-copter's twenty drawn rounds. `headless_playground`'s **zee-dot-weapons** asserts the shot leaves from the eye along the aim and shoves a crate; armed by renaming `component()`, three fail (1.63 m off, dot 0.000, the crate unmoved).
+
+**The art in a pack.** `ZeeWeaponArtTable` and `ZeeViewArms` name `res://assets/…`, and inside a mount that is the one place the art is not. zee-dot-weapons' `ZeeModelCache.set_asset_root()` (added for this) resolves those paths under a root; the client sets it to `PlaygroundPaths.root()` on `_ready` and back to `res://` on `_exit_tree`, because a static outlives the game in a shell that switches. Rendered in a real shell over a socket with the delivered pack: an SMG and the arms. **The client shell needs a rebuild with that zee-dot-weapons before this pack is published**, or the call names a method the shell's copy of the class does not have and the client script fails to compile.
+
+The suites: `headless_playground`'s section (twelve checks) and four in "the client boots" (hands under the camera, the authority offline, held fire firing through the client's own tick, the physics gun taking it back); `headless_net`'s **a zee weapon is run by the server** (a deciding rig on the asker, fired from the client's held buttons, every shot handed to `shot_fn`, taken away by the physics gun), armed by skipping the `_drive_tools` branch: 0 uses in 256 ticks.
+
+**Not here yet.** Nobody sees anybody else's gun: `ZeeWeaponNet.all_specs()` is not in `PlaygroundPlayerNet`, so there is no world model, muzzle flash or shot sound for a remote player (smash's `sc_player_net.gd` is the pattern). And the toys still never run on a server: `_drive_tools` knows only the two guns, so a connected player's launcher, remover and impulse gun send buttons the physics gun answers. That one is older than this.
 
 ## A broadcast reaches READY peers only (`[pg-rpc-before-scene]`, 2026-09-30)
 

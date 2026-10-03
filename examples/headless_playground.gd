@@ -16,6 +16,7 @@ const PgSurfIntro := preload("../maps/pg_surf_intro.gd")
 const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
 const PlaygroundWeaponDef := preload("../game/weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("../game/playground_weapons.gd")
+const PlaygroundZee := preload("../game/playground_zee.gd")
 
 ## Runs the whole playground: a bot surfs a map from start to finish, its run is
 ## timed and filed, props are spawned and moved, and the map is changed underneath.
@@ -48,13 +49,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 546
+const CHECKS := 562
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 30
+const SECTIONS := 31
 
 var _passed := 0
 var _failed := 0
@@ -105,6 +106,7 @@ func _run() -> void:
 	await _test_props_are_built_from_their_definitions()
 	await _test_entities_run_their_scripts()
 	await _test_weapons()
+	await _test_zee_weapons()
 	await _test_spawn_menu()
 	await _test_the_sandbox_and_its_course()
 	await _test_vehicles()
@@ -1879,6 +1881,99 @@ func _test_entities_run_their_scripts() -> void:
 	_done()
 
 
+## zee-dot-weapons: the pack in the menu, a server's rig firing from the eye, and a shot
+## that shoves a crate.
+##
+## [b]The aim is the check that matters.[/b] Without `PlaygroundPlayer.component()`
+## dot-weapon's bridge takes a shot from the body's transform, whose basis is identity here
+## — so every shot leaves northwards from the feet, fires, costs ammunition and hits
+## nothing, and every other number about it is right.
+func _test_zee_weapons() -> void:
+	_section("zee-dot-weapons")
+
+	var zee := PlaygroundZee.defs()
+
+	_check(zee.size() == ZeeWeaponIds.all().size(), "every weapon in the pack is offered",
+		"%d of %d" % [zee.size(), ZeeWeaponIds.all().size()])
+
+	var usable := 0
+	var offered := 0
+	for def in zee:
+		if def.validate().ok:
+			usable += 1
+		if playground.weapon_def(def.id) == def or playground.weapon_def(def.id) != null:
+			offered += 1
+	_check(usable == zee.size(), "each one a usable definition with no script")
+	_check(offered == zee.size(), "and each one in the game's own list, which the menu shows")
+	_check(
+		playground.weapon_def(&"launcher") != null
+			and not PlaygroundZee.is_zee(playground.weapon_def(&"launcher")),
+		"the pack's launcher does not take the toy launcher's id"
+	)
+	_check(
+		Array(PlaygroundWeapons.categories(playground.weapons)).has("sidearms"),
+		"the menu's categories come from the pack's slots"
+	)
+
+	var player: PlaygroundPlayer = playground.players[&"bot"]
+	playground.props.limits.spawn_interval = 0.0
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	player.teleport(Vector3(-60.0, 1.0, -60.0), 90.0)
+	await get_tree().physics_frame
+
+	var rig := PlaygroundZee.arm(
+		player, playground.weapon_def(&"zee_pistol"), ZeeWeaponRig.Role.SERVER, true,
+		playground.tick_rate, playground.current_tick()
+	)
+	_check(rig != null and player.zee_rig == rig, "a server's rig goes on the player")
+	_check(player.component(&"DotFpsController") == player.controller,
+		"and the player answers dot-weapon's controller lookup")
+
+	# A crate four metres along the way the player faces.
+	var eye := player.eye_position()
+	var aim := player.aim_direction()
+	var crate := playground.props.spawn(&"crate", &"bot", eye + aim * 4.0)
+	await get_tree().physics_frame
+
+	var shots: Array[DotShot] = []
+	var moved := 0
+	var state := player.controller.state
+
+	for i in range(200):
+		var held := DotFpsCommand.BUTTON_USER_0 if (i / 20) % 2 == 0 else 0
+		var outcome := rig.simulate_tick(
+			PlaygroundZee.command_for(held, state.yaw, state.pitch, PlaygroundZee.slot_of(rig)),
+			playground.current_tick() + i
+		) if rig != null else null
+		if outcome != null:
+			shots.append_array(outcome.shots)
+			moved += PlaygroundZee.shove_props(player, outcome, true)
+		if moved > 0:
+			break
+
+	_check(not shots.is_empty(), "it fires", "%d shots" % shots.size())
+
+	if not shots.is_empty():
+		var first := shots[0]
+		_check(first.origin.distance_to(eye) < 0.5, "from the eye, not the feet",
+			"%.2f m off" % first.origin.distance_to(eye))
+		_check(first.direction.normalized().dot(aim) > 0.98, "the way the player is facing",
+			"dot %.3f" % first.direction.normalized().dot(aim))
+
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+
+	_check(moved > 0 and crate != null and crate.body().linear_velocity.dot(aim) > 0.5,
+		"and with the arena off it shoves the crate it hits, away from the shooter",
+		"%.2f m/s along the aim" % (crate.body().linear_velocity.dot(aim) if crate != null else 0.0))
+
+	PlaygroundZee.disarm(player)
+	_check(player.zee_rig == null, "disarmed, the rig is gone")
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_done()
+
+
 ## Weapons: a script loaded by path, held rather than spawned.
 func _test_weapons() -> void:
 	_section("weapons")
@@ -1887,8 +1982,8 @@ func _test_weapons() -> void:
 
 	_check(defs.size() >= 3, "the build ships an arsenal", "%d" % defs.size())
 	_check(
-		playground.weapons.size() == defs.size(),
-		"and the game offers it"
+		playground.weapons.size() == defs.size() + PlaygroundZee.defs().size(),
+		"and the game offers it, with zee-dot-weapons after it"
 	)
 
 	for def in defs:
@@ -5453,6 +5548,40 @@ func _test_the_client_boots() -> void:
 			not client.presentation.fx.shake.active(),
 			"and a map change clears it, because the effects' world has gone"
 		)
+
+	# zee-dot-weapons, offline, through the client's own key handlers and its own tick.
+	client._set_tool(&"zee_smg")
+	await get_tree().process_frame
+
+	var hand_rig: Variant = client.player.zee_rig if client.player != null else null
+	_check(
+		hand_rig is ZeeWeaponRig and client.zee_view != null
+			and client.zee_view.get_parent() == client.camera,
+		"a zee weapon from the menu puts hands under the camera"
+	)
+	_check(
+		hand_rig is ZeeWeaponRig and (hand_rig as ZeeWeaponRig).authority,
+		"and offline the client's rig is the one that decides"
+	)
+
+	# Counted through the signal into an Array: a lambda captures a scalar by value.
+	var uses: Array[int] = []
+	if hand_rig is ZeeWeaponRig:
+		(hand_rig as ZeeWeaponRig).used.connect(func(_o: DotWeaponOutcome) -> void: uses.append(1))
+
+	client._primary_down()
+	for _i in range(120):
+		await get_tree().physics_frame
+	client._primary_up()
+
+	_check(uses.size() > 1, "held fire through the client's own tick fires it, again and again",
+		"%d uses in 120 ticks" % uses.size())
+
+	client._set_tool(&"phys")
+	_check(
+		client.player.zee_rig == null and client.zee_view == null,
+		"and the physics gun takes it back out of their hands"
+	)
 
 	client.queue_free()
 

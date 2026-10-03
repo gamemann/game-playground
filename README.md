@@ -65,7 +65,7 @@ godot --path .
 | --- | --- |
 | **Props** | Fourteen, in three categories. Planks, panels, beams and pillars to build with; crates and barrels; balls from a 2 kg beach ball to a 900 kg boulder |
 | **Entities** | Four NPCs with scripts: one wanders, one chases you, one hops, one spins and shoves whatever comes near. They are props too, so you can pick one up with the physics gun and punt it |
-| **Weapons** | A launcher that fires whatever you have armed, a remover, and an impulse gun that shoves everything nearby |
+| **Weapons** | A launcher that fires whatever you have armed, a remover, and an impulse gun that shoves everything nearby — plus the twenty-seven weapons of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), from fists to a minigun. With the arena off a shot shoves the prop it hits; with `pg_arena 1` it hurts. **R** reloads while one is in hand |
 
 Entities and weapons are **scripts named by path in the catalogue**, which is what lets a downloaded content pack ship its own, because a mounted `.pck` cannot use `class_name`. See [`CLAUDE.md`](CLAUDE.md).
 

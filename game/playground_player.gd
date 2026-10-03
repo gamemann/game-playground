@@ -82,6 +82,10 @@ var timer_style: DotTimerStyle = null
 var phys_gun: DotPhysGun = null
 var grav_gun: DotGravGun = null
 
+## The zee-dot-weapons rig in this player's hands, or null. Put here and taken away by
+## PlaygroundZee, never built by the player: most players hold a physics gun.
+var zee_rig: Node = null
+
 ## Whether this player is in a vehicle, and so is not walking.
 ##
 ## [b]Read-only from outside: [method set_riding] is the switch.[/b] It exists as a flag
@@ -520,6 +524,25 @@ func render_eye_position() -> Vector3:
 
 func aim_direction() -> Vector3:
 	return DotFpsMotor.aim_for(controller.state.yaw, controller.state.pitch)
+
+
+## The duck-typed lookup dot-weapon's player bridge asks a carrier for.
+##
+## [b]Without it every shot leaves the body's origin pointing north.[/b]
+## `DotWeaponPlayerBridge` takes a shot's origin and aim from a controller it finds through
+## `component()`, and a player without the method falls back to the node's transform —
+## whose basis is identity here, because the yaw lives in the controller's state. Every
+## shot fires, costs ammunition and hits nothing; mg-smash-copter found it as twenty drawn
+## rounds in a row. `DotFpsController` as well as `DotPlayerController`, because the bridge
+## asks for the base and this player holds the first-person subclass.
+func component(type_name: StringName) -> Object:
+	match String(type_name):
+		"DotPlayerController", "DotFpsController":
+			return controller
+		"ZeeWeaponRig":
+			return zee_rig
+		_:
+			return null
 
 
 # --- The tick --------------------------------------------------------------
