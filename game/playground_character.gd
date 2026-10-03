@@ -109,6 +109,14 @@ func build_for(def: DotPlayerCharDef, colour: Color) -> void:
 		colour.lightened(0.5)
 	)
 
+	# Where a held weapon hangs: in front of the torso's right side, not its middle. The
+	# mount named the torso until zee-dot-weapons' world model arrived, and a rifle hung at
+	# the torso's centre is a rifle inside a capsule with two pixels of barrel showing.
+	var hand := Node3D.new()
+	hand.name = "RightHand"
+	hand.position = Vector3(radius * 0.75, legs_height + torso_height * 0.55, -radius * 0.85)
+	_parts.add_child(hand)
+
 	_legs_height = legs_height
 	_leg_radius = radius * 0.85
 	_apply_pose()
@@ -214,7 +222,7 @@ func _model_def(char_def: DotPlayerCharDef) -> DotPlayerModelDef:
 	def.id = char_def.id
 	def.display_name = char_def.display_name
 	def.rig_scene = ""
-	def.mounts = {"head": "Head", "torso": "Torso", "right_hand": "Torso"}
+	def.mounts = {"head": "Head", "torso": "Torso", "right_hand": "RightHand"}
 	def.weapon_mount = &"right_hand"
 	def.eye_mount = &"Head"
 	return def

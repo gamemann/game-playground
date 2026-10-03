@@ -15,6 +15,7 @@ const PlaygroundVote := preload("../game/playground_vote.gd")
 const PlaygroundHud := preload("../game/playground_hud.gd")
 const PlaygroundModTools := preload("../game/playground_mod_tools.gd")
 const PlaygroundPlayerNet := preload("../game/net/playground_player_net.gd")
+const PlaygroundZee := preload("../game/playground_zee.gd")
 const PlaygroundClient := preload("../game/playground_client.gd")
 const PlaygroundCharacter := preload("../game/playground_character.gd")
 const PlaygroundInventory := preload("../game/playground_inventory.gd")
@@ -54,7 +55,7 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 289
+const CHECKS := 294
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -3256,15 +3257,63 @@ func _test_zee_over_the_wire() -> void:
 			func(o: DotWeaponOutcome) -> void: uses.append(o.shots.size())
 		)
 
+	# What a client draws of it: the server's WEAPON event puts the SMG on the body, and the
+	# fire counter crosses in the snapshot. Armed: without the bridge's `show_held` the first
+	# fails; without the specs in `PlaygroundPlayerNet` the counter check does.
+	var mirror := _client_player()
+	var drawn: Variant = mirror.zee_world if mirror != null else null
+	_check(
+		drawn is ZeeWorldModel and (drawn as ZeeWorldModel).equipped() == &"smg",
+		"a client draws the SMG in that player's hands",
+		str((drawn as ZeeWorldModel).equipped()) if drawn is ZeeWorldModel else "nothing"
+	)
+
+	# Outside the body, not inside it. The mount named the torso until 2026-10-03, which hung
+	# every gun at the capsule's centre with two pixels of barrel showing (rendered with
+	# `tools/screenshot_net.sh --zee=rifle`). Armed: mounted on "Torso" this is 0.00 m.
+	var torso: Variant = mirror.character.rig.find_child("Torso", true, false) if mirror != null and mirror.character != null else null
+	var torso_radius := ((torso as MeshInstance3D).mesh as CapsuleMesh).radius if torso is MeshInstance3D else 0.0
+	var off_axis := -1.0
+	if drawn is ZeeWorldModel:
+		var at := (drawn as ZeeWorldModel).global_position - mirror.global_position
+		off_axis = Vector2(at.x, at.z).length()
+	_check(
+		torso_radius > 0.0 and off_axis > torso_radius,
+		"and holds it outside the body",
+		"%.2f m off the axis, torso radius %.2f" % [off_axis, torso_radius]
+	)
+
 	var fire := DotFpsCommand.new()
 	fire.set_button(DotFpsCommand.BUTTON_USER_0, true)
 	await _steps(256, fire)
 	await _steps(8)
 
+	var mirror_net: PlaygroundPlayerNet = _client_bridge._behaviours.get(SESSION)
+	_check(
+		mirror_net != null and mirror_net.net_fire_seq != 0 and mirror_net._seen_fire_seq == mirror_net.net_fire_seq,
+		"the client sees the fire counter move, and has acted on it",
+		"seq %d" % (mirror_net.net_fire_seq if mirror_net != null else -1)
+	)
+
 	_check(uses.size() > 1, "the server fires it from the buttons the client holds",
 		"%d uses in 256 ticks" % uses.size())
 	_check(resolved.size() >= uses.size() and resolved.size() > 0,
 		"and hands every shot to whatever resolves it", "%d shots" % resolved.size())
+
+	# Somebody arriving now was never sent the WEAPON event: READY replays what everybody
+	# holds. Armed: without the `_tool_of` loop in `_admit` this fails.
+	PlaygroundZee.show_held(mirror, null)
+	await get_tree().process_frame
+	_client_bridge.ask_ready()
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(4)
+	var replayed: Variant = mirror.zee_world if mirror != null else null
+	_check(
+		replayed is ZeeWorldModel and (replayed as ZeeWorldModel).equipped() == &"smg",
+		"a client that says READY again is told what everybody is holding"
+	)
 
 	_client_bridge.ask_tool(&"phys")
 	_exchange()
@@ -3273,6 +3322,8 @@ func _test_zee_over_the_wire() -> void:
 	await _steps(4)
 	_check(theirs != null and theirs.zee_rig == null,
 		"the physics gun takes it back out of their hands on the server")
+	_check(mirror != null and mirror.zee_world == null,
+		"and off the body the client draws")
 
 	_server_bridge.shot_fn = Callable()
 	_done()

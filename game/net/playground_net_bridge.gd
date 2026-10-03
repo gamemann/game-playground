@@ -846,6 +846,13 @@ func _admit(peer_id: int) -> void:
 	for other in _behaviours.keys():
 		_tell(peer_id, PlaygroundEvents.Kind.JOIN, _join_body(int(other)))
 
+	# What everybody is already holding. A WEAPON event is sent once, when it changes, so a
+	# joiner would otherwise see nobody's gun until its holder switched.
+	for other in _tool_of.keys():
+		_tell(peer_id, PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(
+			int(other), _tool_of[other]
+		))
+
 	# The time left now, rather than at the clock's next change — which on a quiet map is
 	# never, and a joiner would count down nothing until it came.
 	if clock_fn.is_valid():
@@ -1290,6 +1297,10 @@ func _on_event(message: DotNetMessage) -> void:
 		PlaygroundEvents.Kind.WEAPON:
 			var held := PlaygroundEvents.read_weapon(reader)
 			if bool(held["ok"]):
+				PlaygroundZee.show_held(
+					game.players.get(_player_key(int(held["player_id"]))),
+					game.weapon_def(held["weapon_id"] as StringName)
+				)
 				weapon_changed.emit(
 					int(held["player_id"]), held["weapon_id"] as StringName
 				)

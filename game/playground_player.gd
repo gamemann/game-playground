@@ -86,6 +86,10 @@ var grav_gun: DotGravGun = null
 ## PlaygroundZee, never built by the player: most players hold a physics gun.
 var zee_rig: Node = null
 
+## The zee weapon everybody else sees in this player's hands (a [ZeeWorldModel]), or null.
+## Built on a client from the server's WEAPON event by [method PlaygroundZee.show_held].
+var zee_world: Node3D = null
+
 ## Whether this player is in a vehicle, and so is not walking.
 ##
 ## [b]Read-only from outside: [method set_riding] is the switch.[/b] It exists as a flag

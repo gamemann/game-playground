@@ -1950,12 +1950,19 @@ func _arm_zee(def: PlaygroundWeaponDef) -> bool:
 		_disarm_zee()
 		return false
 
+	# Connected, the server's WEAPON event draws it (`PlaygroundNetBridge`); offline nobody
+	# sends one, and the gun still belongs in the hands a third-person camera shows.
+	if bridge == null:
+		PlaygroundZee.show_held(player, def)
+
 	return true
 
 
 func _disarm_zee() -> void:
 	if player != null and is_instance_valid(player):
 		PlaygroundZee.disarm(player)
+		if bridge == null:
+			PlaygroundZee.show_held(player, null)
 
 	if zee_view != null and is_instance_valid(zee_view):
 		zee_view.queue_free()

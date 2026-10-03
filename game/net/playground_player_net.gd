@@ -36,6 +36,22 @@ var net_blind: bool = false
 ## `PlaygroundPlayer.beacon`. Everybody's.
 var net_beacon: bool = false
 
+# --- A zee weapon, from `ZeeWeaponNet.all_specs()` ---
+#
+# Seven fields, because GDScript has no dynamic properties and the spec table names one
+# variable each. The magazine and the reserve are `owner_only`, as mg-smash-copter's are.
+
+var net_slot: int = 0
+var net_magazine: int = 0
+var net_reserve: int = 0
+var net_fire_seq: int = 0
+var net_fire_kind: int = 0
+var net_reloading: bool = false
+var net_switching: bool = false
+
+## The fire counter this watcher last acted on, so a wrap reads as uses.
+var _seen_fire_seq: int = 0
+
 ## Retained, not cleared: a player whose packet was lost keeps moving in a straight line
 ## rather than stopping dead. The controller says the same of its own command.
 var last_move: DotFpsCommand = DotFpsCommand.new()
@@ -68,6 +84,15 @@ func _register_net_vars() -> void:
 	# marked out of everybody else's world.
 	replicate(&"net_blind", DotNetVar.Type.BOOL).to_owner_only()
 	replicate(&"net_beacon", DotNetVar.Type.BOOL)
+
+	for spec in ZeeWeaponNet.all_specs():
+		var weapon := replicate(spec["property"], DotNetVar.Type[spec["type"]])
+		if int(spec["bits"]) > 0:
+			weapon.bits(int(spec["bits"]))
+		if bool(spec["interpolated"]):
+			weapon.interpolated()
+		if bool(spec["owner_only"]):
+			var _owner := weapon.to_owner_only()
 
 
 func _net_apply_input(input: DotNetInput, _tick: int) -> void:
@@ -109,6 +134,9 @@ func pull() -> void:
 		DotFpsNetSync.pull(player.controller.state, self)
 		net_blind = player.blinded
 		net_beacon = player.beacon
+		# A rig that has gone leaves the last values: the counter stops, so nothing fires.
+		if player.zee_rig != null:
+			ZeeWeaponNet.pull(player.zee_rig, self)
 
 
 ## The server's answer, adopted wholesale. On the owner it is the rewind half of
@@ -120,6 +148,7 @@ func _net_state_applied(tick: int) -> void:
 	DotFpsNetSync.push(self, player.controller.state)
 	player.blinded = net_blind
 	player.beacon = net_beacon
+	_apply_weapon()
 	# NOT the node, on a predicted entity: receive_snapshot calls this before the
 	# predictor reconciles, and reconcile's first act is to read the node as "what the
 	# client is showing". Moving it here makes the measured error the whole replay
@@ -140,3 +169,16 @@ func _net_interpolated(_tick: int) -> void:
 		return
 	DotFpsNetSync.push(self, player.controller.state)
 	player.global_position = player.controller.state.position
+
+
+## Somebody's zee weapon, as a watcher sees it: the world model kicks once per snapshot the
+## fire counter moved in, however many shots that was. A counter, not an event per shot,
+## for the reasons `ZeeWeaponNet.apply` gives.
+func _apply_weapon() -> void:
+	var held: Variant = player.zee_world
+	var model: ZeeWorldModel = null
+	if held is ZeeWorldModel and is_instance_valid(held):
+		model = held as ZeeWorldModel
+
+	var answer := ZeeWeaponNet.apply(self, model, _seen_fire_seq)
+	_seen_fire_seq = int(answer["seq"])

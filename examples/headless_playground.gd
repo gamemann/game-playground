@@ -49,7 +49,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 562
+const CHECKS := 563
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -5563,6 +5563,11 @@ func _test_the_client_boots() -> void:
 		hand_rig is ZeeWeaponRig and (hand_rig as ZeeWeaponRig).authority,
 		"and offline the client's rig is the one that decides"
 	)
+	var body_gun: Variant = client.player.zee_world if client.player != null else null
+	_check(
+		body_gun is ZeeWorldModel and (body_gun as ZeeWorldModel).equipped() == &"smg",
+		"and the body a third-person camera shows holds it too"
+	)
 
 	# Counted through the signal into an Array: a lambda captures a scalar by value.
 	var uses: Array[int] = []
@@ -5579,7 +5584,7 @@ func _test_the_client_boots() -> void:
 
 	client._set_tool(&"phys")
 	_check(
-		client.player.zee_rig == null and client.zee_view == null,
+		client.player.zee_rig == null and client.zee_view == null and client.player.zee_world == null,
 		"and the physics gun takes it back out of their hands"
 	)
 

@@ -1186,10 +1186,10 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 562 checks, 31 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 563 checks, 31 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 289 checks, 31 sections
+godot --headless --path . res://examples/headless_net.tscn          # 294 checks, 31 sections
 godot --headless --path . res://examples/dedicated.tscn             # 224 checks, 25 sections
 ```
 
@@ -1682,7 +1682,7 @@ Twenty-seven real weapons in the Q menu's Weapons tab, after the launcher, remov
 
 The suites: `headless_playground`'s section (twelve checks) and four in "the client boots" (hands under the camera, the authority offline, held fire firing through the client's own tick, the physics gun taking it back); `headless_net`'s **a zee weapon is run by the server** (a deciding rig on the asker, fired from the client's held buttons, every shot handed to `shot_fn`, taken away by the physics gun), armed by skipping the `_drive_tools` branch: 0 uses in 256 ticks.
 
-**Not here yet.** Nobody sees anybody else's gun: `ZeeWeaponNet.all_specs()` is not in `PlaygroundPlayerNet`, so there is no world model, muzzle flash or shot sound for a remote player (smash's `sc_player_net.gd` is the pattern). And the toys still never run on a server: `_drive_tools` knows only the two guns, so a connected player's launcher, remover and impulse gun send buttons the physics gun answers. That one is older than this.
+**Somebody else's gun (2026-10-03, nightly).** `PlaygroundPlayerNet` replicates `ZeeWeaponNet.all_specs()` (magazine and reserve owner-only, as smash's are), pulled from the rig on whichever end runs it, and `_apply_weapon` hands the counter to `ZeeWeaponNet.apply` with the player's `zee_world`. That is a `ZeeWorldModel` `PlaygroundZee.show_held` hangs on the character's `right_hand` mount, built on a client from the server's WEAPON event (the bridge's reader, before `weapon_changed`) and offline from `_arm_zee`/`_disarm_zee`; a joiner is sent everybody's current tool from `_tool_of` in `_admit`, because a WEAPON event is sent once. **The mount used to name the torso**, which hung every gun at the capsule's centre: `tools/screenshot_net.sh --zee=rifle` showed two pixels of barrel, and `PlaygroundCharacter` now builds a `RightHand` in front of the torso's right side (muzzle along the character's facing, measured). `headless_net`'s zee section asserts the SMG drawn on the client's mirror, outside the body, the counter crossing and acted on, a READY replaying it, and the physics gun taking it off the body; `headless_playground` asserts the offline body holds it. Each armed (no `show_held` in the bridge, no specs, no `_admit` loop, the torso mount, no offline call: one check fails each). **Still not here:** a muzzle flash and a shot sound (nothing in this game plays either for zee shots, its own included), and the toys never run on a server: `_drive_tools` knows only the two guns, so a connected player's launcher, remover and impulse gun send buttons the physics gun answers. That one is older than this.
 
 ## A broadcast reaches READY peers only (`[pg-rpc-before-scene]`, 2026-09-30)
 

@@ -229,6 +229,46 @@ static func shove_props(
 	return moved
 
 
+## What everybody else sees in [param player]'s hands: [param def]'s gun, or nothing.
+##
+## A [ZeeWorldModel] on the character's `right_hand` mount, built on a CLIENT from the
+## server's WEAPON event, so a remote player's gun is drawn, kicks when
+## [PlaygroundPlayerNet]'s fire counter moves, and goes when they put it away. Idempotent:
+## the same weapon twice keeps the model it has.
+static func show_held(player: Node, def: PlaygroundWeaponDef) -> void:
+	if player == null:
+		return
+
+	var held: Variant = player.get("zee_world")
+	var model: ZeeWorldModel = null
+	if held is ZeeWorldModel and is_instance_valid(held):
+		model = held as ZeeWorldModel
+
+	if not is_zee(def):
+		if model != null:
+			model.queue_free()
+		player.set("zee_world", null)
+		return
+
+	var id := zee_id(def)
+	if model != null and model.equipped() == id:
+		return
+
+	var art: Variant = ZeeWeaponArtTable.table().get(id)
+	if not (art is ZeeWeaponArt):
+		return
+
+	if model == null:
+		model = ZeeWorldModel.new()
+		model.name = "ZeeWorldModel"
+		if not model.attach_to(player.get("character")):
+			model.free()
+			return
+		player.set("zee_world", model)
+
+	var _equipped := model.equip(art as ZeeWeaponArt)
+
+
 ## Points zee's art at this game's copy of it: `res://assets/` built in, the mount in a pack.
 static func use_this_games_art() -> void:
 	ZeeModelCache.set_asset_root(PlaygroundPaths.root())

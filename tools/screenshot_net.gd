@@ -92,6 +92,11 @@ const WALK_IDLE := 96
 const WALK_RUN := 90
 
 
+## `--zee=<id>`: the other player is handed that zee weapon and holds fire, so the frames
+## show the gun a client draws in somebody else's hands (`PlaygroundZee.show_held`).
+var _zee: StringName = &""
+
+
 func _ready() -> void:
 	DotLog.set_level(DotLog.Level.ERROR)
 	Engine.max_fps = RENDER_FPS
@@ -111,6 +116,8 @@ func _run() -> void:
 			_interp = false
 		elif arg == "--walk":
 			_walk = true
+		elif arg.begins_with("--zee="):
+			_zee = StringName("zee_" + arg.substr(6))
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://screenshots"))
 	await _build()
@@ -333,6 +340,8 @@ func _drive_other() -> void:
 		bea.teleport(_home + Vector3(-SWING, 0.0, -AHEAD), -90.0)
 		_placed = true
 		_settle = 30
+		if _zee != &"":
+			_server_bridge._give_weapon(OTHER_SESSION, &"u%d" % OTHER_SESSION, _zee)
 
 	var offset := bea.controller.state.position.x - _home.x
 	if offset > SWING:
@@ -343,6 +352,8 @@ func _drive_other() -> void:
 	var run := DotFpsCommand.new()
 	run.move = Vector2(0.0, 1.0)
 	run.yaw = _heading
+	if _zee != &"":
+		run.set_button(DotFpsCommand.BUTTON_USER_0, true)
 	(bea.get_node("Net") as PlaygroundPlayerNet).last_move = run
 
 
