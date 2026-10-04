@@ -55,13 +55,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 294
+const CHECKS := 298
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 31
+const SECTIONS := 32
 
 var _passed := 0
 var _failed := 0
@@ -157,6 +157,7 @@ func _run() -> void:
 		await _test_inventory_flood()
 		await _test_inventory_rejoin()
 		await _test_zee_over_the_wire()
+		await _test_toys_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -3222,6 +3223,53 @@ func _test_push_over_the_wire() -> void:
 
 	theirs.teleport(home, home_yaw)
 	await _steps(48)
+	_done()
+
+
+## The toys are run by the SERVER too (`[game-playground-1]` part 2): a connected player's
+## launcher used to grab crates, because its buttons went to the physics gun.
+func _test_toys_over_the_wire() -> void:
+	_section("the toys are run by the server")
+
+	var theirs := _server_player()
+	var id: StringName = theirs.player_id if theirs != null else &""
+	_server_game.props.clear_player(id)
+	_client_bridge.ask_arm(&"crate")
+	_client_bridge.ask_weapon(&"launcher")
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(4)
+
+	var toy: Variant = _server_bridge._toy_of.get(SESSION)
+	_check(toy != null and str(toy.def.id) == "launcher" and toy.armed == &"crate",
+		"the server holds the asker's launcher, loaded with what they armed",
+		str(toy.describe()) if toy != null else "no toy")
+
+	var fire := DotFpsCommand.new()
+	fire.set_button(DotFpsCommand.BUTTON_USER_0, true)
+	var before := _server_game.props.player_count(id)
+	await _steps(2, fire)
+	await _steps(4)
+	_check(_server_game.props.player_count(id) == before + 1,
+		"one press of fire throws one crate, on the server",
+		"%d props before, %d after" % [before, _server_game.props.player_count(id)])
+
+	_client_bridge.ask_weapon(&"remover")
+	_exchange()
+	await _steps(4)
+	var alt := DotFpsCommand.new()
+	alt.set_button(DotFpsCommand.BUTTON_USER_1, true)
+	await _steps(2, alt)
+	await _steps(4)
+	_check(_server_game.props.player_count(id) == 0 and theirs.phys_gun.held == null,
+		"and the remover's alt clears what they made, with the physics gun never involved",
+		"%d left" % _server_game.props.player_count(id))
+
+	_client_bridge.ask_tool(&"phys")
+	_exchange()
+	await _steps(4)
+	_check(not _server_bridge._toy_of.has(SESSION), "a tool puts the toy away")
 	_done()
 
 

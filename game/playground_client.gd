@@ -1353,6 +1353,8 @@ func _set_tool(id: StringName) -> void:
 		if id == TOOL_PHYS or id == TOOL_GRAV:
 			bridge.ask_tool(id)
 		else:
+			# What it throws first, so the toy the server builds is already loaded.
+			bridge.ask_arm(selected_prop)
 			bridge.ask_weapon(id)
 
 	_disarm_zee()
@@ -1634,6 +1636,11 @@ func _spawn() -> void:
 
 func _on_prop_chosen(prop_id: StringName) -> void:
 	selected_prop = prop_id
+
+	# On a server the toy is the server's, so it has to be told; it keeps the choice for
+	# the next toy too.
+	if bridge != null:
+		bridge.ask_arm(prop_id)
 
 	# The weapon follows what the menu armed, which is what makes the launcher fire
 	# a beach ball or a boulder without a second list of ammunition.

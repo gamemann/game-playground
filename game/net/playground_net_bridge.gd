@@ -13,6 +13,8 @@ const PlaygroundPropNet := preload("playground_prop_net.gd")
 const PlaygroundRequest := preload("playground_request.gd")
 const PlaygroundSpawnables := preload("../playground_spawnables.gd")
 const PlaygroundVehicleNet := preload("playground_vehicle_net.gd")
+const PlaygroundWeapon := preload("../weapons/playground_weapon.gd")
+const PlaygroundWeapons := preload("../playground_weapons.gd")
 const PlaygroundZee := preload("../playground_zee.gd")
 
 ## Joins a [Playground] to a [DotNetManager]. The netcode seam, and the only file in
@@ -165,6 +167,11 @@ var _tool_of: Dictionary = {}
 ## grabbing every tick instead would re-target continuously and drag whatever the
 ## crosshair crossed.
 var _prev_buttons: Dictionary = {}
+
+## Session id -> the toy (launcher, remover, impulse gun) the server runs for that player,
+## and the prop each one has armed. See [method _give_weapon].
+var _toy_of: Dictionary = {}
+var _armed_of: Dictionary = {}
 var _player_of_peer: Dictionary = {}
 var _peer_of_player: Dictionary = {}
 var _ready_peers: Dictionary = {}
@@ -373,6 +380,8 @@ func remove_player(session_id: int) -> void:
 	_ready_peers.erase(peer_id)
 	_tool_of.erase(session_id)
 	_prev_buttons.erase(session_id)
+	_drop_toy(session_id)
+	_armed_of.erase(session_id)
 
 	# Released BEFORE the game is told: game.remove_player emits player_removed, which
 	# _on_player_removed answers by releasing the entity and broadcasting LEAVE.
@@ -695,6 +704,21 @@ func _drive_tools(session_id: int, behaviour: PlaygroundPlayerNet) -> void:
 				shot_fn.call(player.player_id, shot)
 		return
 
+	# [b]A toy is run here too, for the zee weapons' reason.[/b] Its buttons went to the
+	# physics gun, so a connected player holding the launcher grabbed crates with it: the
+	# toys only ever ran on the client that held them, which on a server is a client that
+	# decides what it spawned and removed. Pressed edges for primary and secondary, a tick
+	# every tick (a charge, a cooldown, a beam). A prop it spawns is charged like one from
+	# the menu, after the spawn, and taken back out if the purse refuses.
+	var toy: PlaygroundWeapon = _toy_of.get(session_id)
+	if toy != null:
+		if primary_pressed:
+			_toy_result(session_id, player.player_id, toy, toy.primary(space, origin, aim))
+		if secondary_pressed:
+			_toy_result(session_id, player.player_id, toy, toy.secondary(space, origin, aim))
+		toy.tick(space, origin, aim, delta)
+		return
+
 	if tool_id == &"grav":
 		if primary_pressed:
 			player.grav_gun.punt(space, origin, aim, may_touch)
@@ -958,6 +982,11 @@ func ask_weapon(weapon_id: StringName) -> void:
 	_ask(PlaygroundEvents.Ask.GIVE_WEAPON, PlaygroundEvents.write_id(weapon_id))
 
 
+## What the toy in hand should throw. See [constant PlaygroundEvents.Ask.ARM_PROP].
+func ask_arm(prop_id: StringName) -> void:
+	_ask(PlaygroundEvents.Ask.ARM_PROP, PlaygroundEvents.write_id(prop_id))
+
+
 func ask_tool(tool_id: StringName) -> void:
 	_ask(PlaygroundEvents.Ask.SELECT_TOOL, PlaygroundEvents.write_id(tool_id))
 
@@ -1031,6 +1060,13 @@ func _on_request(message: DotNetMessage) -> void:
 			_give_weapon(session_id, id, PlaygroundEvents.read_id(reader))
 		PlaygroundEvents.Ask.SELECT_TOOL:
 			_select_tool(session_id, id, PlaygroundEvents.read_id(reader))
+		PlaygroundEvents.Ask.ARM_PROP:
+			var prop_id := PlaygroundEvents.read_id(reader)
+			if game.props.catalogue != null and game.props.catalogue.get_prop(prop_id) != null:
+				_armed_of[session_id] = prop_id
+				var toy: PlaygroundWeapon = _toy_of.get(session_id)
+				if toy != null:
+					toy.armed = prop_id
 		PlaygroundEvents.Ask.UNDO:
 			game.props.undo(id)
 		PlaygroundEvents.Ask.CLEAR_MINE:
@@ -1213,6 +1249,7 @@ func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> voi
 	# the client that holds them; a gun the server did not run is a client deciding what
 	# it hit. So the server holds a rig of its own, and `_drive_tools` ticks it.
 	var def := game.weapon_def(weapon_id)
+	_drop_toy(session_id)
 	if PlaygroundZee.is_zee(def):
 		player.phys_gun.release()
 		player.grav_gun.drop()
@@ -1222,8 +1259,45 @@ func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> voi
 			_tool_of[session_id] = weapon_id
 	else:
 		PlaygroundZee.disarm(player)
+		var toy := PlaygroundWeapons.make(def)
+		if toy != null:
+			player.phys_gun.release()
+			player.grav_gun.drop()
+			toy.equip(game, def)
+			toy.wielder = id
+			toy.armed = _armed_of.get(session_id, &"")
+			_toy_of[session_id] = toy
+			_tool_of[session_id] = weapon_id
 
 	_broadcast(PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(session_id, weapon_id))
+
+
+func _drop_toy(session_id: int) -> void:
+	var toy: PlaygroundWeapon = _toy_of.get(session_id)
+	if toy != null:
+		toy.holster()
+	_toy_of.erase(session_id)
+
+
+## What a toy's button did: a prop it spawned is paid for, and a refusal with a reason is
+## told to the player, who otherwise pressed a button and saw nothing.
+func _toy_result(session_id: int, id: StringName, toy: PlaygroundWeapon, res: DotResult) -> void:
+	if res == null:
+		return
+	if not res.ok:
+		if res.error != null and res.error.message != "":
+			_tell(peer_for_player(session_id), PlaygroundEvents.Kind.NOTICE,
+				PlaygroundEvents.write_notice(session_id, res.error.message))
+		return
+	# The remover answers with a count, the launcher with what it spawned.
+	if not (res.value is DotPropInstance):
+		return
+	var spawned: DotPropInstance = res.value
+	var paid := _charge(id, spawned.def.id if spawned.def != null else toy.armed)
+	if not paid.ok:
+		game.props.remove(spawned.instance_id, DotPropSpawner.REASON_CLEANUP)
+		_tell(peer_for_player(session_id), PlaygroundEvents.Kind.NOTICE,
+			PlaygroundEvents.write_notice(session_id, paid.error.message))
 
 
 func _select_tool(session_id: int, id: StringName, tool_id: StringName) -> void:
@@ -1240,6 +1314,7 @@ func _select_tool(session_id: int, id: StringName, tool_id: StringName) -> void:
 		player.phys_gun.release()
 		player.grav_gun.drop()
 		PlaygroundZee.disarm(player)
+	_drop_toy(session_id)
 
 	_tool_of[session_id] = tool_id
 	_broadcast(PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(session_id, tool_id))

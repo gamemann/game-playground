@@ -95,6 +95,12 @@ enum Ask {
 	## whole bag, or a purchase into it. One kind with a sub-kind, because this enum is
 	## [constant PlaygroundRequest.KIND_BITS] wide and three would have filled it.
 	INVENTORY,
+	## Load this prop into the toy in my hand: what the launcher throws.
+	##
+	## [b]The sixteenth kind, and the last one four bits hold.[/b] Anything after this
+	## goes in as a sub-kind of an existing one, the way [constant INVENTORY] does. An
+	## older server refuses it as an unknown kind and nothing else happens.
+	ARM_PROP,
 }
 
 ## Every decoder returns an `ok` alongside its fields, and every caller checks it.
