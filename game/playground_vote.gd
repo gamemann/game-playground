@@ -85,6 +85,17 @@ var game: Playground = null
 var player_count_fn: Callable = Callable()
 var is_admin_fn: Callable = Callable()
 
+## [code]func(state: Dictionary)[/code]: the ballot as a client draws it, sent whenever it
+## changes. The host points it at the client shell (a dot-server notice), which draws a
+## menu a player picks from with a number key or a click. Unset sends nothing.
+var ballot_fn: Callable = Callable()
+
+## [code]func(voter: StringName) -> Dictionary[/code]: a voter's name and avatar URL.
+var people_fn: Callable = Callable()
+
+## What [member ballot_fn] is fed from. Polled once per [method advance].
+var feed: DotVoteBallotFeed = null
+
 ## What every client was last told about the clock, counted down the way they count it.
 ## See [method advance].
 var clock_view: DotVoteClockView = DotVoteClockView.new()
@@ -101,10 +112,11 @@ static func vote_rules() -> DotVoteRules:
 	var rules := DotVoteRules.new()
 	rules.enabled = true
 	rules.trigger = DotVoteRules.Trigger.TIME_LIMIT
-	# Half an hour, which is dot-vote's default and is right here: a sandbox map is a place
-	# people build in, and a fifteen-minute limit would throw away the thing they built.
-	rules.duration_sec = 1800.0
-	rules.vote_lead_sec = 120.0
+	# Forty-five minutes, dot-vote's default and right here: a sandbox map is a place people
+	# build in, and a short limit throws away the thing they built. The deployed sandbox
+	# runs around the clock instead (`duration_sec: 0` in its game.yml).
+	rules.duration_sec = 2700.0
+	rules.vote_lead_sec = 150.0
 	rules.vote_cooldown_sec = 60.0
 	rules.vote_duration_sec = 30.0
 	rules.max_options = 5
@@ -222,6 +234,14 @@ func setup(p_game: Playground) -> DotResult:
 		cue_due.emit(&"", seconds_left, runoff)
 	)
 
+	feed = DotVoteBallotFeed.of(director, func(state: Dictionary) -> void:
+		if ballot_fn.is_valid():
+			ballot_fn.call(state)
+	)
+	feed.title = "Vote for the next map"
+	feed.people_fn = func(voter: StringName) -> Dictionary:
+		return people_fn.call(voter) if people_fn.is_valid() else {}
+
 	return DotResult.success(null)
 
 
@@ -242,7 +262,12 @@ func install_commands(host: Object) -> DotResult:
 	commands.director = director
 	commands.names = COMMAND_NAMES
 
-	return commands.bind(host)
+	var bound := commands.bind(host)
+
+	if feed != null:
+		feed.command = commands.command_name("vote")
+
+	return bound
 
 
 ## Somebody is playing something. The vote is told, once, from the one signal that fires
@@ -255,6 +280,9 @@ func note_playing(map_id: StringName) -> void:
 func advance(delta: float) -> void:
 	if director != null:
 		director.advance(delta)
+
+	if feed != null:
+		feed.poll()
 
 	_clock_time += delta
 

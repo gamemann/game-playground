@@ -40,6 +40,10 @@ const PlaygroundWaves := preload("playground_waves.gd")
 
 const CHANNEL := "playground.module"
 
+## The drawn map ballot's notice topic. The client shell draws one menu per topic, and a
+## server running several games sends its own `game_ballot` beside this one.
+const MAP_BALLOT_TOPIC := &"map_ballot"
+
 var game: Playground = null
 
 ## The netcode, and the seam that joins it to the game. Built here because a module is
@@ -593,6 +597,27 @@ func _build_extras() -> DotResult:
 	vote.name = "Vote"
 	vote.player_count_fn = func() -> int: return game.players.size()
 	vote.is_admin_fn = _voter_is_admin
+
+	# The drawn ballot, to each playing session with its own voter id (`u<userid>`), so the
+	# client shell marks the player's own choice. Topic `map_ballot`, beside a server's
+	# `game_ballot` when both votes are open at once.
+	vote.ballot_fn = func(state: Dictionary) -> void:
+		for session in server.playing_sessions():
+			var data := state.duplicate()
+			data["you"] = "u%d" % session.userid
+			server.send_notice(session, DotNotice.make(
+				&"", "", float(state.get("seconds", -1.0)), MAP_BALLOT_TOPIC, data
+			))
+
+	vote.people_fn = func(voter: StringName) -> Dictionary:
+		var session := server.session_by_userid(String(voter).trim_prefix("u").to_int())
+
+		if session == null:
+			return {}
+
+		var avatar: Variant = session.identity.get("avatar_url") if session.identity != null else ""
+		return {"name": session.display_name, "avatar": avatar if avatar is String else ""}
+
 	add_child(vote)
 
 	var voted := vote.setup(game)

@@ -52,7 +52,7 @@ extends DotConfig
 @export var authoritative: bool = true
 
 ## Seconds a map runs before the session asks for the next one. 0 disables it.
-@export_range(0.0, 86400.0, 30.0) var map_seconds: float = 1800.0
+@export_range(0.0, 86400.0, 30.0) var map_seconds: float = 2700.0
 
 ## Fraction of the players who must rock the vote to end a map early.
 @export_range(0.0, 1.0, 0.05) var rtv_fraction: float = 0.6

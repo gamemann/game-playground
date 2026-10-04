@@ -1786,3 +1786,7 @@ Before it was closed it stood at 358 and 274, growing by one script's worth when
 - **Sound, art, animation.** The maps are unshaded boxes on purpose, drawn with a generated world-space one-metre grid (`PlaygroundGeometry._material`, 2026-09-25) so a gap can be counted in squares — flat colour gave a rendered map no scale at all.
 - **Replay playback.** dot-timer records and stores them; drawing a ghost is a game's
   own decision and every game's is different.
+
+## The map vote is drawn on the client shell (2026-10-04)
+
+The vote wrapper owns a `DotVoteBallotFeed` and polls it every `advance`; the module points its `ballot_fn` at `server.send_notice`, one copy per playing session with that session's voter id as `you`, under the topic `map_ballot`. dot-server-deploy's shell draws it as a dot-ui `DotBallotPanel` beside the server's own `game_ballot` — number keys, F3 and a click, or both, and every voter's avatar on their choice — and a click goes back as the same `!vote`-style command a player could type. Standalone, with no shell, nothing draws it and chat still carries the ballot. Defaults moved with dot-vote's: the vote's own clock is 2700 s with a 150 s lead (`map_seconds` 2700 too). The deployed sandbox stays around the clock with `duration_sec: 0` in its game.yml.
