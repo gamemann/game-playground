@@ -1999,13 +1999,24 @@ func _set_reload(down: bool) -> void:
 ## Sway, bob and the hands hidden in third person, once a frame.
 func _present_zee() -> void:
 	var rig := _zee_rig()
+	var view: DotFpsView = player.controller.view \
+		if player != null and is_instance_valid(player) and player.controller != null else null
 
 	if rig == null or zee_view == null:
+		if view != null:
+			view.external_angles = Vector3.ZERO
 		return
 
 	zee_view.visible = player.view_mode() != &"tp"
 	var state := player.controller.state
 	rig.drive_view(Vector2.ZERO, player.speed(), state.is_grounded(), state.is_crouched())
+
+	# The camera's half of the recoil, through the view's own offset: the view writes the
+	# camera's angles from scratch each frame, so nothing set on the camera would survive.
+	# Presentation only — the command's angles, and so the shot, are untouched.
+	if view != null:
+		var punch := rig.view_punch()
+		view.external_angles = Vector3(punch.x, punch.y, 0.0)
 
 
 func _exit_tree() -> void:

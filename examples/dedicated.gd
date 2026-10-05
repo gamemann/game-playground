@@ -46,7 +46,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 25
-const CHECKS := 224
+const CHECKS := 225
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -223,6 +223,11 @@ func _test_query() -> void:
 	var arena: Object = module.get("arena")
 
 	_check(snapshot.game.has("map"), "the query says what map is loaded")
+	_check(
+		game.maps.current != null and server.games.reported_map() == String(game.maps.current.id),
+		"and the query's own map field, which A2S answers with, names it rather than the content id",
+		server.games.reported_map()
+	)
 	_check(
 		int(snapshot.game.get("players", -1)) == joined.size(),
 		"and how many people are on it",

@@ -353,6 +353,9 @@ func _module_load() -> DotResult:
 
 	_build_query_provider()
 
+	game.maps.changed.connect(_report_map)
+	_report_map(game.maps.current)
+
 	log_info("playground loaded", {
 		"map": String(game.maps.current.id) if game.maps.current != null else "-",
 		"tick_rate": game.tick_rate,
@@ -420,6 +423,14 @@ class PlaygroundQueryProvider extends DotQueryProvider:
 			snapshot.game[key] = values[key]
 
 
+## Tells dot-server which map is running, so A2S and DQP print it in their map field (and
+## the backbone report does too) rather than this game's content id. On every change
+## through the session's own signal, which every route to a new map ends at.
+func _report_map(map: DotMapDef, _world: Node = null) -> void:
+	if server != null and server.games != null:
+		server.games.set_current_map(String(map.id) if map != null else "")
+
+
 func _module_unload() -> void:
 	if server != null and server.client_disconnected.is_connected(_on_client_disconnected):
 		server.client_disconnected.disconnect(_on_client_disconnected)
@@ -431,6 +442,8 @@ func _module_unload() -> void:
 			game.run_filed.disconnect(_on_run_filed)
 		if game.maps.changed.is_connected(_on_map_changed_for_mod_tools):
 			game.maps.changed.disconnect(_on_map_changed_for_mod_tools)
+		if game.maps.changed.is_connected(_report_map):
+			game.maps.changed.disconnect(_report_map)
 
 		# Every player this module put in the game comes back out. A module that
 		# unloaded and left them would leave the game holding players whose sessions
