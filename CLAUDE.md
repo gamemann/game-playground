@@ -80,7 +80,7 @@ game/
 maps/
   pg_lobby.gd            the sandbox: the jump course, the tower, the circuit, the stepping stones and the launch on bonus 1-5
   pg_surf_intro.gd       two ramps and a valley, the plunge on bonus 1, the cascade on bonus 2, the long bank on bonus 3
-  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3, the ladder on bonus 4, the float on bonus 5
+  pg_bhop_intro.gd       blocks with widening gaps, the narrows on bonus 1, the switchback on bonus 2, the ascent on bonus 3, the ladder on bonus 4, the float on bonus 5, the drop on bonus 6
   *.zones.json           generated from the maps, and checked against them
 tools/
   export_zones.gd        writes those files. Run it after changing a map
@@ -679,6 +679,12 @@ Bonus 5 on `pg_bhop_intro` (`FLOAT_TRACK`), east of the ascent at x = 120 (its p
 
 `headless_playground`'s **the float** (19 checks): the zone kinds on its own track and `route_problems()`; every jump out of reach on the ground; every jump inside 90% of the float's reach (printed per jump; tightest #6, 7.67 m of air 2.00 m up against 9.21, 83%; the last, 8.0 m level, is 67%); no step a wall even in the float; the gravity zone covering every column and a full float jump over it, with the reset under it; a **measured** jump (a bot jumping from the pad peaks 2.77 m up against `float_apex` 2.87 and lands 1.66 s later); and a `_drive_route` drive through both splits into the finish in 1,670 ticks, no respawns: 78.9 m of an 80.5 m route in 13.05 s, 6.05 m/s against 7.0, 79% of the ground covered in the air and none on anything else. **Armed** by the nightly run leaving `FLOAT_LAST_GAP` at 11.0 after exporting the zones at 8.0 (the export hash says which): five fail. The reach check fails on #4, #6 and #7. The zone file no longer matches the map. The bot is put back once, crosses the splits twice ([1, 2, 1, 2]) and covers 162.6 m at 5.40 m/s. `tools/screenshot.sh pg_bhop_intro` renders `pg_bhop_intro_float` (the profile, from the empty east side) and `pg_bhop_intro_float_start` (from behind the pad at a player's height).
 
+## `pg_bhop_intro`'s drop: the ladder turned over
+
+Bonus 6 on `pg_bhop_intro` (`DROP_TRACK`, 2026-10-05), west of the ladder at x = -150 (the ladder's profile camera is at x = -124, so this route is behind it), starting level with the other six at z = 10: a 6 m pad column whose top is 26 m, seven 4 x 4 m columns and a 6 m finish column at 2 m, eight jumps each landing `DROP_STEP` (3.0 m) lower. **Every gap is wider than a running jump on the level (5.0 -> 5.8 m against 4.75), and every one is inside `jump_reach(-3.0)` (6.88 m)**: the ladder asks how high a jump goes, this asks how much further one goes when the landing is lower, and it comes down to the height the other routes start at. One description: `drop_route()` (every column the whole column from `drop_foot_y()`, 1 m, pad included, walked edge to edge through `drop_gap(i)`), read by `_build_the_drop`, `_add_the_drop` (spawn a stride behind the pad's middle facing -Z, start on the pad, splits on columns 3 and 6, a deep finish, a reset slab under the feet from x -160 to -140) and the suite. The survey finds pg_bhop_intro clean with nothing new declared: it models a falling jump's reach.
+
+`headless_playground`'s **the drop** (17 checks): the five zone kinds on its own track and `route_problems()`; `_check_route_reach` (tightest #8, 5.80 m of air 3.00 m down against 6.88, 84%); every jump the same 3 m down over a gap wider than any level jump; the reset under every column; the spawn and its yaw; and a `_drive_route` drive with a 0.1 m look-ahead through both splits into the finish in 1,423 ticks, no respawns: 75.7 m of a 78.7 m route in 11.12 s, 6.81 m/s against 7.0 (`DROP_PACE_FLOOR` 90%). The bhop map's track lists now expect seven tracks. **Armed** with `DROP_STEP` at 0.0 (the same gaps on the level) after exporting the zones at 3.0: eight fail. The zone file no longer matches, the reach check fails on #8 (122%), the bot gets to column 2 and is put back four times, never crossing a split, and the survey reports all eight level columns unreached. `tools/screenshot.sh pg_bhop_intro` renders `pg_bhop_intro_drop` (the profile, from the empty west side) and `pg_bhop_intro_drop_start` (above and behind the pad, down the line; at a player's height the pad's lip hides every column).
+
 ## Bonus 3 is a circuit, and a track now says whether it is driven
 
 `pg_lobby` gained a **driving circuit** round the outside of the plate: a rounded
@@ -1186,11 +1192,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 563 checks, 31 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 580 checks, 32 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 294 checks, 31 sections
-godot --headless --path . res://examples/dedicated.tscn             # 224 checks, 25 sections
+godot --headless --path . res://examples/headless_net.tscn          # 298 checks, 32 sections
+godot --headless --path . res://examples/dedicated.tscn             # 225 checks, 25 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.

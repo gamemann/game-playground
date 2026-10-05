@@ -63,7 +63,15 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ## number every other route here is sized against, and this one asks a player to re-learn
 ## a jump that takes two and a half times as long to come down.
 ##
-## All six tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
+## [b]A seventh route, and it is the ladder turned over.[/b] "The drop", on bonus 6, starts
+## on a pad 24 m above the other starts and comes down to their height in eight jumps,
+## every one landing [constant DROP_STEP] lower than it left. Every gap is wider than a
+## running jump on the level (5.0 m and up, against 4.75), so not one is made without the
+## fall under it: the ladder asks how high a jump goes, this asks how much further a jump
+## goes when the landing is lower, and a player who jumps at the lip out of habit learns
+## that a 3 m drop buys two metres of ground.
+##
+## All seven tracks carry [constant DotTimerZone.Kind.STAGE] splits, because a map with
 ## one start and one finish exercises none of dot-timer's per-stage machinery.
 
 const START_Z := 0.0
@@ -314,6 +322,50 @@ const FLOAT_FINISH := Vector2(6.0, 6.0)
 const FLOAT_SPLIT_BLOCKS := [2, 4]
 
 
+# --- Bonus 6: "the drop" --------------------------------------------------------
+#
+# Every number below is read by `_build_the_drop`, `drop_route` and `_add_the_drop`, and
+# nothing else describes where a column is. Walked edge to edge from the pad, for the
+# reason `switchback_route` gives.
+
+## The track it runs on.
+const DROP_TRACK := DotTimerTrack.BONUS_FIRST + 5
+
+## The pad's centre in X and Z, and the height of the FINISH's top surface: the route
+## comes DOWN to the height every other start is at.
+##
+## West of the ladder, whose profile camera stands at x = -124 looking east, so this route
+## is behind it; its own reset (ten metres either side) stops at x = -140.
+const DROP_X := -150.0
+const DROP_Z := 10.0
+const DROP_Y := 2.0
+
+## How far each jump lands below the one it left, and how many jumps there are (the last
+## onto the finish). The pad's top is `DROP_Y + DROP_STEP * DROP_JUMPS`, 26 m.
+##
+## 3 m lengthens a running jump from 4.75 m to `jump_reach(-3.0)`, about 6.9: the extra
+## 0.64 s of falling is 2.1 m more ground at a run.
+const DROP_STEP := 3.0
+const DROP_JUMPS := 8
+
+const DROP_PAD := Vector3(6.0, 1.0, 6.0)
+
+## A column's footprint, square, and the finish's.
+const DROP_BLOCK := Vector2(4.0, 4.0)
+const DROP_FINISH := Vector2(6.0, 6.0)
+
+## The clear air of the first jump and the last, in metres. Grows evenly.
+##
+## The FIRST is the floor of the idea: 5.0 m is wider than a running jump on the level
+## (4.75), so not one gap here can be made without the drop under it. The LAST is about
+## 84% of `jump_reach(-DROP_STEP)`.
+const DROP_FIRST_GAP := 5.0
+const DROP_LAST_GAP := 5.8
+
+## Which columns carry the two splits.
+const DROP_SPLIT_BLOCKS := [3, 6]
+
+
 func _build() -> void:
 	PlaygroundGeometry.sun(self)
 
@@ -352,6 +404,7 @@ func _build() -> void:
 	_build_the_ascent()
 	_build_the_ladder()
 	_build_the_float()
+	_build_the_drop()
 
 
 ## The bonus route, alongside the main run and six metres above it.
@@ -484,6 +537,25 @@ func _build_the_float() -> void:
 		elif i == route.size() - 1:
 			colour = PlaygroundGeometry.COLOUR_END
 		elif FLOAT_SPLIT_BLOCKS.has(i):
+			colour = PlaygroundGeometry.COLOUR_RAMP
+
+		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
+
+
+## The drop's pad and columns, each the whole column from the common foot, so from beside
+## the route reads as the staircase down it is.
+func _build_the_drop() -> void:
+	var route := drop_route()
+
+	for i in range(route.size()):
+		var box: AABB = route[i]
+		var colour := PlaygroundGeometry.COLOUR_PLATFORM
+
+		if i == 0:
+			colour = PlaygroundGeometry.COLOUR_START
+		elif i == route.size() - 1:
+			colour = PlaygroundGeometry.COLOUR_END
+		elif DROP_SPLIT_BLOCKS.has(i):
 			colour = PlaygroundGeometry.COLOUR_RAMP
 
 		PlaygroundGeometry.box(self, box.get_center(), box.size, colour)
@@ -868,6 +940,53 @@ static func float_zone_box() -> AABB:
 	return AABB(from, to - from)
 
 
+# --- The drop, as arithmetic --------------------------------------------------
+
+## The clear air before the box jump [param index] lands on, counted from 0.
+static func drop_gap(index: int) -> float:
+	return lerpf(
+		DROP_FIRST_GAP, DROP_LAST_GAP, float(index) / float(maxi(DROP_JUMPS - 1, 1))
+	)
+
+
+## The bottom of every column on the drop, the pad's included: a metre under the finish's
+## top, the other routes' pad underside.
+static func drop_foot_y() -> float:
+	return DROP_Y - DROP_PAD.y
+
+
+## The top of the pad, where the drop starts.
+static func drop_top_y() -> float:
+	return DROP_Y + DROP_STEP * float(DROP_JUMPS)
+
+
+## Bonus 6 as the boxes a player lands on, start pad to finish, in order: the pad, seven
+## columns, the finish. Every one is the WHOLE column, foot to top, the pad too.
+static func drop_route() -> Array[AABB]:
+	var foot := drop_foot_y()
+	var top := drop_top_y()
+	var route: Array[AABB] = [AABB(
+		Vector3(DROP_X - DROP_PAD.x * 0.5, foot, DROP_Z - DROP_PAD.z * 0.5),
+		Vector3(DROP_PAD.x, top - foot, DROP_PAD.z)
+	)]
+
+	var z := DROP_Z - DROP_PAD.z * 0.5
+
+	for i in range(DROP_JUMPS):
+		var last := i == DROP_JUMPS - 1
+		var footprint := DROP_FINISH if last else DROP_BLOCK
+		top -= DROP_STEP
+
+		z -= drop_gap(i)
+		route.append(AABB(
+			Vector3(DROP_X - footprint.x * 0.5, foot, z - footprint.y),
+			Vector3(footprint.x, top - foot, footprint.y)
+		))
+		z -= footprint.y
+
+	return route
+
+
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
 
@@ -914,6 +1033,7 @@ static func build_zones() -> DotTimerZoneSet:
 	_add_the_ascent(zones)
 	_add_the_ladder(zones)
 	_add_the_float(zones)
+	_add_the_drop(zones)
 
 	return zones
 
@@ -1293,5 +1413,55 @@ static func _add_the_float(zones: DotTimerZoneSet) -> void:
 	reset.set_box(
 		Vector3(FLOAT_X - 10.0, float_foot_y() - 7.0, last.position.z - 10.0),
 		Vector3(FLOAT_X + 10.0, float_foot_y() - 2.0, pad.end.z + 10.0)
+	)
+	zones.add(reset)
+
+
+## Bonus 6's zones: the five every route has. The splits are on two columns, two metres
+## either side: every jump here is wider than one on the level, so nobody passes a split
+## without landing on it.
+static func _add_the_drop(zones: DotTimerZoneSet) -> void:
+	var track := DROP_TRACK
+	var route := drop_route()
+	var pad: AABB = route[0]
+
+	# A stride behind the pad's middle, facing -Z: yaw 0 by `DotFpsMotor._view_basis`.
+	var spawn := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)
+	spawn.destination = Vector3(DROP_X, pad.end.y + 1.0, DROP_Z + 1.5)
+	spawn.destination_yaw = 0.0
+	zones.add(spawn)
+
+	var start := DotTimerZone.make(DotTimerZone.Kind.START, track)
+	start.set_box(
+		Vector3(pad.position.x, pad.end.y - 0.5, pad.position.z),
+		Vector3(pad.end.x, pad.end.y + 5.0, pad.end.z)
+	)
+	zones.add(start)
+
+	for n in range(DROP_SPLIT_BLOCKS.size()):
+		var block: AABB = route[DROP_SPLIT_BLOCKS[n]]
+		var stage := DotTimerZone.make(DotTimerZone.Kind.STAGE, track)
+		stage.number = float(n + 1)
+		stage.set_box(
+			Vector3(block.position.x - 2.0, block.end.y - 0.5, block.position.z),
+			Vector3(block.end.x + 2.0, block.end.y + 6.0, block.end.z)
+		)
+		zones.add(stage)
+
+	var last: AABB = route[route.size() - 1]
+	var finish := DotTimerZone.make(DotTimerZone.Kind.END, track)
+	finish.set_box(
+		Vector3(last.position.x, last.end.y - 1.0, last.position.z),
+		Vector3(last.end.x, last.end.y + 5.0, last.end.z)
+	)
+	zones.add(finish)
+
+	# Falling off: a slab five metres deep under the columns' feet, ten metres either side
+	# of the line. A missed jump here is a fall of up to 25 m, straight down between two
+	# columns and through it.
+	var reset := DotTimerZone.make(DotTimerZone.Kind.RESPAWN, track)
+	reset.set_box(
+		Vector3(DROP_X - 10.0, drop_foot_y() - 7.0, last.position.z - 10.0),
+		Vector3(DROP_X + 10.0, drop_foot_y() - 2.0, pad.end.z + 10.0)
 	)
 	zones.add(reset)

@@ -182,6 +182,23 @@ func _shots_for(id: String) -> Array[Dictionary]:
 				"from": Vector3(122.5, 4.5, 16.0),
 				"at": Vector3(120.0, 4.0, -20.0),
 			},
+			# Bonus 6, the drop: eight jumps down, 3 m each, along z at x = -150. From the
+			# west, where nothing stands behind it (the ladder's profile camera is at
+			# x = -124, on the other side), so the frame is the staircase: a 25 m pad tower
+			# and columns stepping down to the finish at the other starts' height.
+			{
+				"name": "pg_bhop_intro_drop",
+				"from": Vector3(-212.0, 20.0, -28.0),
+				"at": Vector3(-150.0, 12.0, -28.0),
+			},
+			# And from above and behind the pad, down the line: the columns stepping away
+			# below the pad's lip. At a player's height the lip hides every one of them,
+			# which is the drop's point and makes a frame of nothing but pad.
+			{
+				"name": "pg_bhop_intro_drop_start",
+				"from": Vector3(-147.0, 36.0, 22.0),
+				"at": Vector3(-150.0, 10.0, -40.0),
+			},
 		]
 
 	if id == "pg_surf_intro":
