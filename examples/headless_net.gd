@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 320
+const CHECKS := 323
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 34
+const SECTIONS := 35
 
 var _passed := 0
 var _failed := 0
@@ -165,6 +165,8 @@ func _run() -> void:
 		await _test_tool_look_and_armed_npcs()
 		# Adds no body: a grenade is a ray swept each tick, not a physics object.
 		await _test_grenade_over_the_wire()
+		# Spawns a platform and takes it out again; nothing after it but the leave.
+		await _test_riding_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -3384,6 +3386,63 @@ func _test_push_over_the_wire() -> void:
 
 	theirs.teleport(home, home_yaw)
 	await _steps(48)
+	_done()
+
+
+## A connected client standing on a prop the server moves (prop surfing).
+##
+## [b]Measured, because the client cannot carry itself the way the server does.[/b] Riding is
+## `DotPropCarry`, resolved from the body underfoot; on a client that body is a frozen mirror
+## the bridge moves by interpolation, with no velocity, so the client's own prediction stands
+## still on a moving deck and only the server's corrections move it. This counts what that
+## costs against standing on the same deck while it is still.
+func _test_riding_over_the_wire() -> void:
+	_section("riding a moving prop, connected")
+
+	var mine := _client_player()
+	var theirs := _server_player()
+	var deck := _server_game.props.spawn(&"platform", theirs.player_id, Vector3(-60.0, 3.0, -60.0))
+	var body := deck.body() as RigidBody3D if deck != null else null
+	if body == null:
+		_check(false, "a platform to ride")
+		_done()
+		return
+	body.gravity_scale = 0.0
+	_exchange()
+	theirs.teleport(Vector3(-60.0, 3.4, -60.0), 0.0)
+	for i in 64:
+		body.linear_velocity = Vector3.ZERO
+		await _step()
+
+	var before := _corrections_and_snaps()
+	for i in 128:
+		body.linear_velocity = Vector3.ZERO
+		await _step()
+	var still := _corrections_and_snaps() - before
+	var start := theirs.controller.state.position
+
+	before = _corrections_and_snaps()
+	var worst := 0.0
+	for i in 128:
+		body.linear_velocity = Vector3(3.0, 0.0, 0.0)
+		await _step()
+		worst = maxf(worst, mine.controller.state.position.distance_to(theirs.controller.state.position))
+	var moving := _corrections_and_snaps() - before
+	var carried := theirs.controller.state.position.x - start.x
+	print("    riding over the wire: the server carried the player %.2f m in 128 ticks; client corrections %d while the deck moved against %d while it stood still; worst gap %.3f m" % [carried, moving, still, worst])
+
+	_check(carried > 2.0, "the server carries a connected player on a moving deck", "%.2f m" % carried)
+	_check(worst < 0.5, "and the client stays within half a metre of where the server has them", "%.3f m" % worst)
+	# Measured 2026-10-06: 32 and 32, a correction every snapshot either way -- standing on a
+	# prop at all costs that, moving or not (see CLAUDE.md, prop surfing). This holds the
+	# moving deck to the still one, so riding is never worse than standing.
+	_check(moving <= still + 4, "and riding costs no more corrections than standing on the still deck",
+		"%d against %d" % [moving, still])
+
+	var _gone := _server_game.props.remove(deck.instance_id)
+	_exchange()
+	theirs.teleport(Vector3(0.0, 1.0, 0.0), 0.0)
+	await _steps(32)
 	_done()
 
 
