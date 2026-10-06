@@ -7,6 +7,7 @@ const PlaygroundConfig := preload("../game/playground_config.gd")
 const PlaygroundEntity := preload("../game/entities/playground_entity.gd")
 const PlaygroundIcons := preload("../game/playground_icons.gd")
 const PlaygroundMapSurvey := preload("../game/playground_map_survey.gd")
+const PlaygroundPickup := preload("../game/playground_pickup.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
 const PlaygroundProp := preload("../game/playground_prop.gd")
 const PlaygroundSpawnMenu := preload("../game/playground_spawn_menu.gd")
@@ -53,13 +54,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 663
+const CHECKS := 684
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 36
+const SECTIONS := 37
 
 var _passed := 0
 var _failed := 0
@@ -118,6 +119,7 @@ func _run() -> void:
 	await _test_spawn_menu()
 	await _test_the_sandbox_and_its_course()
 	await _test_vehicles()
+	await _test_picking_players_up()
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
@@ -204,6 +206,115 @@ func _drive(
 	for _i in range(ticks):
 		player.controller.apply_command(command.duplicate_command())
 		await get_tree().physics_frame
+
+
+# --- Picking players up ----------------------------------------------------
+
+## Points [param id] at [param pitch] degrees (yaw 0, so along -Z) for [param ticks] ticks.
+func _look(id: StringName, pitch: float, ticks: int) -> void:
+	var look := DotFpsCommand.new()
+	look.yaw = 0.0
+	look.pitch = pitch
+	await _drive(id, look, ticks)
+
+
+func _beam_grab(holder: PlaygroundPlayer) -> DotResult:
+	return playground.phys_gun_grab(
+		holder, playground.get_world_3d().direct_space_state,
+		holder.eye_position(), holder.aim_direction(), Basis.IDENTITY, true
+	)
+
+
+func _test_picking_players_up() -> void:
+	_section("picking players up")
+
+	var changed: DotResult = await playground.change_map(&"pg_lobby")
+	_check(changed.ok, "the sandbox loads")
+
+	var pickup := playground.pickup
+	var holder := playground.add_player(&"holder", "Holder")
+	var held := playground.add_player(&"held", "Held")
+
+	# The empty corner the vehicles use, four metres apart along -Z, the holder facing the
+	# other. Settled first, so nobody is falling when the beam reaches them.
+	holder.teleport(Vector3(-60.0, 1.0, -40.0), 0.0)
+	held.teleport(Vector3(-60.0, 1.0, -44.0), 0.0)
+	await _look(&"holder", 0.0, 30)
+	await _look(&"held", 0.0, 30)
+	var floor_y := held.controller.state.position.y
+
+	var took := _beam_grab(holder)
+	_check(took.ok, "the physics gun picks up the player in front of it", took.error.message if not took.ok else "")
+	_check(pickup.held_by(&"held") == &"holder" and pickup.holding(&"holder") == &"held", "and both ends know who holds whom")
+	_check(held.riding, "and the held player stops walking", "a rider with no vehicle: not simulated, not predicted")
+	_check(holder.phys_gun.held == null, "and no prop behind them was grabbed as well")
+
+	# Look up: the held player goes up with the beam, whatever their own keys say.
+	var up := 40.0
+	holder.controller.state.pitch = up
+	if holder.aim_direction().y < 0.0:
+		up = -up
+	var forward := DotFpsCommand.new()
+	forward.move = Vector2(0.0, 1.0)
+	held.controller.apply_command(forward)
+	await _look(&"holder", up, 60)
+	var lifted := held.controller.state.position.y - floor_y
+	_check(lifted > 1.5, "looking up lifts them with the beam", "%.2f m off the floor" % lifted)
+	var reach := held.controller.state.position.distance_to(holder.controller.state.position)
+	_check(reach < pickup.reach + 1.0, "and they stay on the end of it", "%.2f m from the holder" % reach)
+	_check(held.global_position.is_equal_approx(held.controller.state.position), "with the node and the movement state together")
+
+	# Swing the beam down and let go mid-swing: a throw keeps the beam's velocity.
+	await _look(&"holder", -up * 0.25, 4)
+	playground.phys_gun_release(holder)
+	var thrown := held.controller.state.velocity.length()
+	_check(not pickup.is_held(&"held") and not held.riding, "letting go puts them back on their own legs")
+	_check(thrown > 1.0, "and throws them with the beam's velocity", "%.2f m/s" % thrown)
+	await _look(&"held", 0.0, 90)
+	_check(held.controller.state.time_since_grounded == 0.0, "and they land on their own feet", "%.2f s airborne" % held.controller.state.time_since_grounded)
+
+	# Immunity by role, and the override.
+	held.teleport(Vector3(-60.0, 1.0, -44.0), 0.0)
+	await _look(&"holder", 0.0, 20)
+	var roles := {&"held": PackedStringArray(["admin"]), &"holder": PackedStringArray()}
+	pickup.roles_fn = func(id: StringName) -> PackedStringArray: return roles.get(id, PackedStringArray())
+	pickup.immune_roles = PlaygroundPickup.parse_roles("admin, vip")
+	took = _beam_grab(holder)
+	_check(not took.ok and not pickup.is_held(&"held"), "an immune role cannot be picked up")
+	_check(not took.ok and took.error.context.has("pickup"), "and the refusal says it was about a player, not a prop")
+	_check(not took.ok and took.error.message.contains("admin"), "naming the role", took.error.message if not took.ok else "")
+	_check(holder.phys_gun.held == null, "and nothing behind them is grabbed instead")
+	roles[&"holder"] = PackedStringArray(["root"])
+	took = _beam_grab(holder)
+	_check(took.ok, "an override role picks them up anyway")
+	_check(PlaygroundPickup.parse_roles(" admin,,vip  root ") == PackedStringArray(["admin", "vip", "root"]), "a role list parses commas and spaces")
+
+	# A holder who leaves lets go; a held player cannot pick anybody up.
+	took = _beam_grab(held)
+	_check(not took.ok, "a held player cannot pick anybody up")
+	var third := playground.add_player(&"third", "Third")
+	third.teleport(Vector3(-60.0, 1.0, -36.0), 180.0)
+	await _look(&"third", 0.0, 10)
+	playground.remove_player(&"holder")
+	await get_tree().physics_frame
+	_check(not pickup.is_held(&"held") and not held.riding, "a holder leaving lets go of them")
+	_check(pickup.hold_count() == 0, "and holds nobody")
+
+	# Off is off: the beam meets a player and does nothing to them.
+	pickup.enabled = false
+	held.teleport(Vector3(-60.0, 1.0, -40.0), 0.0)
+	var third_look := DotFpsCommand.new()
+	third_look.yaw = 180.0
+	await _drive(&"third", third_look, 20)
+	took = _beam_grab(third)
+	_check(not pickup.is_held(&"held"), "with picking up off, nobody is held")
+
+	pickup.enabled = true
+	pickup.immune_roles = PackedStringArray()
+	pickup.roles_fn = Callable()
+	playground.remove_player(&"held")
+	playground.remove_player(&"third")
+	_done()
 
 
 # --- Boot ------------------------------------------------------------------

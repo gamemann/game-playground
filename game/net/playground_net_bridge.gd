@@ -267,6 +267,7 @@ func attach(p_game: Playground, p_net: DotNetManager, link_parent: Node) -> DotR
 		game.map_ready.connect(_on_map_ready)
 		game.vehicles.ride.entered.connect(_on_ride_entered)
 		game.vehicles.ride.exited.connect(_on_ride_exited)
+		game.pickup.changed.connect(_on_pickup_changed)
 		game.timers.player_started.connect(_on_run_changed)
 		game.timers.player_stopped.connect(_on_run_stopped)
 		game.run_filed.connect(_on_run_filed)
@@ -835,11 +836,16 @@ func _drive_tools(session_id: int, behaviour: PlaygroundPlayerNet) -> void:
 		return
 
 	if primary_pressed:
-		player.phys_gun.grab(space, origin, aim, view, may_touch)
+		var grabbed := game.phys_gun_grab(player, space, origin, aim, view, may_touch)
+		# A refusal to pick somebody up says why; a prop refusal is already reported by
+		# the spawner's own signal, and a miss is not worth a notice.
+		if not grabbed.ok and grabbed.error.context.has("pickup"):
+			_tell(peer_for_player(session_id), PlaygroundEvents.Kind.NOTICE,
+				PlaygroundEvents.write_notice(session_id, grabbed.error.message))
 	elif primary:
 		player.phys_gun.hold(origin, aim, view, delta)
 	elif not primary:
-		player.phys_gun.release()
+		game.phys_gun_release(player)
 
 	if secondary_pressed:
 		player.phys_gun.freeze_held()
@@ -973,6 +979,11 @@ func _admit(peer_id: int) -> void:
 
 	for other in _behaviours.keys():
 		_tell(peer_id, PlaygroundEvents.Kind.JOIN, _join_body(int(other)))
+
+	# Who is being carried. A joiner who missed the SEAT would predict a held player.
+	for id in game.players:
+		if game.pickup.is_held(id):
+			_tell(peer_id, PlaygroundEvents.Kind.SEAT, PlaygroundEvents.write_seat(session_of(id), 0, 0, true))
 
 	# What everybody is already holding. A WEAPON event is sent once, when it changes, so a
 	# joiner would otherwise see nobody's gun until its holder switched.
@@ -1380,7 +1391,7 @@ func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> voi
 	var def := game.weapon_def(weapon_id)
 	_drop_toy(session_id)
 	if PlaygroundZee.is_zee(def):
-		player.phys_gun.release()
+		game.phys_gun_release(player)
 		player.grav_gun.drop()
 		if PlaygroundZee.arm(
 			player, def, ZeeWeaponRig.Role.SERVER, true, game.tick_rate, game.current_tick()
@@ -1390,7 +1401,7 @@ func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> voi
 		PlaygroundZee.disarm(player)
 		var toy := PlaygroundWeapons.make(def)
 		if toy != null:
-			player.phys_gun.release()
+			game.phys_gun_release(player)
 			player.grav_gun.drop()
 			toy.equip(game, def)
 			toy.wielder = id
@@ -1492,7 +1503,7 @@ func _select_tool(session_id: int, id: StringName, tool_id: StringName) -> void:
 	# air, owned by a tool they are no longer using and released by nothing.
 	var player: PlaygroundPlayer = game.players.get(id)
 	if player != null:
-		player.phys_gun.release()
+		game.phys_gun_release(player)
 		player.grav_gun.drop()
 		PlaygroundZee.disarm(player)
 	_drop_toy(session_id)
@@ -1929,6 +1940,15 @@ func _on_ride_entered(
 	announce_seat(vehicle, rider_id, seat, true)
 
 
+## Somebody was picked up or let go. A SEAT with no vehicle: the held client stops
+## predicting and adopts the server's position, which is all being carried needs — and
+## exactly what a client older than picking up does with it.
+func _on_pickup_changed(_holder_id: StringName, target_id: StringName, held: bool) -> void:
+	if net == null or not net.is_server:
+		return
+	_broadcast(PlaygroundEvents.Kind.SEAT, PlaygroundEvents.write_seat(session_of(target_id), 0, 0, held))
+
+
 func _on_ride_exited(
 	vehicle: DotVehicleInstance,
 	rider_id: StringName,
@@ -1962,6 +1982,11 @@ func _apply_seat(reader: DotNetReader) -> void:
 	var vehicle_node: Node3D = null
 	if vehicle_net != null and is_instance_valid(vehicle_net.prop):
 		vehicle_node = vehicle_net.prop as Node3D
+	if int(info["vehicle_net_id"]) == 0:
+		# Vehicle 0 is a player held by a physics gun (PlaygroundPickup): not predicted,
+		# not seated, and no seat_changed, because nobody got into anything.
+		behaviour.player.set_held(bool(info["seated"]))
+		return
 	behaviour.player.set_riding(bool(info["seated"]), vehicle_node)
 	seat_changed.emit(int(info["player_id"]), bool(info["seated"]))
 

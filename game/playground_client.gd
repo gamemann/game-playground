@@ -1496,7 +1496,7 @@ func _primary_up() -> void:
 		return
 
 	if tool == TOOL_PHYS and _holding:
-		player.phys_gun.release()
+		playground.phys_gun_release(player)
 		_holding = false
 
 
@@ -1561,8 +1561,8 @@ func _report(result: DotResult) -> void:
 
 
 func _grab() -> void:
-	var grabbed := player.phys_gun.grab(
-		_space(), player.eye_position(), player.aim_direction(), _view_basis(),
+	var grabbed := playground.phys_gun_grab(
+		player, _space(), player.eye_position(), player.aim_direction(), _view_basis(),
 		playground.may_touch_others()
 	)
 

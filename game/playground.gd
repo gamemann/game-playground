@@ -7,6 +7,7 @@ const PlaygroundConfig := preload("playground_config.gd")
 const PlaygroundEntity := preload("entities/playground_entity.gd")
 const PlaygroundInventory := preload("playground_inventory.gd")
 const PlaygroundLimits := preload("playground_limits.gd")
+const PlaygroundPickup := preload("playground_pickup.gd")
 const PlaygroundConstraints := preload("playground_constraints.gd")
 const PlaygroundNpcWorld := preload("playground_npc_world.gd")
 const PlaygroundProjectiles := preload("playground_projectiles.gd")
@@ -190,6 +191,10 @@ var spawn_limits: PlaygroundLimits = PlaygroundLimits.new()
 
 ## Welds, ropes and no-collides between props. Built by the tool gun.
 var constraints: PlaygroundConstraints = null
+
+## Who is holding whom with the physics gun. The module binds `pg_pickup*` to it and hands
+## it the same roles [member spawn_limits] uses.
+var pickup: PlaygroundPickup = PlaygroundPickup.new()
 
 ## What an armed NPC's brain asks the world, and where its squads and sounds hang.
 var npc_world: PlaygroundNpcWorld = null
@@ -458,6 +463,10 @@ func _simulate_tick(step: float) -> void:
 
 	for id in players:
 		(players[id] as PlaygroundPlayer).simulate(_tick, step)
+
+	# Held players after every holder has moved and aimed, so the beam ends where the
+	# holder is looking THIS tick, and before the timers, which read where they were put.
+	pickup.tick(players, step)
 
 	# After everybody has moved, so a grenade is swept against the world as the tick
 	# leaves it, which is also where anybody it could hit now is.
@@ -922,6 +931,10 @@ func _on_seated(
 
 	if player == null:
 		return
+
+	# Out of anybody's hands, and out of theirs, before the seat takes them: a seat and a
+	# beam both own a rider's position, and the seat is the one that was asked for.
+	pickup.forget(players, rider_id)
 
 	player.set_riding(true, vehicle.node as Node3D)
 
@@ -1490,6 +1503,10 @@ func remove_player(id: StringName) -> void:
 	# Before anything is torn down, so a listener can still read what they were.
 	player_removed.emit(id)
 
+	# Let go of them, and of whoever they hold: a beam from a player who is gone holds a
+	# player who can never walk again.
+	pickup.forget(players, id)
+
 	# Closed after the signal and before the node goes: a listener asking the table
 	# who this was must still get an answer, and anything holding the id afterwards
 	# gets nothing rather than getting whoever joins next -- serials are not reused.
@@ -1548,6 +1565,10 @@ func spawn_player(id: StringName) -> void:
 
 	if player == null:
 		return
+
+	# A respawn is a teleport, and a held player teleported is pulled straight back to the
+	# beam on the next tick.
+	pickup.forget(players, id)
 
 	var track := player.timer.track if player.timer != null else DotTimerTrack.MAIN
 	var map := current_map_node()
@@ -1648,6 +1669,25 @@ func weapon_def(id: StringName) -> PlaygroundWeaponDef:
 ## `can_touch_others` to every tool call precisely so this is one answer in one place;
 ## a physics gun and a remover that disagreed would be a server where you cannot move
 ## somebody's crate but can delete it.
+## The physics gun's primary press: a player in the beam first, then a prop. A player
+## refused (immune, already held) is an answer, not a miss, so the prop behind them is not
+## grabbed instead; a beam that meets nobody falls through to the gun.
+func phys_gun_grab(
+	player: PlaygroundPlayer, space: Variant, origin: Vector3, aim: Vector3, view: Basis, may_touch: bool
+) -> DotResult:
+	var target := pickup.player_in_beam(players, player, space, origin, aim) if pickup.enabled else null
+	if target != null:
+		return pickup.pick_up(player, target, origin)
+	return player.phys_gun.grab(space, origin, aim, view, may_touch)
+
+
+## Lets go of whatever the physics gun holds, a player or a prop. A player is thrown with
+## the beam's velocity.
+func phys_gun_release(player: PlaygroundPlayer) -> void:
+	pickup.release(players, player.player_id, true)
+	player.phys_gun.release()
+
+
 func may_touch_others() -> bool:
 	return config == null or config.touch_others_props
 
@@ -1714,6 +1754,8 @@ func _on_map_changing(_from: DotMapDef, _to: DotMapDef) -> void:
 	# Announced before anything is torn down, which is the whole point of the signal:
 	# every run in progress is on geometry that is about to stop existing, and every
 	# prop is parented to it.
+	pickup.release_all(players)
+
 	for id in players:
 		var player: PlaygroundPlayer = players[id]
 

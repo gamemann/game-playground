@@ -1763,6 +1763,10 @@ The prop count is the spawner's own `world_count()` and the player count is the 
 
 Before it was closed it stood at 358 and 274, growing by one script's worth whenever a script was added, which is what said to find what held the graph rather than to stop preloading.
 
+## Picking players up (2026-10-06)
+
+The physics gun picks up a PLAYER in its beam before a prop (`PlaygroundPickup`, `Playground.phys_gun_grab` / `phys_gun_release`). A held player is a rider with no vehicle: their own movement, their client's prediction and their timer stop, exactly as in a seat, and on the wire it is a SEAT with vehicle 0, which an older client already understands. They are moved by sweeping the body, so a wall stops them as it stops a held crate, and letting go keeps the beam's velocity: a throw. Immunity is by role (`pg_pickup_immune`, roles from `PlaygroundLimits`), an override role beats it (`pg_pickup_override`, `root` by default), and `pg_pickup 0` turns it off. A refusal is an answer, so the prop behind an immune player is not grabbed instead. A seat, a respawn, a map change or a holder leaving all let go. `headless_playground`'s *picking players up* (21 checks). Started by the 2026-10-06 nightly run, which ended before committing it; finished the same morning (the new file named `PlaygroundPlayer` without preloading it, so nothing parsed).
+
 ## Things deliberately not here
 
 - **A screen for the bag, and a key that buys into it.** The wire, the server's rules and the client's copy are all here (`PlaygroundNetBridge.inventory_manager()`, `ask_buy`); `DotInvPanel` is the grid, and its `_can_drop_data` asks the same `validate` the server does. A pickup — pocketing a prop you own back into the bag — is the other missing producer, and wants a use verb this game does not have yet (see `F` above). Weapons are not items: they are not in the prop catalogue and `weapon_changed` already carries them.

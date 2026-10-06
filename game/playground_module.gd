@@ -7,6 +7,7 @@ const PlaygroundArena := preload("playground_arena.gd")
 const PlaygroundDowns := preload("playground_downs.gd")
 const PlaygroundModTools := preload("playground_mod_tools.gd")
 const PlaygroundLimits := preload("playground_limits.gd")
+const PlaygroundPickup := preload("playground_pickup.gd")
 const PlaygroundNetBridge := preload("net/playground_net_bridge.gd")
 const PlaygroundPlatform := preload("playground_platform.gd")
 const PlaygroundPlayer := preload("playground_player.gd")
@@ -339,6 +340,7 @@ func _module_load() -> DotResult:
 	game.npc_skill.bind_cvars(add_cvar, DotConVar.FLAG_NOTIFY)
 
 	_bind_limits()
+	_bind_pickup()
 
 	server.client_disconnected.connect(_on_client_disconnected)
 	game.maps.map_over.connect(_on_map_over)
@@ -1856,6 +1858,34 @@ func _bind_limits() -> void:
 	add_command(
 		"pg_limits", _cmd_limits, "pg_limits [player] — what somebody has against their limits", ""
 	).with_chat()
+
+
+## `pg_pickup` turns picking players up with the physics gun on and off; `pg_pickup_immune`
+## names the roles nobody may pick up, and `pg_pickup_override` the roles that may anyway.
+## The roles are the limits' roles, so one admin file answers both.
+func _bind_pickup() -> void:
+	var pickup := game.pickup
+	pickup.roles_fn = _roles_of
+
+	var on := add_cvar("pg_pickup", "1" if pickup.enabled else "0",
+		"1 lets the physics gun pick up players; 0 refuses it.", DotConVar.FLAG_NOTIFY)
+	on.changed.connect(func(_old: String, value: String) -> void:
+		pickup.enabled = value.to_int() != 0
+		if not pickup.enabled:
+			pickup.release_all(game.players)
+	)
+
+	var immune := add_cvar("pg_pickup_immune", ",".join(pickup.immune_roles),
+		"Roles nobody may pick up, e.g. 'admin, vip'. A role is an admin group, admin or root.")
+	immune.changed.connect(func(_old: String, value: String) -> void:
+		pickup.immune_roles = PlaygroundPickup.parse_roles(value)
+	)
+
+	var override := add_cvar("pg_pickup_override", ",".join(pickup.override_roles),
+		"Roles that may pick up anybody, immune or not.")
+	override.changed.connect(func(_old: String, value: String) -> void:
+		pickup.override_roles = PlaygroundPickup.parse_roles(value)
+	)
 
 
 ## The roles a world player holds: their admin groups by name, and `admin` / `root`.

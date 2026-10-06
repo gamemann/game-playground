@@ -707,6 +707,14 @@ func set_riding(value: bool, vehicle_node: Node3D = null) -> void:
 		controller.state.mode = DotFpsState.Mode.AIR
 
 
+## Held by somebody's physics gun ([PlaygroundPickup]): a rider with no vehicle and no
+## seat. Movement off, prediction off, and the body standing, because nobody sat down.
+func set_held(value: bool) -> void:
+	set_riding(value)
+	if character != null:
+		character.set_seated(false)
+
+
 ## Copies where the vehicle has carried this player into the movement state.
 ##
 ## [b]Without this a passenger is drawn on every other machine at the spot where they got
