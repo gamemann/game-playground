@@ -147,6 +147,7 @@ func _draw() -> void:
 	if identity != null and identity.is_authoritative:
 		return
 
+	_note_velocity()
 	prop.global_position = net_position
 	prop.global_basis = Basis(net_rotation)
 
@@ -159,6 +160,22 @@ func _draw() -> void:
 
 	_draw_look()
 	_draw_rope()
+
+
+## The mirror's velocity, from how far its drawn position moved since the last draw, kept as
+## the node's `mirror_velocity` meta for whoever stands on it ([method PlaygroundPlayer._ride_prop]).
+## A mirror is frozen and moved by writing its position, so its own `linear_velocity` is zero,
+## and a client's rider would otherwise stand still on a moving deck and be pulled along only
+## by the server's corrections: one a snapshot, measured.
+func _note_velocity() -> void:
+	var now := Time.get_ticks_usec()
+	if _drawn_at > 0 and now > _drawn_at:
+		var velocity := (net_position - prop.global_position) / (float(now - _drawn_at) / 1000000.0)
+		prop.set_meta(&"mirror_velocity", velocity)
+	_drawn_at = now
+
+
+var _drawn_at: int = 0
 
 
 ## The resize and the paint, applied to the mirror only when they changed: a resize

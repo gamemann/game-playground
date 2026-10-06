@@ -3433,11 +3433,12 @@ func _test_riding_over_the_wire() -> void:
 
 	_check(carried > 2.0, "the server carries a connected player on a moving deck", "%.2f m" % carried)
 	_check(worst < 0.5, "and the client stays within half a metre of where the server has them", "%.3f m" % worst)
-	# Measured 2026-10-06: 32 and 32, a correction every snapshot either way -- standing on a
-	# prop at all costs that, moving or not (see CLAUDE.md, prop surfing). This holds the
-	# moving deck to the still one, so riding is never worse than standing.
-	_check(moving <= still + 4, "and riding costs no more corrections than standing on the still deck",
-		"%d against %d" % [moving, still])
+	# Measured 2026-10-06: before the client carried itself, 32 (one every snapshot) moving
+	# and 32 still, the second because the client's player had mask 1 and stood on nothing.
+	# With both fixed, 8 moving and 0 still: the 8 are the start, while the mirror's
+	# interpolated motion catches up from rest. Held to that, with room for a loaded machine.
+	_check(still <= 2 and moving <= 12, "and a client stands on a still deck with no corrections, and rides a moving one with few",
+		"%d moving, %d still" % [moving, still])
 
 	var _gone := _server_game.props.remove(deck.instance_id)
 	_exchange()

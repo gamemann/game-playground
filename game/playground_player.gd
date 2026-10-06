@@ -391,9 +391,14 @@ func view_mode() -> StringName:
 ## entities and vehicles moved to their own layers, a mask of 1 was a player who walks
 ## through every crate, every NPC and every car in the sandbox, and nothing would have
 ## said so: a sweep that hits nothing is a sweep, not an error.
+##
+## [b]Through `set_collision_mask`, which survives a style.[/b] Written on the live tunables
+## it lasted until the next `set_style`, which rebuilds them from the controller's base copy:
+## a connected client has its style set straight after the join, so on every client the
+## player walked through every prop (found measuring prop surfing over the wire, 2026-10-06).
 func use_collision_mask(mask: int) -> void:
-	if controller != null and controller.tunables != null:
-		controller.tunables.collision_mask = mask
+	if controller != null:
+		controller.set_collision_mask(mask)
 
 
 ## The movement this player was built with, before any class scaled it.
@@ -693,7 +698,15 @@ func _ride_prop(state: DotFpsState) -> void:
 	if carry_enabled_fn.is_valid() and not bool(carry_enabled_fn.call()):
 		return
 
-	var lift := carry.ride(state.ground_id, state.position, MASS_KG, 1.0 / float(maxi(1, controller.tick_rate)))
+	var step := 1.0 / float(maxi(1, controller.tick_rate))
+	var lift := carry.ride(state.ground_id, state.position, MASS_KG, step)
+
+	# A connected client's ground is a mirror, which its spawner does not know and whose body
+	# is frozen: its velocity is the one its net behaviour measured (PlaygroundPropNet).
+	if lift == Vector3.ZERO and state.ground_id != 0:
+		var ground: Object = instance_from_id(state.ground_id)
+		if ground is Node and (ground as Node).has_meta(&"mirror_velocity"):
+			lift = ((ground as Node).get_meta(&"mirror_velocity") as Vector3) * step
 
 	if lift == Vector3.ZERO:
 		return
