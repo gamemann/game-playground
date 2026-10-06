@@ -54,13 +54,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 692
+const CHECKS := 701
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 38
+const SECTIONS := 39
 
 var _passed := 0
 var _failed := 0
@@ -134,6 +134,7 @@ func _run() -> void:
 	await _test_vehicles()
 	await _test_picking_players_up()
 	await _test_riding_a_moving_prop()
+	await _test_breaking_props()
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
@@ -406,6 +407,92 @@ func _test_riding_a_moving_prop() -> void:
 	var _gone := playground.props.remove(deck.instance_id)
 	playground.remove_player(&"surfer")
 	_done()
+
+
+# --- Destruction -----------------------------------------------------------
+
+func _test_breaking_props() -> void:
+	_section("breaking props")
+
+	var player: PlaygroundPlayer = playground.players[&"bot"]
+	playground.props.limits.spawn_interval = 0.0
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	player.teleport(Vector3(-60.0, 1.0, -60.0), 90.0)
+	await get_tree().physics_frame
+
+	var eye := player.eye_position()
+	var aim := player.aim_direction()
+	var crate := playground.props.spawn(&"crate", &"bot", eye + aim * 4.0)
+	await get_tree().physics_frame
+
+	# Off by default: a pistol emptied into a crate shoves it and breaks nothing.
+	var rig := PlaygroundZee.arm(
+		player, playground.weapon_def(&"zee_pistol"), ZeeWeaponRig.Role.SERVER, true,
+		playground.tick_rate, playground.current_tick()
+	)
+	var _off := _fire_at_crates(rig, player, 120)
+	_check(not playground.config.destruction and crate.is_alive(), "with destruction off, shots break nothing")
+
+	# On: the same shots, through the game's own shot handling, take its health and break it.
+	playground.config.destruction = true
+	var before := playground.props.world_count()
+	crate.node.global_position = eye + aim * 4.0
+	(crate.node as RigidBody3D).linear_velocity = Vector3.ZERO
+	await get_tree().physics_frame
+	var fired := _fire_at_crates(rig, player, 400, crate)
+	_check(not crate.is_alive(), "with it on, a pistol shoots a crate apart", "%d shots, health %.0f" % [fired, playground.prop_damage.health_of(crate.instance_id)])
+	var pieces := playground.props.all_props().filter(func(p: DotPropInstance) -> bool: return p.def.id == &"debris")
+	_check(pieces.size() > 0 and playground.props.world_count() >= before - 1 + pieces.size(),
+		"and leaves debris where it was", "%d pieces" % pieces.size())
+	_check(pieces.size() > 0 and pieces[0].owner_id == &"", "owned by nobody")
+	PlaygroundZee.disarm(player)
+
+	# Debris goes on its own.
+	for i in range(int(playground.config.debris_seconds * playground.tick_rate) + 8):
+		await get_tree().physics_frame
+	var left := playground.props.all_props().filter(func(p: DotPropInstance) -> bool: return p.def.id == &"debris")
+	_check(left.is_empty(), "and the debris is cleared up after a few seconds", "%d left" % left.size())
+
+	# A barrel goes up, and a crate beside it goes with it.
+	var barrel := playground.props.spawn(&"barrel", &"bot", Vector3(-50.0, 1.0, -60.0))
+	var near := playground.props.spawn(&"crate", &"bot", Vector3(-49.0, 0.6, -60.0))
+	var far := playground.props.spawn(&"crate", &"bot", Vector3(-40.0, 0.6, -60.0))
+	await get_tree().physics_frame
+	var _shot := playground.hurt_prop(barrel.node, 100.0, &"bot")
+	_check(not barrel.is_alive() and not near.is_alive() and far.is_alive(),
+		"a barrel shot open goes up and takes the crate beside it, not the one ten metres off")
+
+	# A protected owner's props do not break.
+	var theirs := playground.props.spawn(&"crate", &"other", Vector3(-45.0, 0.6, -55.0))
+	playground.props.set_protected(&"other", true)
+	_check(not playground.hurt_prop(theirs.node, 100.0, &"bot") and theirs.is_alive(), "a creative builder's crate does not break")
+	playground.props.set_protected(&"other", false)
+	var slab := playground.props.spawn(&"slab", &"bot", Vector3(-45.0, 1.0, -70.0))
+	_check(slab != null and not playground.hurt_prop(slab.node, 1000.0, &"bot") and slab.is_alive(),
+		"and a slab, which somebody builds on, has no health to lose", "spawned %s" % (slab != null))
+
+	playground.config.destruction = false
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_done()
+
+
+## Holds and releases the trigger for up to [param ticks], every outcome through the game's own
+## `player_shots_fired`; stops early once [param until] has broken. Returns the shots fired.
+func _fire_at_crates(rig: ZeeWeaponRig, player: PlaygroundPlayer, ticks: int, until: DotPropInstance = null) -> int:
+	var fired := 0
+	var state := player.controller.state
+	for i in range(ticks):
+		var held := DotFpsCommand.BUTTON_USER_0 if (i / 8) % 2 == 0 else 0
+		var outcome := rig.simulate_tick(
+			PlaygroundZee.command_for(held, state.yaw, state.pitch, PlaygroundZee.slot_of(rig)),
+			playground.current_tick() + i
+		) if rig != null else null
+		if outcome != null:
+			fired += outcome.shots.size()
+			playground.player_shots_fired(player.player_id, outcome)
+		if until != null and not until.is_alive():
+			break
+	return fired
 
 
 # --- Boot ------------------------------------------------------------------
@@ -3000,8 +3087,9 @@ func _test_spawn_menu() -> void:
 	var props_shown := menu.shown()
 	var prop_count := 0
 
+	# Hidden entries (debris) are the game's, not the menu's, as the menu's own filter says.
 	for def in playground.props.catalogue.props:
-		if PlaygroundSpawnables.kind_of(def) == PlaygroundSpawnables.Kind.PROP:
+		if PlaygroundSpawnables.kind_of(def) == PlaygroundSpawnables.Kind.PROP and not bool(def.meta.get("hidden", false)):
 			prop_count += 1
 
 	_check(

@@ -416,6 +416,12 @@ func _blast(space: PhysicsDirectSpaceState3D, f: Flying, at: Vector3, radius: fl
 		if hurt is Callable and (hurt as Callable).is_valid():
 			(hurt as Callable).call(f.owner_id, StringName(str(collider.get("player_id"))), damage, distance)
 
+	# A breakable prop takes the blast too (`destruction`); one it breaks is not there to throw.
+	if collider is RigidBody3D and game != null and game.has_method("hurt_prop"):
+		var _hurt: bool = game.call("hurt_prop", collider, damage, f.owner_id)
+		if not is_instance_valid(collider) or collider.is_queued_for_deletion():
+			return
+
 	if collider is RigidBody3D and not (collider as RigidBody3D).freeze:
 		var away := (target - at)
 		away = away.normalized() if away.length_squared() > 0.0001 else Vector3.UP

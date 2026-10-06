@@ -342,6 +342,7 @@ func _module_load() -> DotResult:
 	_bind_limits()
 	_bind_pickup()
 	_bind_creative()
+	_bind_props_feel()
 
 	server.client_disconnected.connect(_on_client_disconnected)
 	game.maps.map_over.connect(_on_map_over)
@@ -1905,6 +1906,24 @@ func _bind_creative() -> void:
 
 	add_command("creative", _cmd_creative,
 		"Creative mode: your props and you cannot be touched, and you cannot hurt anybody", "").with_chat()
+
+
+## `pg_destruction` (off) lets shots and blasts break props with health; `pg_prop_surf`
+## (on) lets a moving prop carry whoever stands on it. Both live: the next shot, the next tick.
+func _bind_props_feel() -> void:
+	var destruction := add_cvar("pg_destruction", "1" if game.config.destruction else "0",
+		"1 lets shots and blasts break crates, planks and barrels into debris; 0 makes props unbreakable.",
+		DotConVar.FLAG_NOTIFY)
+	destruction.changed.connect(func(_old: String, value: String) -> void:
+		game.config.destruction = value.to_int() != 0
+	)
+
+	var surf := add_cvar("pg_prop_surf", "1" if game.config.prop_surfing else "0",
+		"1 lets a moving prop carry whoever stands on it; 0 leaves props still under your feet.",
+		DotConVar.FLAG_NOTIFY)
+	surf.changed.connect(func(_old: String, value: String) -> void:
+		game.config.prop_surfing = value.to_int() != 0
+	)
 
 
 func _cmd_creative(ctx: DotCmdContext) -> void:

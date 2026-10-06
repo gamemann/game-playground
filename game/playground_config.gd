@@ -105,6 +105,16 @@ extends DotConfig
 ## of your weight. Off leaves a crate exactly as solid and as still as the floor.
 @export var prop_surfing: bool = true
 
+## Whether shots and blasts break props that have health (`PlaygroundSpawnables.BREAKABLE`):
+## a crate shot apart into debris, a barrel that goes up. Off by default: a sandbox where
+## somebody can shoot your build to pieces is a different server, and an operator chooses
+## it (`pg_destruction`). Creative mode protects a builder's props either way.
+@export var destruction: bool = false
+
+## Pieces a broken prop leaves, and how long they lie there.
+@export_range(0, 12) var debris_pieces: int = 4
+@export_range(0.5, 60.0, 0.5) var debris_seconds: float = 6.0
+
 ## Props in the world at once, from everybody. 0 = unlimited.
 @export_range(0, 10000, 1) var prop_world_budget: int = 1024
 

@@ -161,6 +161,9 @@ static func catalogue() -> DotPropCatalogue:
 
 	for row in props:
 		var prop := DotPropDef.make(row[0], SCENE_PROP)
+		# Breakable only with `destruction` on (PlaygroundConfig); the health is always
+		# declared, so turning it on needs nothing but the switch.
+		prop.max_health = float(BREAKABLE.get(row[0], 0.0))
 		prop.display_name = row[1]
 		prop.category = row[2]
 		prop.mass = row[6]
@@ -171,6 +174,12 @@ static func catalogue() -> DotPropCatalogue:
 			"extent": [row[4].x, row[4].y, row[4].z],
 			"colour": row[5],
 		}
+		if row[0] == &"barrel":
+			# Shot open, it goes up: the arena's damage on whoever is beside it, and a
+			# shove for everything loose.
+			prop.explode_radius = 5.0
+			prop.explode_damage = 60.0
+			prop.explode_force = 300.0
 		out.add(prop)
 
 	# id, name, script, extent, colour, mass kg, cost, meta
@@ -286,11 +295,41 @@ static func catalogue() -> DotPropCatalogue:
 		out.add(_vehicle_prop(vehicle))
 
 	out.add(_balloon())
+	out.add(_debris())
 
 	for weapon in PlaygroundZee.defs():
 		out.add(_pickup(weapon))
 
 	return out
+
+
+## Health per prop, for `destruction`. What is not here does not break: the slab, the pillar
+## and the platform are what somebody builds ON, and a floor shot out from under a build is
+## not the fun kind of destruction. A barrel is the one that goes up.
+const BREAKABLE := {
+	&"plank": 60.0, &"beam": 150.0, &"panel": 80.0,
+	&"crate": 40.0, &"crate_large": 120.0, &"barrel": 30.0, &"can": 5.0, &"die": 10.0,
+}
+
+
+## A piece of something broken: hidden, owned by nobody, cleaned up after a few seconds by
+## [method Playground._expire_debris]. A plain prop, so it tumbles, is shoved and is drawn on
+## every client through the spawner like any other.
+static func _debris() -> DotPropDef:
+	var def := DotPropDef.make(&"debris", SCENE_PROP)
+	def.display_name = "Debris"
+	def.category = &"debris"
+	def.limit_group = &"debris"
+	def.mass = 3.0
+	def.cost = 1
+	def.size = DotPropDef.Size.TINY
+	def.meta = {
+		"shape": "box",
+		"extent": [0.35, 0.35, 0.35],
+		"colour": "8a8a8a",
+		"hidden": true,
+	}
+	return def
 
 
 ## A balloon, as the tool gun ties on. Hidden from the menu — it is the tool's, not a prop to

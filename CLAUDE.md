@@ -1219,7 +1219,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 692 checks, 38 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 701 checks, 39 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 320 checks, 34 sections
@@ -1778,6 +1778,10 @@ Standing on a moving prop carries a player with it (`pg` config `prop_surfing`, 
 **Building it found that no player here had ever collided with a prop.** `use_collision_mask` set the tunables' mask after the controller's setup, and dot-player-controller's body had copied the mask (1) when it was built, so every sweep saw the world layer only: players walked through every crate, NPC and vehicle, and a rider stood on a platform fell straight through it. Fixed in dot-player-controller (dc06578: the controller hands the tunables' mask to its body every tick), which changes the same thing in five other games. **Not yet measured over the wire**: a client's prop mirrors are frozen, so `DotPropCarry.velocity_at` answers zero there and a connected rider is carried by corrections, not by prediction. Measuring that, and giving a mirror the velocity of its interpolated motion if it is bad, is the next step.
 
 `headless_playground` takes `-- --only=<method>` to run the boot and one section, for working on it; the totals are not checked when it is used.
+
+## Breaking props (2026-10-06)
+
+`pg_destruction` (off, `PlaygroundConfig.destruction`) lets shots and blasts break props that have health: `PlaygroundSpawnables.BREAKABLE` gives the plank, beam, panel, crates, barrel, can and die a `max_health` (always declared, so the switch is all it takes), and the slab, pillar and platform none, because a floor shot out from under a build is not the fun kind. dot-props' `DotPropDamage` (`Playground.prop_damage`) keeps the health; `Playground.hurt_prop` is the one door, called by a player's zee shot (`player_shots_fired`), an armed NPC's (`npc_shots_fired`, before the shove) and a grenade's blast (`PlaygroundProjectiles._blast`). A broken prop leaves `debris_pieces` (4) hidden, ownerless `debris` props in its colour, cleaned up after `debris_seconds` (6) by `_expire_debris`, spawned through the spawner so every client draws them. A barrel shot open explodes (5 m): players through the arena (so only with it on), armed NPCs through their health, other breakables through `hurt_prop`. **A blast reaches the barrel that made it**, still in the spawner while it explodes, and the first version recursed until the stack ran out; `_breaking` skips whatever is mid-break until the outermost blast is done, so a chain of barrels still goes up, once each. A creative builder's props do not break (dot-props refuses a protected owner's). `headless_playground`'s *breaking props* (9: off breaks nothing, a real pistol through `player_shots_fired` shoots a crate apart, debris owned by nobody and gone in six seconds, a barrel taking the crate a metre away and not the one ten off, a creative builder's crate, a slab). `pg_prop_surf` is the cvar for the surfing above.
 
 ## Things deliberately not here
 

@@ -200,6 +200,19 @@ var constraints: PlaygroundConstraints = null
 ## ([method PlaygroundPlayer._on_simulated]).
 var carry: DotPropCarry = null
 
+## dot-props' health and breaking, for `config.destruction`. Built on every machine; only the
+## authoritative one hurts anything (see [method hurt_prop]).
+var prop_damage: DotPropDamage = null
+
+## Debris instance id -> the game time it goes, in seconds.
+var _debris_expiry: Dictionary = {}
+
+## Props breaking right now. A barrel's blast reaches the barrel itself, which is still in the
+## spawner while it explodes; hurting it again breaks it again, for ever. Cleared at the end of
+## the outermost blast, so a chain of barrels still goes up, once each.
+var _breaking: Dictionary = {}
+var _blast_depth: int = 0
+
 ## Who is holding whom with the physics gun. The module binds `pg_pickup*` to it and hands
 ## it the same roles [member spawn_limits] uses.
 var pickup: PlaygroundPickup = PlaygroundPickup.new()
@@ -481,6 +494,8 @@ func _simulate_tick(step: float) -> void:
 	if projectiles != null:
 		projectiles.tick(step)
 
+	_expire_debris()
+
 	# After the moves and before the timers, which is the same ordering rule: a rider's
 	# position for this tick is where the vehicle carried them, not where they were.
 	_carry_riders()
@@ -696,6 +711,13 @@ func _build_props() -> void:
 	carry = DotPropCarry.new()
 	carry.name = "PropCarry"
 	props.add_child(carry)
+
+	prop_damage = DotPropDamage.new()
+	prop_damage.name = "PropDamage"
+	prop_damage.authoritative = authoritative
+	props.add_child(prop_damage)
+	prop_damage.broken.connect(_on_prop_broken)
+	prop_damage.exploded.connect(_on_prop_exploded)
 
 
 ## After the props, because the item catalogue is derived from the prop catalogue — one
@@ -1110,6 +1132,12 @@ func _rebuild_npc_candidates() -> void:
 ## emitted BEFORE the node is freed, which is exactly so a listener holding a
 ## reference can let go while it still exists.
 func _on_prop_removed(prop: DotPropInstance, _reason: StringName) -> void:
+	# Not while a blast is still walking the props: the barrel it started from must stay
+	# skipped until the outermost blast is done (see [member _breaking]).
+	if _blast_depth == 0:
+		_breaking.erase(prop.instance_id)
+	_debris_expiry.erase(prop.instance_id)
+
 	# A vehicle first, because it may still have people in it. `remove` evacuates them —
 	# forcing the exit, because a car being deleted is exactly the case where there may
 	# be nowhere to stand — and leaves the node alone, since dot-props owns it.
@@ -1245,6 +1273,8 @@ func player_shots_fired(player_id: StringName, outcome: DotWeaponOutcome) -> voi
 
 		if collider is Node and (collider as Node).has_method("take_damage"):
 			(collider as Node).call("take_damage", float(hit["damage"]), player_id)
+		elif collider is Node:
+			var _broke := hurt_prop(collider as Node, float(hit["damage"]), player_id)
 
 
 ## An armed NPC's weapon fired: what it hits is hurt — another NPC always, a player only
@@ -1275,11 +1305,14 @@ func npc_shots_fired(entity: Node3D, outcome: DotWeaponOutcome) -> void:
 		elif collider is PlaygroundPlayer:
 			if arena_hurt.is_valid():
 				arena_hurt.call(shooter_id, (collider as PlaygroundPlayer).player_id, damage, float(hit["distance"]))
-		elif collider is RigidBody3D and not (collider as RigidBody3D).freeze:
-			(collider as RigidBody3D).apply_impulse(
-				(hit["direction"] as Vector3) * damage * SHOT_IMPULSE,
-				(hit["point"] as Vector3) - (collider as Node3D).global_position
-			)
+		elif collider is RigidBody3D:
+			# Hurt first: a shot that breaks a crate leaves nothing to shove.
+			var _broke := hurt_prop(collider as Node, damage, shooter_id)
+			if not (collider as RigidBody3D).freeze and (collider as Node3D).is_inside_tree():
+				(collider as RigidBody3D).apply_impulse(
+					(hit["direction"] as Vector3) * damage * SHOT_IMPULSE,
+					(hit["point"] as Vector3) - (collider as Node3D).global_position
+				)
 
 
 ## `func(attacker: StringName, victim: StringName, amount: float, distance: float)`: how an
@@ -1750,6 +1783,99 @@ func set_creative(id: StringName, on: bool) -> DotResult:
 func is_creative(id: StringName) -> bool:
 	var player: PlaygroundPlayer = players.get(id)
 	return player != null and player.creative
+
+
+## A shot or a blast reached [param node]: if it is a prop with health and `destruction` is
+## on, it takes [param amount] from [param by]. True when it did. One place, so the gun, the
+## NPC's gun and the grenade cannot disagree about what breaks.
+func hurt_prop(node: Node, amount: float, by: StringName) -> bool:
+	if not authoritative or config == null or not config.destruction or prop_damage == null or props == null:
+		return false
+
+	var prop := props.prop_for_node(node)
+
+	if prop == null or _breaking.has(prop.instance_id) or not prop_damage.is_breakable(prop.instance_id):
+		return false
+
+	return prop_damage.hurt(prop.instance_id, amount, by).ok
+
+
+## Broken: a few pieces in its colour where it stood, owned by nobody and gone in
+## `debris_seconds`. Spawned through the spawner so every client draws them.
+func _on_prop_broken(prop: DotPropInstance, at: Vector3, _by: StringName) -> void:
+	_breaking[prop.instance_id] = true
+
+	if not authoritative or config == null or props == null:
+		return
+
+	var colour := PlaygroundProp.colour_of(prop.def) if prop.def != null else Color.GRAY
+	var extent := PlaygroundProp.extent_of(prop.def) if prop.def != null else Vector3.ONE
+	var count := mini(config.debris_pieces, maxi(1, int(ceil(extent.x * extent.y * extent.z * 4.0))))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = prop.instance_id
+
+	for i in count:
+		var offset := Vector3(rng.randf_range(-0.5, 0.5) * extent.x, rng.randf_range(0.0, 0.5) * extent.y, rng.randf_range(-0.5, 0.5) * extent.z)
+		var piece := props.spawn(&"debris", &"", at + offset)
+
+		if piece == null:
+			break
+
+		if piece.node is PlaygroundProp:
+			(piece.node as PlaygroundProp).set_tint(colour)
+
+		if piece.node is RigidBody3D:
+			(piece.node as RigidBody3D).linear_velocity = offset.normalized() * rng.randf_range(2.0, 5.0) + Vector3.UP * 2.0
+
+		_debris_expiry[piece.instance_id] = _clock_seconds() + config.debris_seconds
+
+
+## A barrel went up: players beside it are hurt through the arena (so only with it on),
+## armed NPCs through their own health, and other breakables take the blast too.
+func _on_prop_exploded(at: Vector3, radius: float, damage: float, _force: float, by: StringName) -> void:
+	if not authoritative or radius <= 0.0:
+		return
+
+	for id in players:
+		var player: PlaygroundPlayer = players[id]
+		var distance := player.global_position.distance_to(at)
+		if distance <= radius and arena_hurt.is_valid():
+			arena_hurt.call(by, id, damage * (1.0 - distance / radius), distance)
+
+	_blast_depth += 1
+
+	if props != null:
+		for other in props.all_props():
+			if other == null or not other.is_alive() or other.node == null or _breaking.has(other.instance_id):
+				continue
+			var distance := other.position().distance_to(at)
+			if distance > radius:
+				continue
+			if other.node.has_method("take_damage"):
+				other.node.call("take_damage", damage * (1.0 - distance / radius), by)
+			else:
+				var _hurt := hurt_prop(other.node, damage * (1.0 - distance / radius), by)
+
+	_blast_depth -= 1
+
+	if _blast_depth == 0:
+		_breaking.clear()
+
+
+func _expire_debris() -> void:
+	if _debris_expiry.is_empty() or props == null:
+		return
+
+	var now := _clock_seconds()
+
+	for instance_id: int in _debris_expiry.keys():
+		if now >= float(_debris_expiry[instance_id]):
+			_debris_expiry.erase(instance_id)
+			var _gone := props.remove(instance_id, DotPropSpawner.REASON_CLEANUP)
+
+
+func _clock_seconds() -> float:
+	return float(_tick) / float(maxi(tick_rate, 1))
 
 
 func may_touch_others() -> bool:
