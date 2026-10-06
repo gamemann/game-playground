@@ -38,6 +38,38 @@ enum Shape {
 ## without going back to the catalogue.
 var def: DotPropDef = null
 
+## How much bigger or smaller than its definition this prop is. 1 is as catalogued.
+##
+## [b]Rebuilt, never `scale`d.[/b] A scaled RigidBody3D is something Godot's physics does
+## not support — the shape's size and the solver's idea of it disagree, contacts jitter and
+## the body sinks into the floor — so a resize builds a new collision shape and mesh at the
+## new extent, from the definition, every time. From the definition rather than from the
+## current shape, so inflating and deflating back is exactly where it started.
+var size_scale: float = 1.0
+
+## A colour the tool gun painted, or none (alpha 0). Over the definition's colour, not
+## instead of it, so taking the paint off brings the catalogue's back.
+var tint: Color = Color(0, 0, 0, 0)
+
+## The ropes drawn from this prop, up to [constant ROPE_SLOTS]: each `{id: int (the
+## constraint's), peer: Node3D or null, a: Vector3 (local), b: Vector3 (peer-local, or a
+## world point with no peer), length: float}`. Written by [PlaygroundConstraints], read by
+## the prop's net behaviour to tell clients.
+var ropes: Array = []
+
+## How many ropes one prop tells clients about. A rope is described on whichever of its two
+## props has room, so a hub with three balloons tied to it uses none of the hub's slots
+## (each balloon carries its own string), and three is room for a crate slung between
+## anchors as well. More ropes than that on both ends are still simulated, and not drawn.
+const ROPE_SLOTS := 3
+
+## Times the definition's mass, on top of the size: the physical-properties tool's weight.
+var mass_multiplier: float = 1.0
+
+## The smallest and largest a prop may be resized to.
+const MIN_SCALE := 0.25
+const MAX_SCALE := 4.0
+
 var _configured: bool = false
 
 
@@ -63,10 +95,26 @@ func _warn_if_unconfigured() -> void:
 func configure(p_def: DotPropDef) -> void:
 	def = p_def
 	_configured = true
+	_build_body()
 
-	var extent := extent_of(p_def)
-	var shape := shape_of(p_def)
-	var colour := colour_of(p_def)
+
+## Rebuilds the collision and the mesh from the definition, [member size_scale] and
+## [member tint]. What `configure`, a resize and a repaint all come down to.
+func _build_body() -> void:
+	for old_name in ["Collision", "Mesh"]:
+		var old := get_node_or_null(old_name)
+
+		if old != null:
+			# Renamed before it goes: `queue_free` is deferred, and a new child given the
+			# same name in the same frame would be renamed "Collision2" by the tree — and
+			# every lookup by name would then find the dying one.
+			old.name = "%sOld" % old_name
+			remove_child(old)
+			old.queue_free()
+
+	var extent := extent_of(def) * size_scale
+	var shape := shape_of(def)
+	var colour := tint if tint.a > 0.0 else colour_of(def)
 
 	# Mass is NOT set here. `DotPropSpawner` puts `def.mass` on the body before it
 	# enters the tree, which is earlier than this runs and earlier than the first
@@ -96,6 +144,43 @@ func configure(p_def: DotPropDef) -> void:
 	# further than a plank is thick — so the discrete solver puts it through a wall
 	# and the player watches their build leave the map.
 	continuous_cd = true
+
+
+## Resizes to [param factor] of the definition, clamped to [constant MIN_SCALE] ..
+## [constant MAX_SCALE]. Mass goes with the volume — a barrel twice the size weighs eight
+## times as much — because a giant crate a physics gun lifts like a feather is the first
+## thing anybody tries with a resizer. Returns the scale actually applied.
+func set_size_scale(factor: float) -> float:
+	var clamped := clampf(factor, MIN_SCALE, MAX_SCALE)
+
+	if is_equal_approx(clamped, size_scale):
+		return size_scale
+
+	size_scale = clamped
+
+	if def != null:
+		refresh_mass()
+		_build_body()
+
+	return size_scale
+
+
+## The mass this prop should have: the definition's, by its volume, by the weight setting.
+func refresh_mass() -> void:
+	if def != null:
+		mass = maxf(def.mass * pow(size_scale, 3.0) * mass_multiplier, 0.1)
+
+
+## Paints the prop. A colour with no alpha takes the paint off.
+func set_tint(colour: Color) -> void:
+	tint = colour
+
+	var mesh := get_node_or_null("Mesh") as MeshInstance3D
+
+	if mesh != null and mesh.material_override is StandardMaterial3D:
+		(mesh.material_override as StandardMaterial3D).albedo_color = (
+			colour if colour.a > 0.0 else (colour_of(def) if def != null else Color.WHITE)
+		)
 
 
 # --- Reading a definition --------------------------------------------------

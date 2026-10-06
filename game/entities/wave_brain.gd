@@ -34,7 +34,16 @@ func _build() -> void:
 		# pass and documents at both ends.
 		DotNpcAiSequence.reactive_with(&"chase", [
 			DotNpcAiLeaf.Condition.new(&"sees", _sees),
-			DotNpcAiLeaf.Action.new(&"advance", _advance),
+			DotNpcAiSelector.new(&"engage", [
+				# Three of the wave on a player at a time — the squad's attack slots — and
+				# the rest on a ring round them, working round to the side the player is not
+				# facing. A wave that queued would be a wave a player holds off at a door.
+				DotNpcAiSequence.reactive_with(&"attack", [
+					DotNpcAiLeaf.Condition.new(&"has a slot", _has_slot),
+					DotNpcAiLeaf.Action.new(&"advance", _advance),
+				] as Array[DotNpcAiNode]),
+				DotNpcAiLeaf.Action.new(&"surround", _surround),
+			] as Array[DotNpcAiNode]),
 		] as Array[DotNpcAiNode]),
 		# Go and look. Not standing still: an NPC that stops dead the instant it loses you
 		# is one you escape by stepping behind a crate.
@@ -42,6 +51,8 @@ func _build() -> void:
 			DotNpcAiLeaf.Condition.new(&"remembers", _remembers),
 			DotNpcAiLeaf.Action.new(&"look", _search),
 		] as Array[DotNpcAiNode]),
+		# Where players actually go on this map, for the NPCs with the tactics to know it.
+		DotNpcAiLeaf.Action.new(&"patrol", func(c: DotNpcAiContext) -> int: return patrol_hot(c, speed * 0.5)),
 		DotNpcAiLeaf.Action.new(&"wander", _wander),
 	] as Array[DotNpcAiNode])
 
@@ -57,8 +68,18 @@ func _sees(_ctx: DotNpcAiContext) -> bool:
 	return npc.has_target() and has_reacted()
 
 
-func _remembers(ctx: DotNpcAiContext) -> bool:
-	return blackboard.has(&"last_seen", ctx.now)
+## Whether there is somewhere worth looking. dot-npc-ai's memory, which lasts the
+## character's `memory_time` rather than the ten seconds this file used to hard-code.
+func _has_slot(_ctx: DotNpcAiContext) -> bool:
+	return claim_attack_slot()
+
+
+func _surround(ctx: DotNpcAiContext) -> DotNpcAiNode.Status:
+	return surround(ctx, speed * 0.8, 4.0, 1.8)
+
+
+func _remembers(_ctx: DotNpcAiContext) -> bool:
+	return remembers_target()
 
 
 func _advance(ctx: DotNpcAiContext) -> DotNpcAiNode.Status:
@@ -67,9 +88,8 @@ func _advance(ctx: DotNpcAiContext) -> DotNpcAiNode.Status:
 	if goal == Vector3.INF:
 		return DotNpcAiNode.Status.FAILURE
 
-	# Remembered with a lifetime. A blackboard that never forgot would send this NPC to a
-	# position from five minutes ago — which is why `DotNpcAiBlackboard` has one at all.
-	blackboard.put(&"last_seen", goal, ctx.now, 10.0)
+	# Not remembered here any more: dot-npc-ai's brain keeps the last known position itself,
+	# every tick there is a target, for as long as this NPC's character remembers.
 
 	# With spacing: a wave converging on one player climbs itself, and the one on top has
 	# a horizontal offset of nothing from the one below — so it chases perfectly at a dead
@@ -78,23 +98,11 @@ func _advance(ctx: DotNpcAiContext) -> DotNpcAiNode.Status:
 	return DotNpcAiNode.Status.RUNNING
 
 
+## Goes there and looks round, then gives up. dot-npc-ai's search: it walks to the spot,
+## sweeps its sight cone either side, and forgets once it has looked — where this file used
+## to stop dead on arrival and drift off, which a player read as it never having looked.
 func _search(ctx: DotNpcAiContext) -> DotNpcAiNode.Status:
-	var last: Variant = blackboard.get_value(&"last_seen", ctx.now, null)
-
-	if not (last is Vector3):
-		return DotNpcAiNode.Status.FAILURE
-
-	var goal: Vector3 = last
-
-	if npc.position().distance_to(goal) < 1.5:
-		# Written with a lifetime that has already passed, which is how this blackboard
-		# is cleared: expiry is on read rather than swept, so an entry nobody looks at
-		# costs nothing and one written into the past is gone the next time anybody does.
-		blackboard.put(&"last_seen", goal, ctx.now, 0.001)
-		return DotNpcAiNode.Status.SUCCESS
-
-	steer_toward(goal, speed * 0.8, ctx.delta)
-	return DotNpcAiNode.Status.RUNNING
+	return search(ctx, speed * 0.8, 1.8)
 
 
 func _wander(ctx: DotNpcAiContext) -> DotNpcAiNode.Status:

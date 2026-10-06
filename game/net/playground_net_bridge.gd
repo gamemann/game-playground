@@ -10,12 +10,14 @@ const PlaygroundPlayer := preload("../playground_player.gd")
 const PlaygroundPlayerNet := preload("playground_player_net.gd")
 const PlaygroundProp := preload("../playground_prop.gd")
 const PlaygroundPropNet := preload("playground_prop_net.gd")
+const PlaygroundNpcNet := preload("playground_npc_net.gd")
 const PlaygroundRequest := preload("playground_request.gd")
 const PlaygroundSpawnables := preload("../playground_spawnables.gd")
 const PlaygroundVehicleNet := preload("playground_vehicle_net.gd")
 const PlaygroundWeapon := preload("../weapons/playground_weapon.gd")
 const PlaygroundWeapons := preload("../playground_weapons.gd")
 const PlaygroundZee := preload("../playground_zee.gd")
+const PlaygroundWaves := preload("../playground_waves.gd")
 
 ## Joins a [Playground] to a [DotNetManager]. The netcode seam, and the only file in
 ## this project that names both.
@@ -172,6 +174,17 @@ var _prev_buttons: Dictionary = {}
 ## and the prop each one has armed. See [method _give_weapon].
 var _toy_of: Dictionary = {}
 var _armed_of: Dictionary = {}
+
+## Wave NPCs replicated through the prop table: instance id -> their catalogue id. They are
+## not props, so the spawner cannot be asked what they are when a late joiner arrives.
+var _npc_kinds: Dictionary = {}
+
+## The catalogue a client builds a wave NPC's body from. Set by the module with the waves.
+var npc_catalogue: DotNpcCatalogue = null
+
+## session id -> [mode, settings] for the tool gun, kept so a tool gun given later — or
+## given again — starts in the mode the player last chose rather than the default one.
+var _tool_settings_of: Dictionary = {}
 var _player_of_peer: Dictionary = {}
 var _peer_of_player: Dictionary = {}
 var _ready_peers: Dictionary = {}
@@ -257,6 +270,11 @@ func attach(p_game: Playground, p_net: DotNetManager, link_parent: Node) -> DotR
 		game.timers.player_started.connect(_on_run_changed)
 		game.timers.player_stopped.connect(_on_run_stopped)
 		game.run_filed.connect(_on_run_filed)
+		game.weapon_picked_up.connect(_on_weapon_picked_up)
+
+		if game.projectiles != null:
+			game.projectiles.launched.connect(_on_projectile_launched)
+			game.projectiles.detonated.connect(_on_projectile_detonated)
 
 	return DotResult.success(true)
 
@@ -531,6 +549,7 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		return
 
 	_prop_nets[prop.instance_id] = behaviour
+	behaviour.net_id_of = net_id_of_node
 	behaviour.pull()
 
 	_broadcast(PlaygroundEvents.Kind.PROP, PlaygroundEvents.write_prop(
@@ -540,6 +559,72 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		PlaygroundSpawnables.kind_of(prop.def) == PlaygroundSpawnables.Kind.ENTITY,
 		body.global_position
 	))
+
+
+# --- Server: wave NPCs ------------------------------------------------------
+
+## Replicates everything [param spawner] spawns, as props are: a PROP event says what it is
+## and a [PlaygroundPropNet] moves it. Called by the module once the waves exist.
+##
+## [b]Through the prop path, not a second one.[/b] A wave NPC was never replicated at all —
+## a connected client saw the waves' effects (stress, the director's pacing, players going
+## down) and not one NPC. What a client needs is a body where the server's is, which is
+## exactly what the prop path already does for any body; its definition is found in
+## [member npc_catalogue] when the prop catalogue does not have it.
+func watch_npc_spawner(spawner: DotNpcSpawner, catalogue: DotNpcCatalogue) -> void:
+	npc_catalogue = catalogue
+
+	if spawner == null or net == null or not net.is_server:
+		return
+
+	spawner.spawned.connect(_on_npc_spawned)
+	spawner.removed.connect(_on_npc_removed)
+
+
+func _on_npc_spawned(npc: DotNpcInstance) -> void:
+	var body := npc.node as Node3D
+
+	if body == null or net == null or not net.is_server:
+		return
+
+	var behaviour := PlaygroundPropNet.new()
+	behaviour.name = "Net"
+	behaviour.prop = body
+	body.add_child(behaviour)
+
+	var identity := DotNetIdentity.new()
+	identity.name = "Identity"
+	identity.owner_peer_id = 0
+	identity.authority = DotNetIdentity.Authority.SERVER
+	body.add_child(identity)
+
+	var registered := net.registry.register(identity, 0, net.clock.tick, net.config)
+
+	if not registered.ok:
+		DotLog.warn(CHANNEL, "could not replicate an NPC", {"error": str(registered.error)})
+		return
+
+	_prop_nets[npc.instance_id] = behaviour
+	_npc_kinds[npc.instance_id] = npc.def.id
+	behaviour.net_id_of = net_id_of_node
+	behaviour.pull()
+
+	_broadcast(PlaygroundEvents.Kind.PROP, PlaygroundEvents.write_prop(
+		identity.net_id, npc.def.id, 0, true, body.global_position
+	))
+
+
+func _on_npc_removed(npc: DotNpcInstance, reason: StringName) -> void:
+	var behaviour: PlaygroundPropNet = _prop_nets.get(npc.instance_id)
+	_prop_nets.erase(npc.instance_id)
+	_npc_kinds.erase(npc.instance_id)
+
+	if behaviour == null or behaviour.identity == null or net == null:
+		return
+
+	var net_id := behaviour.identity.net_id
+	net.registry.unregister(net_id)
+	_broadcast(PlaygroundEvents.Kind.PROP_GONE, PlaygroundEvents.write_prop_gone(net_id, reason))
 
 
 func _on_prop_removed(prop: DotPropInstance, reason: StringName) -> void:
@@ -568,9 +653,22 @@ func _on_prop_refused(player_id: StringName, prop_id: StringName, reason: String
 
 ## Which replicated behaviour a definition wants. One table, read by both ends.
 static func _behaviour_for(def: DotPropDef) -> PlaygroundPropNet:
+	# A wave NPC has no prop definition at all; it is a body to move, like any prop.
+	if def == null:
+		return PlaygroundPropNet.new()
 	if PlaygroundSpawnables.kind_of(def) == PlaygroundSpawnables.Kind.VEHICLE:
 		return PlaygroundVehicleNet.new()
+	# An armed NPC replicates its weapon too: which one, and the fire counter a watcher's
+	# world model kicks on. Same catalogue reading on both ends, so both pick this.
+	if bool(def.meta.get("armed", false)):
+		return PlaygroundNpcNet.new()
 	return PlaygroundPropNet.new()
+
+
+## The body a client draws for [param net_id], or null. What a rope's far end is found by.
+func _mirror_node(net_id: int) -> Node3D:
+	var behaviour: PlaygroundPropNet = _prop_nets.get(net_id)
+	return behaviour.prop if behaviour != null else null
 
 
 ## The net id a vehicle's body replicates under, or 0.
@@ -698,6 +796,8 @@ func _drive_tools(session_id: int, behaviour: PlaygroundPlayerNet) -> void:
 		)
 		var outcome := rig.simulate_tick(command, game.current_tick())
 		var _moved := PlaygroundZee.shove_props(player, outcome, may_touch)
+		# NPCs hear it, and the ones it hits are hurt.
+		game.player_shots_fired(player.player_id, outcome)
 
 		if shot_fn.is_valid():
 			for shot: DotShot in outcome.shots:
@@ -712,10 +812,14 @@ func _drive_tools(session_id: int, behaviour: PlaygroundPlayerNet) -> void:
 	# the menu, after the spawn, and taken back out if the purse refuses.
 	var toy: PlaygroundWeapon = _toy_of.get(session_id)
 	if toy != null:
+		var reload_pressed := (buttons & DotFpsCommand.BUTTON_USER_2) != 0 \
+			and (before & DotFpsCommand.BUTTON_USER_2) == 0
 		if primary_pressed:
 			_toy_result(session_id, player.player_id, toy, toy.primary(space, origin, aim))
 		if secondary_pressed:
 			_toy_result(session_id, player.player_id, toy, toy.secondary(space, origin, aim))
+		if reload_pressed:
+			_toy_result(session_id, player.player_id, toy, toy.reload(space, origin, aim))
 		toy.tick(space, origin, aim, delta)
 		return
 
@@ -888,7 +992,16 @@ func _admit(peer_id: int) -> void:
 	for instance_id in _prop_nets.keys():
 		var prop := game.props.get_prop(int(instance_id))
 		var behaviour: PlaygroundPropNet = _prop_nets[instance_id]
-		if prop == null or behaviour == null or behaviour.identity == null:
+		if behaviour == null or behaviour.identity == null:
+			continue
+		# A wave NPC: in the table, not in the prop spawner. Without this a late joiner saw
+		# none of a wave that had already arrived.
+		if prop == null and _npc_kinds.has(instance_id):
+			_tell(peer_id, PlaygroundEvents.Kind.PROP, PlaygroundEvents.write_prop(
+				behaviour.identity.net_id, _npc_kinds[instance_id], 0, true, behaviour.net_position
+			))
+			continue
+		if prop == null:
 			continue
 		_tell(peer_id, PlaygroundEvents.Kind.PROP, PlaygroundEvents.write_prop(
 			behaviour.identity.net_id,
@@ -1061,12 +1174,28 @@ func _on_request(message: DotNetMessage) -> void:
 		PlaygroundEvents.Ask.SELECT_TOOL:
 			_select_tool(session_id, id, PlaygroundEvents.read_id(reader))
 		PlaygroundEvents.Ask.ARM_PROP:
-			var prop_id := PlaygroundEvents.read_id(reader)
-			if game.props.catalogue != null and game.props.catalogue.get_prop(prop_id) != null:
-				_armed_of[session_id] = prop_id
-				var toy: PlaygroundWeapon = _toy_of.get(session_id)
-				if toy != null:
-					toy.armed = prop_id
+			var arm := PlaygroundEvents.read_arm(reader)
+			if not bool(arm["ok"]):
+				return
+			match int(arm["sub"]):
+				PlaygroundEvents.ARM_TOOL:
+					_set_tool_mode(session_id, arm["id"] as StringName, str(arm["payload"]))
+				PlaygroundEvents.ARM_NPC_WEAPON:
+					var chosen := game.set_npc_weapon_choice(id, arm["id"] as StringName)
+					if not chosen.ok:
+						_tell(peer_id, PlaygroundEvents.Kind.NOTICE,
+							PlaygroundEvents.write_notice(session_id, chosen.error.message))
+				PlaygroundEvents.ARM_SPAWN_WEAPON:
+					var weapon_id := arm["id"] as StringName
+					if game.weapon_def(weapon_id) != null:
+						_spawn_for(id, Playground.pickup_id_of(weapon_id))
+				_:
+					var prop_id := arm["id"] as StringName
+					if game.props.catalogue != null and game.props.catalogue.get_prop(prop_id) != null:
+						_armed_of[session_id] = prop_id
+						var toy: PlaygroundWeapon = _toy_of.get(session_id)
+						if toy != null:
+							toy.armed = prop_id
 		PlaygroundEvents.Ask.UNDO:
 			game.props.undo(id)
 		PlaygroundEvents.Ask.CLEAR_MINE:
@@ -1266,10 +1395,62 @@ func _give_weapon(session_id: int, id: StringName, weapon_id: StringName) -> voi
 			toy.equip(game, def)
 			toy.wielder = id
 			toy.armed = _armed_of.get(session_id, &"")
+			_restore_tool_mode(session_id, toy)
 			_toy_of[session_id] = toy
 			_tool_of[session_id] = weapon_id
 
 	_broadcast(PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(session_id, weapon_id))
+
+
+## The tool gun's mode and settings, from the Q menu's tools tab. JSON, capped on the wire
+## and parsed here; the mode clamps every value to its own schema, because these numbers
+## come from a client.
+func _set_tool_mode(session_id: int, mode: StringName, payload: String) -> void:
+	var parsed: Variant = JSON.parse_string(payload) if payload != "" else {}
+	var settings: Dictionary = parsed if parsed is Dictionary else {}
+	_tool_settings_of[session_id] = [mode, settings]
+
+	var toy: PlaygroundWeapon = _toy_of.get(session_id)
+	if toy != null and toy.has_method("set_mode"):
+		var set: DotResult = toy.call("set_mode", mode, settings)
+		if not set.ok:
+			_tell(peer_for_player(session_id), PlaygroundEvents.Kind.NOTICE,
+				PlaygroundEvents.write_notice(session_id, set.error.message))
+
+
+func _restore_tool_mode(session_id: int, toy: PlaygroundWeapon) -> void:
+	var saved: Variant = _tool_settings_of.get(session_id)
+	if saved is Array and toy.has_method("set_mode"):
+		var _set: DotResult = toy.call("set_mode", saved[0], saved[1])
+
+
+## Somebody walked over a weapon on the server. It is given exactly as one from the menu
+## is — charged, armed on a server rig — so a pickup cannot be a way round either.
+func _on_weapon_picked_up(player_id: StringName, weapon_id: StringName) -> void:
+	if net == null or not net.is_server:
+		return
+	_give_weapon(session_of(player_id), player_id, weapon_id)
+
+
+## Asks for the tool gun's mode and settings. Client side.
+func ask_tool_mode(mode: StringName, settings: Dictionary) -> void:
+	_ask(PlaygroundEvents.Ask.ARM_PROP, PlaygroundEvents.write_arm(
+		PlaygroundEvents.ARM_TOOL, mode, JSON.stringify(settings)
+	))
+
+
+## Says what this player's NPCs should carry. Client side.
+func ask_npc_weapon(weapon_id: StringName) -> void:
+	_ask(PlaygroundEvents.Ask.ARM_PROP, PlaygroundEvents.write_arm(
+		PlaygroundEvents.ARM_NPC_WEAPON, weapon_id
+	))
+
+
+## Puts a weapon on the ground in front of this player. Client side.
+func ask_spawn_weapon(weapon_id: StringName) -> void:
+	_ask(PlaygroundEvents.Ask.ARM_PROP, PlaygroundEvents.write_arm(
+		PlaygroundEvents.ARM_SPAWN_WEAPON, weapon_id
+	))
 
 
 func _drop_toy(session_id: int) -> void:
@@ -1430,6 +1611,45 @@ func _on_event(message: DotNetMessage) -> void:
 		PlaygroundEvents.Kind.INVENTORY:
 			if inventory_net != null:
 				inventory_net.on_tell(reader)
+		PlaygroundEvents.Kind.PROJECTILE:
+			_apply_projectile(reader)
+
+
+# --- Projectiles ---------------------------------------------------------------
+
+## Every launch to every client, so each flies a copy and draws the arc. Sent once rather
+## than replicated as an entity: a grenade lives two or three seconds, its path is a pure
+## function of where it left and how fast, and an entity per grenade would be an identity,
+## an interest-grid cell and a snapshot field for something the client can work out.
+func _on_projectile_launched(flying: RefCounted) -> void:
+	_broadcast(PlaygroundEvents.Kind.PROJECTILE, PlaygroundEvents.write_launch(
+		int(flying.get("serial")), flying.get("spawn"), flying.get("owner_id"), bool(flying.get("sticks"))
+	))
+
+
+## Where it went off, which the client's copy does not decide for itself — see
+## PlaygroundProjectiles.
+func _on_projectile_detonated(serial: int, at: Vector3, radius: float) -> void:
+	_broadcast(PlaygroundEvents.Kind.PROJECTILE, PlaygroundEvents.write_detonate(serial, at, radius))
+
+
+func _apply_projectile(reader: DotNetReader) -> void:
+	if game.projectiles == null:
+		return
+
+	match reader.read_uint(PlaygroundEvents.PROJECTILE_SUB_BITS):
+		PlaygroundEvents.ProjectileTell.LAUNCH:
+			var launch := PlaygroundEvents.read_launch(reader)
+			if bool(launch["ok"]):
+				var _flying: Variant = game.projectiles.launch(
+					launch["spawn"], launch["owner_id"], RID(), int(launch["serial"])
+				)
+		PlaygroundEvents.ProjectileTell.DETONATE:
+			var blast := PlaygroundEvents.read_detonate(reader)
+			if bool(blast["ok"]):
+				game.projectiles.detonate_remote(
+					int(blast["serial"]), blast["position"], float(blast["radius"])
+				)
 
 
 func _apply_hello(reader: DotNetReader) -> void:
@@ -1616,15 +1836,29 @@ func _apply_prop(reader: DotNetReader) -> void:
 		return
 
 	var def := game.props.catalogue.get_prop(info["kind_id"])
-	if def == null:
+	var scene_path := def.scene_path if def != null else ""
+
+	# A wave NPC: drawn from the waves' catalogue, as a bare body with no brain — the server
+	# thinks for it, exactly as it does for an NPC entity.
+	if npc_catalogue == null:
+		# A client never runs the module that sets it. The waves' catalogue is a static of
+		# the game's own, the same on both ends — which is what makes a kind id meaningful.
+		npc_catalogue = PlaygroundWaves.shared_catalogue()
+
+	if def == null and npc_catalogue != null:
+		var npc_def := npc_catalogue.get_npc(info["kind_id"])
+		if npc_def != null:
+			scene_path = npc_def.scene_path
+
+	if def == null and scene_path == "":
 		# Not an error: a server may run a catalogue this build does not have, and the
 		# honest answer is to draw nothing rather than to guess.
 		DotLog.debug(CHANNEL, "a prop this build does not have", {"id": str(info["kind_id"])})
 		return
 
-	var scene: PackedScene = load(def.scene_path) if def.scene_path != "" else null
+	var scene: PackedScene = load(scene_path) if scene_path != "" else null
 	if scene == null:
-		DotLog.warn(CHANNEL, "a prop's scene would not load", {"path": def.scene_path})
+		DotLog.warn(CHANNEL, "a prop's scene would not load", {"path": scene_path})
 		return
 
 	var body := scene.instantiate() as Node3D
@@ -1645,7 +1879,7 @@ func _apply_prop(reader: DotNetReader) -> void:
 	body.global_position = info["position"]
 
 	var as_prop := body as PlaygroundProp
-	if as_prop != null:
+	if as_prop != null and def != null:
 		as_prop.configure(def)
 
 	# [b]On the layout's layer, not the scene's 1/1.[/b] The server classifies every
@@ -1659,7 +1893,7 @@ func _apply_prop(reader: DotNetReader) -> void:
 	# The PROP event carries no frozen state, so a mirror is classified as the spawn left
 	# it on the server only when that is unfrozen; a prop frozen or held later is
 	# reclassified on the server and not here. See the CLAUDE.md note on `[prop-mirror-layer-1]`.
-	if game.player_stack != null:
+	if game.player_stack != null and def != null:
 		var _put := game.player_stack.classify(body, Playground.layer_for(def, false))
 
 	# An NPC's script is attached on the server and its behaviour runs there. A client
@@ -1684,6 +1918,7 @@ func _apply_prop(reader: DotNetReader) -> void:
 		return
 
 	_prop_nets[net_id] = behaviour
+	behaviour.mirror_of = _mirror_node
 	props_changed.emit()
 	prop_arrived.emit(body.global_position, int(info["owner_id"]))
 

@@ -84,6 +84,14 @@ static func defs() -> Array[PlaygroundWeaponDef]:
 	return out
 
 
+## The game's definition for weapon id [param id] (`zee_smg`), or null.
+static func find_def(id: StringName) -> PlaygroundWeaponDef:
+	for def in defs():
+		if def.id == id:
+			return def
+	return null
+
+
 static func is_zee(def: PlaygroundWeaponDef) -> bool:
 	return def != null and def.meta.has("zee")
 
@@ -170,6 +178,101 @@ static func disarm(player: Node) -> void:
 ## USER_2 reload. The slot is the one the rig already holds; this game switches weapons by
 ## asking for one, not by a slot key. Buttons rather than a [DotFpsCommand] so the offline
 ## client, which has no command until its controller samples one, builds it the same way.
+# --- NPCs ----------------------------------------------------------------------
+
+## Whether an NPC can use [param def]: a zee gun or melee weapon, not a thrown or
+## explosive one. Grenades and rockets fly here ([PlaygroundProjectiles]), but an NPC's
+## brain aims along a straight line and has no throwing arc or blast-radius sense, so one
+## holding a frag would bounce it off its own feet and a launcher would be fired point-blank.
+static func npc_can_use(def: PlaygroundWeaponDef) -> bool:
+	if not is_zee(def):
+		return false
+
+	var weapon := catalogue().get_def(zee_id(def))
+
+	if weapon == null:
+		return false
+
+	return not (weapon.tags.has(ZeeWeaponIds.TAG_THROWN) or weapon.tags.has(ZeeWeaponIds.TAG_EXPLOSIVE))
+
+
+## Keeps an NPC's weapon fed: the reserve back to a few magazines' worth whenever it runs
+## low. An NPC out of ammunition standing still reads as broken, and nobody counts its shots.
+static func top_up(rig: Node) -> void:
+	var zee := rig as ZeeWeaponRig
+
+	if zee == null or zee.arsenal == null:
+		return
+
+	var def := zee.current_def()
+
+	if def == null or def.ammo_type == &"":
+		return
+
+	if zee.arsenal.ammo().count(def.ammo_type) < 60:
+		var _added := zee.arsenal.add_ammo(def.ammo_type, 120)
+
+
+static func rig_is_melee(rig: Node) -> bool:
+	var def := (rig as ZeeWeaponRig).current_def() if rig is ZeeWeaponRig else null
+	return def != null and def.tags.has(ZeeWeaponIds.TAG_MELEE)
+
+
+static func rig_is_automatic(rig: Node) -> bool:
+	var def := (rig as ZeeWeaponRig).current_def() if rig is ZeeWeaponRig else null
+	return def != null and (def.fire_mode == DotWeaponDef.Fire.AUTO or def.fire_mode == DotWeaponDef.Fire.HOLD)
+
+
+static func rig_magazine_empty(rig: Node) -> bool:
+	var zee := rig as ZeeWeaponRig
+
+	if zee == null or zee.arsenal == null or zee.arsenal.current() == null:
+		return false
+
+	var def := zee.current_def()
+	return def != null and def.ammo_type != &"" and zee.arsenal.current().magazine_empty()
+
+
+## Where every pellet of every shot in [param outcome] lands: `[{collider, point,
+## direction, damage}]`, nearest hit per pellet, [param exclude] ignored.
+##
+## [b]Pellets, not the shot's direction.[/b] A shot made by a weapon has its spread already
+## rolled into `pellets`, and tracing the direction instead puts every shotgun pellet down
+## one line — a shotgun that is a rifle.
+static func trace_outcome(
+	space: PhysicsDirectSpaceState3D, outcome: DotWeaponOutcome, exclude: Array[RID]
+) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+
+	if space == null or outcome == null:
+		return out
+
+	for shot: DotShot in outcome.shots:
+		var directions: Array = shot.pellets if not shot.pellets.is_empty() else [shot.direction]
+		var per_pellet := shot.damage
+
+		for direction in directions:
+			var dir: Vector3 = (direction as Vector3).normalized()
+			var query := PhysicsRayQueryParameters3D.create(
+				shot.origin, shot.origin + dir * maxf(shot.max_range, 1.0)
+			)
+			query.exclude = exclude
+			var found := space.intersect_ray(query)
+
+			if found.is_empty():
+				continue
+
+			out.append({
+				"collider": found["collider"],
+				"point": found["position"],
+				"direction": dir,
+				"damage": per_pellet,
+				"distance": shot.origin.distance_to(found["position"]),
+			})
+
+	return out
+
+
 static func command_for(buttons: int, yaw: float, pitch: float, slot: int) -> DotWeaponCommand:
 	var command := DotWeaponCommand.new()
 	command.set_button(DotWeaponCommand.BUTTON_ATTACK, (buttons & DotFpsCommand.BUTTON_USER_0) != 0)

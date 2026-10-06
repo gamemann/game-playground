@@ -95,6 +95,11 @@ func _run() -> void:
 	print("playground — dedicated server")
 	print("")
 
+	# The module turns on saving what the wave NPCs learn of each map, as a real server
+	# should — so a run here would leave a file the next run's NPCs patrol by. Cleared before
+	# and after, so no run is trained by the last.
+	_forget_learned_heat()
+
 	var probe: Array = []
 	if not _is_exit_probe():
 		probe = await _run_exit_probe()
@@ -139,6 +144,8 @@ func _run() -> void:
 	# The copy of this suite that the exit probe runs does not run the probe itself.
 	var sections := SECTIONS - (1 if _is_exit_probe() else 0)
 	var checks := CHECKS - (EXIT_PROBE_CHECKS if _is_exit_probe() else 0)
+
+	_forget_learned_heat()
 
 	print("")
 	print("%d passed, %d failed, %d of %d sections ran to their last line" % [
@@ -271,6 +278,18 @@ func _check(ok: bool, what: String, detail: String = "") -> void:
 ## only the sink, so the template's `output` stays empty; and a GDScript lambda
 ## captures by value, so a [PackedStringArray] appended to inside one is unchanged
 ## outside it. An [Array] is a reference and is not.
+func _forget_learned_heat() -> void:
+	var dir := "user://npc_heat"
+
+	if not DirAccess.dir_exists_absolute(dir):
+		return
+
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+
 func _run_command(line: String) -> PackedStringArray:
 	var captured: Array[String] = []
 

@@ -43,6 +43,25 @@ static var WAVE_BRAIN := PlaygroundPaths.rebase("res://game/entities/wave_brain.
 ## another one.
 const PLAYER_PREFIX := "p:"
 
+## How far a shot is heard by a wave NPC of alertness 1, in metres.
+const GUNFIRE_RADIUS := 30.0
+
+## The wave's squad — three on a player, the rest surrounding — and what it can hear.
+## On the spawner as metadata, where dot-npc-ai's brain finds both.
+var squads: DotNpcAiSquads = DotNpcAiSquads.new()
+var sounds: DotNpcAiSounds = DotNpcAiSounds.new()
+
+## Where players go on each map, learned while the waves run and patrolled by the wave NPCs
+## with the tactics for it. Saving is off until the module turns it on — every suite builds
+## waves, and a suite's players must not train the next run's NPCs.
+var heat: DotNpcAiHeatKeeper = _make_heat()
+
+
+static func _make_heat() -> DotNpcAiHeatKeeper:
+	var keeper := DotNpcAiHeatKeeper.new("user://npc_heat", "playground")
+	keeper.persist = false
+	return keeper
+
 
 ## A wave arrived, or one of them is gone. Server side.
 signal wave_changed(count: int)
@@ -89,7 +108,10 @@ static func _add(
 	# make cover meaningless — which is the whole reason `occlusion_mask` exists. The
 	# other two games are open arenas with nothing to be occluded by.
 	def.require_line_of_sight = true
-	def.meta = {"speed": speed}
+	# `skill` names the character dot-npc-ai's brain gives it. Until it did, a wave NPC had
+	# none, and `has_reacted()` — the gate wave_brain.gd's whole chase sits behind — answered
+	# true on the tick it first saw somebody.
+	def.meta = {"speed": speed, "skill": "normal", "squad": "wave", "attackers": 3}
 	into.add(def)
 
 
@@ -133,6 +155,11 @@ func setup(p_game: Playground) -> DotResult:
 	# The world's own node, so a wave NPC is in the same physics space as everything else
 	# — which is what makes its line-of-sight cast see the sandbox's walls.
 	spawner.world_ref = DotNodeRef.of_service(Playground.SERVICE)
+	# Before the first spawn, so no wave NPC thinks a tick at the wrong skill.
+	if game != null and game.npc_skill != null:
+		game.npc_skill.attach(spawner)
+	squads.attach(spawner)
+	sounds.attach(spawner)
 	add_child(spawner)
 
 	spawner.spawned.connect(func(_npc: DotNpcInstance) -> void:
@@ -227,12 +254,49 @@ func tick(current_tick: int, delta: float) -> void:
 	# tick is a list of where everybody was.
 	spawner.set_candidates(_candidates())
 	_report_players()
+	_learn(delta)
 
 	if director.spawn_points.is_empty():
 		_seed_spawn_points()
 
 	spawner.tick(delta)
+	squads.prune()
 	director.tick(delta)
+
+
+func _exit_tree() -> void:
+	# The last minutes of learning, on the way out. The keeper saves every two minutes; a
+	# server stopped between two saves would otherwise lose up to that much.
+	if spawner != null:
+		heat.save(spawner.now())
+
+
+## Samples where the players are into this map's heat. Before the spawner thinks, so a
+## wave NPC patrols what was learned up to this tick.
+func _learn(delta: float) -> void:
+	var positions: Array = []
+
+	for id in game.players.keys():
+		var player := game.players[id] as PlaygroundPlayer
+
+		if player != null and player.controller != null and player.controller.state != null:
+			positions.append(player.controller.state.position)
+
+	var map_id: StringName = game.maps.current.id if game.maps != null and game.maps.current != null else &""
+	heat.tick(delta, map_id, positions, spawner.now(), spawner)
+
+
+## A player fired. Every wave NPC in earshot hears it and knows who. Called by the module
+## for every shot the net bridge hands it, whether or not the arena is on: a gun fired in
+## the sandbox is still a gun fired.
+func note_fire(player_id: StringName, origin: Vector3) -> void:
+	if spawner == null:
+		return
+
+	sounds.emit(
+		DotNpcAiSounds.Kind.COMBAT, origin, GUNFIRE_RADIUS, spawner.now(), 0.5,
+		StringName("%s%s" % [PLAYER_PREFIX, player_id])
+	)
 
 
 func _candidates() -> Array:

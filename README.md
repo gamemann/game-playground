@@ -47,7 +47,7 @@ godot --path .
 | **Shift + mouse** | Turn the prop the physics gun is holding |
 | **1** / **2** / **3** | Physics gun / gravity gun / cycle the weapons you have |
 | **E** | Spawn the prop the menu last armed, again |
-| **R** | Unfreeze everything you have frozen |
+| **R** | Unfreeze everything you have frozen — or, with a gun or the tool gun in hand, reload / the tool's third action |
 | **Z** | Undo your last spawn |
 | **WASD** | Move, including while the menu is open |
 | **Space** | Jump (hold it; auto-hop is on) |
@@ -59,13 +59,14 @@ godot --path .
 | **X** / **B** | Cycle which checkpoint / forget them all |
 | **Esc** | Close the menu, or release the mouse |
 
-**Clicking a prop in the menu spawns it**, rather than arming a separate spawn key, and the menu stays open, so a wall is nine clicks rather than nine open-and-closes. Three tabs, `/` to search, and icons drawn from each definition because this project ships no art:
+**Clicking a prop in the menu spawns it**, rather than arming a separate spawn key, and the menu stays open, so a wall is nine clicks rather than nine open-and-closes. Four tabs, `/` to search, and icons drawn from each definition because this project ships no art:
 
 | Tab | |
 | --- | --- |
 | **Props** | Fourteen, in three categories. Planks, panels, beams and pillars to build with; crates and barrels; balls from a 2 kg beach ball to a 900 kg boulder |
-| **Entities** | Four NPCs with scripts: one wanders, one chases you, one hops, one spins and shoves whatever comes near. They are props too, so you can pick one up with the physics gun and punt it |
-| **Weapons** | A launcher that fires whatever you have armed, a remover, and an impulse gun that shoves everything nearby — plus the twenty-seven weapons of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), from fists to a minigun. With the arena off a shot shoves the prop it hits; with `pg_arena 1` it hurts. **R** reloads while one is in hand |
+| **Entities** | NPCs with scripts: one wanders, one chases you, one hops, one spins and shoves whatever comes near, a hunter that decides — and **soldiers and rebels that carry weapons**. Soldiers fight players and rebels; rebels fight soldiers and follow you. Pick what they carry with **NPCs carry** in the sidebar. They are props too, so you can pick one up with the physics gun and punt it |
+| **Weapons** | A launcher that fires whatever you have armed, a remover, and an impulse gun that shoves everything nearby — plus the twenty-seven weapons of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), from fists to a minigun. With the arena off a shot shoves the prop it hits; with `pg_arena 1` it hurts. **R** reloads while one is in hand **Right click** a weapon to drop one on the ground for anybody to walk over. Shots hurt NPCs whether or not the arena is on |
+| **Tools** | The **tool gun**'s modes: inflate/deflate, colour, remover, weld, no-collide, rope, balloon, physical properties, and giving an NPC a weapon. Pick one and its settings appear underneath; left click, right click and **R** each do something per tool, and the HUD says what |
 
 Entities and weapons are **scripts named by path in the catalogue**, which is what lets a downloaded content pack ship its own, because a mounted `.pck` cannot use `class_name`. See [`CLAUDE.md`](CLAUDE.md).
 
@@ -126,6 +127,16 @@ The end-of-map vote and the option to extend the current map:
 
 `end_vote: false` turns the end-of-map ballot off (the map still ends, on the rotation); `include_extend: false` takes "extend" off the ballot; `extend_seconds` is how much one extension adds and `max_extends` how many there may be. Every setting is in dot-vote's README, and its `docs/parity.md` maps the long-standing community map-chooser plugins' settings onto them.
 
+## Limits
+
+Each player has a limit per kind of thing, the way a sandbox server needs: `pg_max_props`, `pg_max_npcs`, `pg_max_entities`, `pg_max_vehicles`, `pg_max_balloons`, `pg_max_weapons` and `pg_max_constraints` (welds, ropes and no-collides). 0 is no limit. Roles get more with one cvar — a role is an admin group from the admin file, or `admin` / `root`, and the most generous role a player holds wins:
+
+```
+pg_max_npcs 10
+pg_limit_roles "admin: npcs=40 props=600; vip: props=300 balloons=60"
+pg_limits u3        // what u3 has against their limits
+```
+
 ## What you carry
 
 With `pg_shop 1` on, a server has prices, and the bag is what sits between the spawn menu and the shop: a 10 × 6 grid with a 400 kg limit, one cell per small prop. Buying into it charges once; spawning something you carry is free and takes it out; a purchase that would not fit, by weight or by room, is refused before anybody is charged. Spawning something you do not carry is charged only once it exists, so a spawn the prop limit refuses costs nothing. An admin can put things in it with `pg_give <player> <prop> [count]` and read it with `pg_inv <player>`.
@@ -148,7 +159,7 @@ godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 
 An administrator's `blind <player> [on|off|seconds]` blacks out that player's own screen and nobody else's, and `beacon <player> [on|off]` puts a pulsing ring, a column through walls and a ping on every screen until it is turned off. Both outlive a respawn. `tools/screenshot_views.sh` renders both.
 
-The headless suite boots the whole game, drives a bot down the surf map, finishes and files a run, ranks it, spawns props and builds their bodies from their definitions, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a script path, opens the spawn menu on a real screen stack and clicks through all three tabs, runs the sandbox's course, falls off it, and changes the map underneath all of it. It has found nine real bugs, three of them in other repositories; a screenshot found three more that no assertion could have. See [`CLAUDE.md`](CLAUDE.md).
+The headless suite boots the whole game, drives a bot down the surf map, finishes and files a run, ranks it, spawns props and builds their bodies from their definitions, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a script path, opens the spawn menu on a real screen stack and clicks through its tabs, enforces the per-kind limits and the roles over them, uses every tool gun mode on real props (ropes holding, balloons lifting), has armed NPCs fight each other, die, and drop weapons a player picks up, runs the sandbox's course, falls off it, and changes the map underneath all of it. It has found nine real bugs, three of them in other repositories; a screenshot found three more that no assertion could have. See [`CLAUDE.md`](CLAUDE.md).
 
 ## Licence
 

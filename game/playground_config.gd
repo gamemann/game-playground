@@ -76,8 +76,14 @@ extends DotConfig
 ## Whether props can be spawned at all. Off makes it a pure movement server.
 @export var allow_props: bool = true
 
-## Props one player may have at once, counted in cost. 0 = unlimited.
-@export_range(0, 1000, 1) var prop_budget: int = 64
+## Props one player may have at once, counted in COST. 0 = unlimited, and 0 is the default.
+##
+## [b]Off by default since the per-kind limits arrived[/b] ([code]pg_max_props[/code],
+## [code]pg_max_npcs[/code] and the rest, in `PlaygroundLimits`). Both apply when both are
+## set, and a cost budget of 64 under a count of 200 props meant the count was never the
+## one a player met — an NPC costs six, so the budget refused the eleventh NPC before
+## [code]pg_max_npcs[/code] could say anything, with a message about props.
+@export_range(0, 1000, 1) var prop_budget: int = 0
 
 ## Whether a player may move, freeze or remove somebody else's props.
 ##

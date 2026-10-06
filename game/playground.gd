@@ -6,6 +6,10 @@ const PlaygroundZee := preload("playground_zee.gd")
 const PlaygroundConfig := preload("playground_config.gd")
 const PlaygroundEntity := preload("entities/playground_entity.gd")
 const PlaygroundInventory := preload("playground_inventory.gd")
+const PlaygroundLimits := preload("playground_limits.gd")
+const PlaygroundConstraints := preload("playground_constraints.gd")
+const PlaygroundNpcWorld := preload("playground_npc_world.gd")
+const PlaygroundProjectiles := preload("playground_projectiles.gd")
 const PlaygroundMap := preload("playground_map.gd")
 const PlaygroundPlayer := preload("playground_player.gd")
 const PlaygroundPlayerStack := preload("playground_player_stack.gd")
@@ -65,6 +69,10 @@ signal player_added(id: StringName)
 ## A player is about to stop existing. Emitted BEFORE the teardown, so a listener can
 ## still read what they were.
 signal player_removed(id: StringName)
+
+## Somebody walked over a weapon lying in the world. The bridge gives it to them on a
+## server; the client equips it offline.
+signal weapon_picked_up(player_id: StringName, weapon_id: StringName)
 
 ## Somebody finished a run. [param rank] is 0 when it was not filed.
 signal run_filed(
@@ -166,6 +174,50 @@ var entities: Array[PlaygroundEntity] = []
 ## NPC's: how far a particular thing can see belongs on its catalogue entry, and that is
 ## where it is.
 var npc_senses: DotNpcSenses = null
+
+## How good every NPC is, server-wide: `npc_skill`, `npc_reaction_scale`,
+## `npc_reaction_min`, bound by the module.
+##
+## On the world, because both kinds of NPC here need it and neither owns the other: the
+## waves' spawner has it attached, and a sandbox hunter — built by the spawn menu rather
+## than by a spawner — asks for it here.
+var npc_skill: DotNpcAiSkill = DotNpcAiSkill.new()
+
+## How many props, NPCs, entities, vehicles, balloons, weapons and constraints one player may
+## have, and the roles that get more. dot-props asks it through
+## [member DotPropSpawner.limit_resolver]; the module binds `pg_max_*` and `pg_limit_roles`.
+var spawn_limits: PlaygroundLimits = PlaygroundLimits.new()
+
+## Welds, ropes and no-collides between props. Built by the tool gun.
+var constraints: PlaygroundConstraints = null
+
+## What an armed NPC's brain asks the world, and where its squads and sounds hang.
+var npc_world: PlaygroundNpcWorld = null
+
+## Grenades and rockets in flight. Built on both ends: the authority detonates, a client
+## flies what it is told about so it can draw it.
+var projectiles: PlaygroundProjectiles = null
+
+## Every armed NPC alive — soldiers and rebels. They are perception candidates for each other.
+var armed_npcs: Array = []
+
+## Players and armed NPCs, as candidates. See [method _rebuild_npc_candidates]; the older
+## entities perceive [member npc_candidates], players only, and are unchanged.
+var npc_candidates_all: Array = []
+
+## What each player wants the NPCs they spawn to carry: a weapon id, `none`, or absent for
+## the catalogue's own choice. Set from the Q menu's entities tab.
+var npc_weapon_choice: Dictionary = {}
+
+## The squads armed NPCs fight in, and the sounds they hear.
+var npc_squads: DotNpcAiSquads = DotNpcAiSquads.new()
+var npc_sounds: DotNpcAiSounds = DotNpcAiSounds.new()
+
+## How far a gunshot is heard by an NPC, in metres.
+const GUNFIRE_RADIUS := 30.0
+
+## Push on a prop per point of a shot's damage. The same feel as `PlaygroundZee.shove_props`.
+const SHOT_IMPULSE := 0.6
 
 ## The players as [DotNpcSenses.Candidate]s, rebuilt once per simulated tick.
 ##
@@ -275,6 +327,7 @@ func _ready() -> void:
 	_build_inventory()
 	_build_vehicles()
 	_build_npc_senses()
+	_build_npc_world()
 	_build_maps()
 	_build_player_stack()
 
@@ -389,6 +442,9 @@ func _simulate_tick(step: float) -> void:
 	# exactly one tick — which is the thing the ordering below already exists to avoid.
 	_rebuild_npc_candidates()
 
+	if npc_world != null:
+		npc_world.advance(step)
+
 	# Entities before players, for the same reason the timer runs after them: an NPC
 	# that moved after the player was moved would be a tick behind everything that
 	# collided with it, and a chaser would visibly lag its target at exactly the rate
@@ -402,6 +458,11 @@ func _simulate_tick(step: float) -> void:
 
 	for id in players:
 		(players[id] as PlaygroundPlayer).simulate(_tick, step)
+
+	# After everybody has moved, so a grenade is swept against the world as the tick
+	# leaves it, which is also where anybody it could hit now is.
+	if projectiles != null:
+		projectiles.tick(step)
 
 	# After the moves and before the timers, which is the same ordering rule: a rider's
 	# position for this tick is where the vehicle carried them, not where they were.
@@ -455,6 +516,10 @@ func tick_once(tick: int) -> void:
 ## so a local run reads a tick earlier than any packet could deliver it.
 func tick_timers_only(tick: int) -> void:
 	_tick = tick
+
+	# What this client was told is in the air. It decides nothing; see PlaygroundProjectiles.
+	if projectiles != null:
+		projectiles.tick(1.0 / float(maxi(tick_rate, 1)))
 
 	for id in players:
 		var player: PlaygroundPlayer = players[id]
@@ -594,6 +659,11 @@ func _build_props() -> void:
 	limits.world_budget = config.prop_world_budget
 	limits.spawn_interval = config.prop_spawn_interval
 	props.limits = limits
+
+	# A count per kind, beside the cost budget, with per-role overrides. See
+	# PlaygroundLimits; the server module binds the `pg_max_*` cvars and the roles.
+	spawn_limits.apply_to(limits)
+	props.limit_resolver = spawn_limits.resolve
 
 	props.world_ref = DotNodeRef.of_path(^"../World")
 
@@ -936,6 +1006,32 @@ func _carry_riders() -> void:
 		player.adopt_ride(player.global_position, vehicle.velocity())
 
 
+## The constraints and the armed NPCs' world. After the props and the senses, which both
+## of them read.
+func _build_npc_world() -> void:
+	constraints = PlaygroundConstraints.new()
+	constraints.name = "Constraints"
+	add_child(constraints)
+
+	npc_world = PlaygroundNpcWorld.new()
+	npc_world.name = "NpcWorld"
+	npc_world.game = self
+	add_child(npc_world)
+
+	# Metadata on the director, where dot-npc-ai's brain looks — see DotNpcAiSkill.attach.
+	npc_skill.attach(npc_world)
+	npc_squads.attach(npc_world)
+	npc_sounds.attach(npc_world)
+
+	projectiles = PlaygroundProjectiles.new()
+	projectiles.game = self
+	projectiles.authority = authoritative
+	projectiles.catalogue = PlaygroundZee.catalogue()
+	projectiles.authored_rate = ZeeWeaponPack.TICK_RATE
+	projectiles.add_board(npc_sounds, npc_world.now)
+	add_child(projectiles)
+
+
 func _build_npc_senses() -> void:
 	npc_senses = DotNpcSenses.new()
 
@@ -967,6 +1063,21 @@ func _rebuild_npc_candidates() -> void:
 			DotNpcSenses.Candidate.new(id, player.global_position, &"player", loudness)
 		)
 
+	# The armed NPCs see the players and each other: a soldier on `hostile` and a rebel on
+	# `player` are candidates for one another, and the senses skip a candidate on the
+	# perceiver's own faction — so a rebel never picks a player, which is what makes it
+	# friendly. The older entities keep [member npc_candidates], players only.
+	npc_candidates_all = npc_candidates.duplicate()
+
+	for entity in armed_npcs:
+		if not is_instance_valid(entity):
+			continue
+
+		var faction := StringName(entity.call("tune_string", &"faction", "hostile"))
+		npc_candidates_all.append(DotNpcSenses.Candidate.new(
+			npc_id_of(entity), (entity as Node3D).global_position, faction, 0.0
+		))
+
 
 ## Drops an entity from the tick list when its prop goes.
 ##
@@ -986,12 +1097,196 @@ func _on_prop_removed(prop: DotPropInstance, _reason: StringName) -> void:
 		if riding_vehicle != null:
 			vehicles.remove(riding_vehicle.instance_id, DotVehicleSpawner.REASON_CLEANUP)
 
+	# Every weld, rope and no-collide on it goes first, while the node is still valid.
+	if constraints != null and prop.node != null:
+		constraints.forget_body(prop.node)
+
 	var entity := prop.node as PlaygroundEntity
 
 	if entity == null:
 		return
 
 	entities.erase(entity)
+	unregister_armed_npc(entity)
+
+
+# --- Armed NPCs -----------------------------------------------------------------
+
+func register_armed_npc(entity: Node) -> void:
+	if not armed_npcs.has(entity):
+		armed_npcs.append(entity)
+
+
+func unregister_armed_npc(entity: Node) -> void:
+	armed_npcs.erase(entity)
+
+
+## The candidate id an armed NPC is known by: `n` and its instance id.
+static func npc_id_of(entity: Node) -> StringName:
+	return StringName("n%d" % entity.get_instance_id())
+
+
+## The armed NPC a candidate id names, or null.
+func armed_npc(id: StringName) -> Node3D:
+	for entity in armed_npcs:
+		if is_instance_valid(entity) and npc_id_of(entity) == id:
+			return entity
+	return null
+
+
+## Where a perception candidate is: a player's chest or an armed NPC's.
+func candidate_position(id: StringName, fallback: Vector3 = Vector3.ZERO) -> Vector3:
+	var player: Variant = players.get(id)
+
+	if player is Node3D:
+		return (player as Node3D).global_position + Vector3.UP * 0.9
+
+	var npc := armed_npc(id)
+	return npc.global_position + Vector3.UP * 0.4 if npc != null else fallback
+
+
+## The combat entity id an armed NPC shoots as. Its candidate id's number: unique, stable
+## for its life, and never a player's session id because those are small.
+func npc_entity_id(entity: Node) -> int:
+	return entity.get_instance_id()
+
+
+## What [param player_id] wants their NPCs to carry, or [param fallback].
+func npc_weapon_for(player_id: StringName, fallback: StringName = &"") -> StringName:
+	var chosen: Variant = npc_weapon_choice.get(player_id, null)
+
+	if chosen == null or StringName(str(chosen)) == &"":
+		return fallback
+
+	return StringName(str(chosen))
+
+
+## Sets what [param player_id]'s next NPCs carry. Refuses a weapon an NPC cannot use.
+func set_npc_weapon_choice(player_id: StringName, weapon_id: StringName) -> DotResult:
+	if weapon_id == &"" or weapon_id == &"none":
+		npc_weapon_choice[player_id] = weapon_id
+		return DotResult.success(weapon_id)
+
+	var def := weapon_def(weapon_id)
+
+	if def == null or not PlaygroundZee.npc_can_use(def):
+		return DotResult.fail(DotError.CODE_INVALID, "NPCs cannot use that weapon.", String(weapon_id))
+
+	npc_weapon_choice[player_id] = weapon_id
+	return DotResult.success(weapon_id)
+
+
+## How many welds, ropes and no-collides [param player_id] has. For `pg_limits`.
+func constraint_count(player_id: StringName) -> int:
+	return constraints.count_owned(player_id) if constraints != null else 0
+
+
+# --- Shots ----------------------------------------------------------------------
+
+## A player's zee weapon fired: NPCs in earshot hear it, and NPCs it hits are hurt.
+##
+## Players hurting players is the arena's, and props being shoved is
+## `PlaygroundZee.shove_props`; this is the third thing a shot does, which only exists
+## because NPCs can now be killed.
+func player_shots_fired(player_id: StringName, outcome: DotWeaponOutcome) -> void:
+	if outcome == null:
+		return
+
+	var player: Variant = players.get(player_id)
+
+	if not (player is CollisionObject3D) or not (player as Node3D).is_inside_tree():
+		return
+
+	var shooter := player as CollisionObject3D
+
+	# Before the `used` test: what a grenade's release produces is a spawn, and whether a
+	# weapon calls that a use is the weapon's business. A spawn left in an outcome is a
+	# grenade that cost one and never existed, which is what this game used to do.
+	if projectiles != null:
+		var _thrown := projectiles.accept(outcome, player_id, shooter)
+
+	if not outcome.used:
+		return
+
+	npc_sounds.emit(
+		DotNpcAiSounds.Kind.COMBAT, shooter.global_position, GUNFIRE_RADIUS,
+		npc_world.now() if npc_world != null else 0.0, 0.5, player_id
+	)
+
+	var exclude: Array[RID] = [shooter.get_rid()]
+
+	for hit in PlaygroundZee.trace_outcome(shooter.get_world_3d().direct_space_state, outcome, exclude):
+		var collider: Variant = hit["collider"]
+
+		if collider is Node and (collider as Node).has_method("take_damage"):
+			(collider as Node).call("take_damage", float(hit["damage"]), player_id)
+
+
+## An armed NPC's weapon fired: what it hits is hurt — another NPC always, a player only
+## while the arena is on (a sandbox where nobody can be killed stays one) — a loose prop is
+## shoved, and everything in earshot hears it.
+func npc_shots_fired(entity: Node3D, outcome: DotWeaponOutcome) -> void:
+	if outcome == null or entity == null or not entity.is_inside_tree():
+		return
+
+	var shooter_id := npc_id_of(entity)
+
+	if projectiles != null:
+		var _thrown := projectiles.accept(outcome, shooter_id, entity)
+
+	npc_sounds.emit(
+		DotNpcAiSounds.Kind.COMBAT, entity.global_position, GUNFIRE_RADIUS,
+		npc_world.now(), 0.5, shooter_id
+	)
+
+	var exclude: Array[RID] = [(entity as CollisionObject3D).get_rid()]
+
+	for hit in PlaygroundZee.trace_outcome(entity.get_world_3d().direct_space_state, outcome, exclude):
+		var collider: Variant = hit["collider"]
+		var damage := float(hit["damage"])
+
+		if collider is Node and (collider as Node).has_method("take_damage"):
+			(collider as Node).call("take_damage", damage, shooter_id)
+		elif collider is PlaygroundPlayer:
+			if arena_hurt.is_valid():
+				arena_hurt.call(shooter_id, (collider as PlaygroundPlayer).player_id, damage, float(hit["distance"]))
+		elif collider is RigidBody3D and not (collider as RigidBody3D).freeze:
+			(collider as RigidBody3D).apply_impulse(
+				(hit["direction"] as Vector3) * damage * SHOT_IMPULSE,
+				(hit["point"] as Vector3) - (collider as Node3D).global_position
+			)
+
+
+## `func(attacker: StringName, victim: StringName, amount: float, distance: float)`: how an
+## NPC's shot hurts a player. Set by the module to the arena's `hurt` while the arena is
+## on; unset, NPCs cannot hurt players — the sandbox's own rule.
+var arena_hurt: Callable = Callable()
+
+
+# --- Weapons in the world -------------------------------------------------------
+
+## The catalogue id a weapon lies in the world as.
+static func pickup_id_of(weapon_id: StringName) -> StringName:
+	return StringName("pickup_%s" % String(weapon_id).replace(":", "_"))
+
+
+## Drops [param weapon_id] at [param at], cleaned up after [param lifetime] seconds. Owned
+## by nobody, so it counts against no player's weapons limit.
+func drop_weapon(weapon_id: StringName, at: Vector3, lifetime: float = 0.0) -> DotPropInstance:
+	if props == null:
+		return null
+
+	var prop := props.spawn(pickup_id_of(weapon_id), &"", at)
+
+	if prop != null and prop.node != null:
+		prop.node.set("lifetime", lifetime)
+
+	return prop
+
+
+## A player walked over a weapon. Announced, and the server or the client gives it.
+func pick_up_weapon(player_id: StringName, weapon_id: StringName) -> void:
+	weapon_picked_up.emit(player_id, weapon_id)
 
 
 func _build_maps() -> void:
@@ -1432,6 +1727,9 @@ func _on_map_changing(_from: DotMapDef, _to: DotMapDef) -> void:
 			player.grav_gun.drop()
 
 	props.clear_all(DotPropSpawner.REASON_CLEANUP)
+
+	if projectiles != null:
+		projectiles.clear()
 
 
 func _on_map_changed(map: DotMapDef, loaded: Node) -> void:

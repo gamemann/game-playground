@@ -20,6 +20,7 @@ const OUT_DIR := "res://screenshots"
 const SETTLE := 3
 
 var _stack: DotScreenStack = null
+var _menu: PlaygroundSpawnMenu = null
 var _presentation: PlaygroundPresentation = null
 var _shots: Array[Dictionary] = []
 var _at := 0
@@ -50,6 +51,7 @@ func _initialize() -> void:
 	menu.catalogue = PlaygroundSpawnables.catalogue()
 	menu.weapons = PlaygroundWeapons.built_in()
 	_stack.register(menu)
+	_menu = menu
 
 	var pause := DotPauseScreen.new()
 	pause.name = "Pause"
@@ -63,6 +65,10 @@ func _initialize() -> void:
 
 	_shots = [
 		{"id": &"spawn_menu", "file": "menu_spawn.png"},
+		# The tools tab with a tool picked, so its settings panel is drawn: the balloon has
+		# all three kinds of control — two sliders and a row of colour swatches.
+		{"id": &"spawn_menu", "file": "menu_tools.png", "tab": PlaygroundSpawnMenu.Tab.TOOLS, "mode": &"balloon"},
+		{"id": &"spawn_menu", "file": "menu_entities.png", "tab": PlaygroundSpawnMenu.Tab.ENTITIES},
 		{"id": &"pause", "file": "menu_pause.png"},
 		{"id": &"settings", "file": "menu_settings.png"},
 	]
@@ -90,6 +96,11 @@ func _process(_delta: float) -> bool:
 			push_error("could not open '%s': %s" % [shot["id"], opened.error.message])
 			_at += 1
 			return false
+
+		if shot.has("tab") and _menu != null:
+			if shot.has("mode"):
+				_menu.tool_mode = shot["mode"]
+			_menu.show_tab(shot["tab"])
 
 	if _wait > 0:
 		_wait -= 1

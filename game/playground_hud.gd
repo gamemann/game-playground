@@ -257,12 +257,17 @@ func _process(delta: float) -> void:
 		_tools.text = "   ·   ".join(PackedStringArray([
 			tool_name.capitalize() if tool_name != "" else "Nothing",
 			"%s armed" % _armed_name(),
-			"%d/%d props" % [
-				playground.props.player_cost(player_id),
-				playground.props.limits.per_player_budget,
-			],
+			_props_line(),
 			"hold Q to spawn",
 		]))
+
+
+## "12/200 props" — the count against this player's props limit, which is the limit a
+## builder meets. "no limit" when there is none rather than "/0", which reads as "none".
+func _props_line() -> String:
+	var used := playground.props.group_count(player_id, DotPropDef.GROUP_PROPS)
+	var cap := playground.props.limit_for(player_id, DotPropDef.GROUP_PROPS)
+	return "%d/%s props" % [used, str(cap) if cap > 0 else "no limit"]
 
 
 ## Fades [member blind_overlay] toward whether the bound player is blinded.

@@ -6,6 +6,7 @@ const Playground := preload("playground.gd")
 const PlaygroundArena := preload("playground_arena.gd")
 const PlaygroundDowns := preload("playground_downs.gd")
 const PlaygroundModTools := preload("playground_mod_tools.gd")
+const PlaygroundLimits := preload("playground_limits.gd")
 const PlaygroundNetBridge := preload("net/playground_net_bridge.gd")
 const PlaygroundPlatform := preload("playground_platform.gd")
 const PlaygroundPlayer := preload("playground_player.gd")
@@ -333,6 +334,12 @@ func _module_load() -> DotResult:
 		"Seconds a map runs before the next one is chosen. 0 disables it."
 	)
 
+	# Every NPC's reaction time and how good it is, over the character its kind was given.
+	# NOTIFY, because players should know the NPCs just got harder.
+	game.npc_skill.bind_cvars(add_cvar, DotConVar.FLAG_NOTIFY)
+
+	_bind_limits()
+
 	server.client_disconnected.connect(_on_client_disconnected)
 	game.maps.map_over.connect(_on_map_over)
 	game.run_filed.connect(_on_run_filed)
@@ -494,6 +501,12 @@ func _build_extras() -> DotResult:
 
 	arena.health_changed.connect(_on_health_changed)
 	arena.player_killed.connect(_on_player_killed)
+
+	# How an armed NPC's shot hurts a player: through the arena, which refuses while it is
+	# off — so a sandbox where nobody dies stays one, and `pg_arena 1` is the switch that
+	# makes the soldiers dangerous as well as the players.
+	game.arena_hurt = func(attacker: StringName, victim: StringName, amount: float, distance: float) -> void:
+		var _hurt := arena.hurt(attacker, victim, amount, distance)
 	arena.player_killed.connect(func(victim: StringName, killer: StringName) -> void:
 		shop.on_arena_kill(killer, victim)
 		var player: PlaygroundPlayer = game.players.get(victim, null)
@@ -508,10 +521,23 @@ func _build_extras() -> DotResult:
 	waves.name = "Waves"
 	add_child(waves)
 
+	# A real server keeps what its wave NPCs learn of each map across restarts. Set here
+	# and not in the waves, because every suite builds waves and only a server loads this.
+	waves.heat.persist = true
+
 	var waved := waves.setup(game)
 
 	if not waved.ok:
 		return waved.wrap("The waves could not be set up")
+
+	# Every wave NPC to every client. They were never replicated: a connected player was
+	# hunted by a wave they could not see.
+	if bridge != null:
+		bridge.watch_npc_spawner(waves.spawner, PlaygroundWaves.shared_catalogue())
+
+	# A grenade in the air is a danger the waves get out from under, on their own clock.
+	if game.projectiles != null:
+		game.projectiles.add_board(waves.sounds, waves.spawner.now)
 
 	# The director paces against real health when the arena is on, and against proximity
 	# alone when it is not. One callable rather than two code paths.
@@ -1793,6 +1819,85 @@ func _cmd_props_clear(ctx: DotCmdContext) -> void:
 
 # --- Status ----------------------------------------------------------------
 
+# --- Limits ------------------------------------------------------------------
+
+## `pg_max_<group>` per kind, `pg_limit_roles` for who gets more, and `pg_limits` to see
+## anybody's. A role is a dot-server admin group by name, plus `admin` (any admin flag)
+## and `root` (the root flag) — so an operator who already has an admin file has roles.
+func _bind_limits() -> void:
+	var limits := game.spawn_limits
+
+	for group in PlaygroundLimits.DEFAULTS.keys():
+		var key: StringName = group
+		var cvar := add_cvar(
+			"pg_max_%s" % String(key),
+			str(int(limits.defaults[key])),
+			"Most %s one player may have at once. 0 is no limit." % String(key)
+		)
+		cvar.with_min(0.0)
+		cvar.changed.connect(func(_old: String, value: String) -> void:
+			limits.defaults[key] = maxi(value.to_int(), 0)
+			limits.apply_to(game.props.limits)
+		)
+
+	var roles := add_cvar(
+		"pg_limit_roles", "",
+		"Per-role limits: 'admin: npcs=40 props=600; vip: props=300'. A role is an admin group, admin or root."
+	)
+	# Refused at the console rather than half-applied: a typo in one role must not leave
+	# the others changed and this one silently ignored.
+	roles.with_validator(func(text: String) -> DotResult: return PlaygroundLimits.new().set_roles_from(text))
+	roles.changed.connect(func(_old: String, value: String) -> void:
+		var _set := limits.set_roles_from(value)
+	)
+
+	limits.roles_fn = _roles_of
+
+	add_command(
+		"pg_limits", _cmd_limits, "pg_limits [player] — what somebody has against their limits", ""
+	).with_chat()
+
+
+## The roles a world player holds: their admin groups by name, and `admin` / `root`.
+func _roles_of(player_id: StringName) -> PackedStringArray:
+	var out := PackedStringArray()
+
+	if server == null:
+		return out
+
+	var session := server.session_by_userid(_session_of(player_id))
+
+	if session == null:
+		return out
+
+	out.append_array(session.groups)
+
+	if not session.permissions.is_empty():
+		out.append("admin")
+
+	if session.permissions.has(DotAdminFlags.ROOT):
+		out.append("root")
+
+	return out
+
+
+func _cmd_limits(ctx: DotCmdContext) -> void:
+	var who := StringName(ctx.arg(0)) if ctx.arg(0) != "" else &""
+
+	if who == &"" and ctx.session != null:
+		who = StringName("u%d" % ctx.session.userid)
+
+	if who == &"" or not game.players.has(who):
+		ctx.reply("Usage: pg_limits <player id, e.g. u3>. Players: %s" % ", ".join(
+			PackedStringArray(game.players.keys())
+		))
+		return
+
+	ctx.reply_lines(game.spawn_limits.describe_for(
+		who, game.props.group_usage(who), game.constraint_count(who)
+	))
+
+
 func _cmd_status(ctx: DotCmdContext) -> void:
 	ctx.reply_lines(game.describe_lines())
 
@@ -2157,6 +2262,10 @@ func _refuse_peer(peer_id: int, error: DotError) -> void:
 ## has to remember to unset. Off, the shot has already shoved whatever prop it hit and
 ## that is all a gun does in a sandbox.
 func _resolve_shot(player_id: StringName, shot: DotShot) -> void:
+	# Heard by the wave NPCs first, and whether or not the arena is on.
+	if waves != null:
+		waves.note_fire(player_id, shot.origin)
+
 	if arena == null or not arena.enabled or arena.combat == null:
 		return
 

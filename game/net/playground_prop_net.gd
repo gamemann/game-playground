@@ -27,6 +27,47 @@ var net_rotation: Quaternion = Quaternion.IDENTITY
 ## client otherwise cannot tell "frozen" from "the packets stopped".
 var net_frozen: bool = false
 
+## The tool gun's resize. Quantised: nobody tells 1.003 from 1.0, and a float per prop per
+## change is bandwidth for nothing.
+var net_scale: float = 1.0
+
+## The tool gun's paint, as RGBA8 in one int; 0 is "the catalogue's own colour".
+var net_tint: int = 0
+
+## The ropes from this prop, one slot of four fields each, up to
+## [constant PlaygroundProp.ROPE_SLOTS]: `peer` -1 none, 0 to a point in the world, otherwise
+## the other prop's net id. Fields rather than an array because a replicated field is a
+## property; slot 0 keeps the names the single rope had. The physics of every rope is the
+## server's either way.
+var net_rope_peer: int = -1
+var net_rope_a: Vector3 = Vector3.ZERO
+var net_rope_b: Vector3 = Vector3.ZERO
+var net_rope_length: float = 0.0
+var net_rope1_peer: int = -1
+var net_rope1_a: Vector3 = Vector3.ZERO
+var net_rope1_b: Vector3 = Vector3.ZERO
+var net_rope1_length: float = 0.0
+var net_rope2_peer: int = -1
+var net_rope2_a: Vector3 = Vector3.ZERO
+var net_rope2_b: Vector3 = Vector3.ZERO
+var net_rope2_length: float = 0.0
+
+## The field-name prefix of each slot.
+const ROPE_FIELDS := ["net_rope", "net_rope1", "net_rope2"]
+
+## `func(node: Node) -> int`: a body's net id. Set by the server's bridge, which knows them.
+var net_id_of: Callable = Callable()
+
+## `func(net_id: int) -> Node3D`: the mirror a net id draws. Set by a client's bridge.
+var mirror_of: Callable = Callable()
+
+const RopeView := preload("../playground_rope_view.gd")
+
+## One view per slot, null where nothing is drawn.
+var _rope_views: Array = [null, null, null]
+var _applied_scale: float = 1.0
+var _applied_tint: int = 0
+
 
 func _register_net_vars() -> void:
 	replicate(&"net_position", DotNetVar.Type.VECTOR3_POSITION).interpolated()
@@ -34,6 +75,13 @@ func _register_net_vars() -> void:
 	# the error is under a degree and nobody aligns a barrel to a degree.
 	replicate(&"net_rotation", DotNetVar.Type.QUATERNION).bits(9).interpolated()
 	replicate(&"net_frozen", DotNetVar.Type.BOOL)
+	replicate(&"net_scale", DotNetVar.Type.FLOAT_RANGE).range_of(0.25, 4.0).bits(10)
+	replicate(&"net_tint", DotNetVar.Type.UINT).bits(32)
+	for slot: String in ROPE_FIELDS:
+		replicate(StringName(slot + "_peer"), DotNetVar.Type.INT).bits(32)
+		replicate(StringName(slot + "_a"), DotNetVar.Type.VECTOR3_RANGE).range_of(-16.0, 16.0).bits(12)
+		replicate(StringName(slot + "_b"), DotNetVar.Type.VECTOR3_POSITION)
+		replicate(StringName(slot + "_length"), DotNetVar.Type.FLOAT_RANGE).range_of(0.0, 64.0).bits(10)
 
 
 ## Authority only. The prop is moved by the physics server, and this copies where it
@@ -46,6 +94,32 @@ func pull() -> void:
 	var body := prop as RigidBody3D
 	if body != null:
 		net_frozen = body.freeze
+
+	# Duck-typed: a vehicle is not a PlaygroundProp and has neither.
+	var scale_value: Variant = prop.get("size_scale")
+	net_scale = float(scale_value) if scale_value != null else 1.0
+	var tint_value: Variant = prop.get("tint")
+	net_tint = (tint_value as Color).to_rgba32() if tint_value is Color and (tint_value as Color).a > 0.0 else 0
+
+	var listed: Variant = prop.get("ropes")
+	var ropes: Array = listed if listed is Array else []
+
+	for i in ROPE_FIELDS.size():
+		var slot: String = ROPE_FIELDS[i]
+
+		if i >= ropes.size():
+			set(slot + "_peer", -1)
+			continue
+
+		var rope: Dictionary = ropes[i]
+		var other: Variant = rope.get("peer")
+		var peer_id := 0
+		if other is Node and is_instance_valid(other) and net_id_of.is_valid():
+			peer_id = int(net_id_of.call(other))
+		set(slot + "_peer", peer_id)
+		set(slot + "_a", rope.get("a", Vector3.ZERO))
+		set(slot + "_b", rope.get("b", Vector3.ZERO))
+		set(slot + "_length", float(rope.get("length", 0.0)))
 
 
 func _net_simulate(_tick: int, _delta: float) -> void:
@@ -82,3 +156,60 @@ func _draw() -> void:
 	var body := prop as RigidBody3D
 	if body != null and not body.freeze:
 		body.freeze = true
+
+	_draw_look()
+	_draw_rope()
+
+
+## The resize and the paint, applied to the mirror only when they changed: a resize
+## rebuilds the shape and the mesh, which is not a thing to do every frame.
+func _draw_look() -> void:
+	if not is_equal_approx(net_scale, _applied_scale) and prop.has_method("set_size_scale"):
+		_applied_scale = float(prop.call("set_size_scale", net_scale))
+
+	if net_tint != _applied_tint and prop.has_method("set_tint"):
+		_applied_tint = net_tint
+		prop.call("set_tint", Color.hex(net_tint) if net_tint != 0 else Color(0, 0, 0, 0))
+
+
+func _draw_rope() -> void:
+	for i in ROPE_FIELDS.size():
+		_draw_rope_slot(i)
+
+
+func _draw_rope_slot(i: int) -> void:
+	var slot: String = ROPE_FIELDS[i]
+	var peer := int(get(slot + "_peer"))
+	var view: MeshInstance3D = _rope_views[i]
+
+	if peer < 0:
+		if view != null:
+			view.queue_free()
+			_rope_views[i] = null
+		return
+
+	var end: Vector3 = get(slot + "_b")
+
+	if peer > 0:
+		var other: Variant = mirror_of.call(peer) if mirror_of.is_valid() else null
+
+		if not (other is Node3D) or not is_instance_valid(other):
+			return
+
+		end = (other as Node3D).to_global(end)
+
+	if view == null:
+		view = RopeView.new()
+		prop.add_child(view)
+		_rope_views[i] = view
+
+	view.draw_between(prop.to_global(get(slot + "_a")), end, float(get(slot + "_length")))
+
+
+## How many ropes this mirror draws. For a check.
+func ropes_drawn() -> int:
+	var drawn := 0
+	for view in _rope_views:
+		if view != null:
+			drawn += 1
+	return drawn

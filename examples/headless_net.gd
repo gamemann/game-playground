@@ -7,6 +7,8 @@ const PlaygroundEvents := preload("../game/net/playground_events.gd")
 const PlaygroundNetBridge := preload("../game/net/playground_net_bridge.gd")
 const PlaygroundNetCommand := preload("../game/net/playground_net_command.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
+const PlaygroundNpcNet := preload("../game/net/playground_npc_net.gd")
+const PlaygroundWaves := preload("../game/playground_waves.gd")
 const PlaygroundPropNet := preload("../game/net/playground_prop_net.gd")
 const PlaygroundServices := preload("../game/playground_services.gd")
 const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
@@ -55,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 298
+const CHECKS := 318
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 32
+const SECTIONS := 34
 
 var _passed := 0
 var _failed := 0
@@ -158,6 +160,11 @@ func _run() -> void:
 		await _test_inventory_rejoin()
 		await _test_zee_over_the_wire()
 		await _test_toys_over_the_wire()
+		# Last but the leave: it resizes the crate and spawns an NPC, and every section above
+		# reads a world this would have changed. See its own note.
+		await _test_tool_look_and_armed_npcs()
+		# Adds no body: a grenade is a ray swept each tick, not a physics object.
+		await _test_grenade_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -1194,6 +1201,151 @@ func _test_prop_replication() -> void:
 			server_body.collision_mask if server_body != null else -1,
 		]
 	)
+
+	_done()
+
+
+## The tool gun's resize and paint, and an armed NPC's weapon, over the wire.
+##
+## [b]Last, and that placement is the point[/b], for the reason the comment in `_run` gives:
+## both halves are one physics space and one snapshot stream, and the vehicle check drops
+## every third snapshot — so steps added anywhere before it move its phase. Put inside the
+## prop section first, these checks took that check from passing to "held still on 7 of 33"
+## every run, with the new prop fields themselves ruled out by turning them off.
+func _test_tool_look_and_armed_npcs() -> void:
+	_section("a resized, painted prop and an armed NPC reach the client")
+
+	# Its own crate: the replication section's is long gone by now.
+	var crate := _server_game.props.spawn(&"crate", &"u%d" % SESSION, Vector3(14.0, 3.0, -14.0))
+	_exchange()
+	await _steps(8)
+	var server_net: PlaygroundPropNet = _server_bridge.get("_prop_nets").get(crate.instance_id) if crate != null else null
+	var server_node: Node3D = crate.node if crate != null else null
+	var client_node: Node3D = _client_bridge.call("_mirror_node", server_net.identity.net_id) if server_net != null else null
+
+	if server_node == null or client_node == null:
+		_check(false, "a crate is spawned and mirrored for this section")
+		return
+
+	# The tool gun's resize and paint reach the client, and the mirror is REBUILT at the new
+	# size rather than drawn at the old one — a crate the server made twice as big that
+	# clients still draw normal-sized is a crate players walk into the invisible half of.
+	server_node.call("set_size_scale", 2.0)
+	server_node.call("set_tint", Color(0.9, 0.2, 0.2))
+	# Waited for rather than counted: by now the suite's link carries a delay and drops
+	# snapshots, so a fixed count asks at a different point in the stream each run.
+	for i in 128:
+		await _steps(1)
+		if absf(float(client_node.get("size_scale")) - 2.0) < 0.02 and (client_node.get("tint") as Color).a > 0.0:
+			break
+	_check(absf(float(client_node.get("size_scale")) - 2.0) < 0.02,
+		"a resize reaches the client", "%.3f" % float(client_node.get("size_scale")))
+	var mirror_box := (client_node.get_node_or_null("Collision") as CollisionShape3D)
+	_check(mirror_box != null and (mirror_box.shape as BoxShape3D).size.x > 1.9,
+		"and the mirror is rebuilt at that size")
+	_check((client_node.get("tint") as Color).r > 0.8 and (client_node.get("tint") as Color).g < 0.3,
+		"and so does a coat of paint")
+
+	# Two ropes on the one crate are both drawn. One slot per prop used to be replicated,
+	# so the second rope on a prop was simulated by the server and drawn by nobody.
+	var crate_body := server_node as RigidBody3D
+	var first: DotResult = _server_game.constraints.rope(&"u%d" % SESSION, crate_body,
+		crate_body.global_position, null, crate_body.global_position + Vector3(0, 4, 0), 0.0, false)
+	var second: DotResult = _server_game.constraints.rope(&"u%d" % SESSION, crate_body,
+		crate_body.global_position, null, crate_body.global_position + Vector3(3, 4, 0), 0.0, false)
+	var client_prop_net: PlaygroundPropNet = null
+	for net in _client_bridge.get("_prop_nets").values():
+		if net is PlaygroundPropNet and (net as PlaygroundPropNet).prop == client_node:
+			client_prop_net = net
+	for i in 128:
+		await _steps(1)
+		if client_prop_net != null and client_prop_net.ropes_drawn() == 2:
+			break
+	_check(first.ok and second.ok and client_prop_net != null and client_prop_net.ropes_drawn() == 2,
+		"two ropes on one prop are both drawn on the client",
+		"%d drawn" % (client_prop_net.ropes_drawn() if client_prop_net != null else -1))
+	_server_game.constraints.remove(first.value)
+	for i in 128:
+		await _steps(1)
+		if client_prop_net != null and client_prop_net.ropes_drawn() == 1:
+			break
+	_check(client_prop_net != null and client_prop_net.ropes_drawn() == 1,
+		"and taking one off takes that one away")
+	_check(client_prop_net != null and client_prop_net.net_rope_b.distance_to(crate_body.global_position + Vector3(3, 4, 0)) < 0.5,
+		"leaving the other", str(client_prop_net.net_rope_b) if client_prop_net != null else "")
+	_server_game.constraints.remove(second.value)
+
+	# An armed NPC's mirror holds its weapon: the client is told which, and draws it.
+	var soldier := _server_game.props.spawn(&"npc_soldier", &"u%d" % SESSION, Vector3(-18.0, 2.0, -18.0))
+	_check(soldier != null, "the server spawns an armed NPC")
+	_exchange()
+	var armed_mirror: PlaygroundNpcNet = null
+	for i in 128:
+		await _steps(1)
+		for net in _client_bridge.get("_prop_nets").values():
+			if net is PlaygroundNpcNet:
+				armed_mirror = net
+		if armed_mirror != null and armed_mirror.net_weapon != "":
+			break
+	var server_side := ""
+	for net in _server_bridge.get("_prop_nets").values():
+		if net is PlaygroundNpcNet:
+			server_side = (net as PlaygroundNpcNet).net_weapon
+	_check(armed_mirror != null and armed_mirror.net_weapon == "zee_smg",
+		"the client is told which weapon the NPC holds",
+		"client '%s', server '%s'" % [armed_mirror.net_weapon if armed_mirror != null else "(no mirror)", server_side])
+	_check(armed_mirror != null and armed_mirror.prop.get_node_or_null("Hands") != null,
+		"and puts one in its hands")
+	# A wave NPC reaches the client too, through the same path: it was never replicated,
+	# so a connected player was hunted by a wave they could not see.
+	var waves := DotNpcSpawner.new()
+	waves.name = "TestWaves"
+	waves.catalogue = PlaygroundWaves.shared_catalogue()
+	var limits := DotNpcLimits.new()
+	limits.spawn_interval = 0.0
+	limits.require_navigable_spawn = false
+	waves.limits = limits
+	waves.authoritative = true
+	_server_game.world.add_child(waves)
+	_server_bridge.watch_npc_spawner(waves, PlaygroundWaves.shared_catalogue())
+
+	var props_before := int(_client_bridge.describe()["props"])
+	var wave := waves.spawn(&"walker", Vector3(-10.0, 1.0, 10.0))
+	_check(wave != null, "a wave NPC spawns on the server")
+	_exchange()
+	for i in 128:
+		await _steps(1)
+		if int(_client_bridge.describe()["props"]) > props_before:
+			break
+	_check(int(_client_bridge.describe()["props"]) == props_before + 1, "and the client builds it")
+
+	if wave != null:
+		(wave.node as Node3D).global_position = Vector3(-6.0, 1.0, 10.0)
+		var mirror_of: Node3D = null
+		for i in 128:
+			await _steps(1)
+			var wave_net: PlaygroundPropNet = _server_bridge.get("_prop_nets").get(wave.instance_id)
+			mirror_of = _client_bridge.call("_mirror_node", wave_net.identity.net_id) if wave_net != null else null
+			if mirror_of != null and mirror_of.global_position.distance_to(Vector3(-6.0, 1.0, 10.0)) < 0.3:
+				break
+		_check(mirror_of != null and mirror_of.global_position.distance_to(Vector3(-6.0, 1.0, 10.0)) < 0.3,
+			"and draws it where the server has it",
+			str(mirror_of.global_position) if mirror_of != null else "no mirror")
+		waves.remove(wave.instance_id)
+		_exchange()
+		for i in 128:
+			await _steps(1)
+			if int(_client_bridge.describe()["props"]) == props_before:
+				break
+		_check(int(_client_bridge.describe()["props"]) == props_before, "and lets it go when the server does")
+
+	waves.queue_free()
+
+	if soldier != null:
+		_server_game.props.remove(soldier.instance_id)
+	_server_game.props.remove(crate.instance_id)
+	_exchange()
+	await _steps(4)
 	_done()
 
 
@@ -3535,6 +3687,75 @@ func _test_inventory_rejoin() -> void:
 		"and the original connection is back for the section after this"
 	)
 
+	_done()
+
+
+## A grenade the server throws is flown by the client too, and goes off where the server says.
+##
+## The client is told the launch (one PROJECTILE event) and flies its own copy so the arc is
+## drawn, and its copy never goes off by itself: the blast, the damage and the shove are the
+## server's, and the client is told where with a DETONATE.
+func _test_grenade_over_the_wire() -> void:
+	_section("a grenade over the wire")
+	_server_game.projectiles.clear()
+	_client_game.projectiles.clear()
+
+	var outcome := DotWeaponOutcome.new()
+	var spawn := DotWeaponSpawn.new()
+	spawn.id = &"frag"
+	spawn.origin = Vector3(-40, 4, -40)
+	spawn.velocity = Vector3(3, 2, 0)
+	spawn.gravity_scale = 1.0
+	spawn.radius = 0.08
+	spawn.splash_radius = 5.2
+	spawn.splash_damage = 0.0
+	# In the catalogue's 64 Hz ticks, as a weapon makes them: one second.
+	spawn.fuse_ticks = 64
+	spawn.life_ticks = 128
+	outcome.spawns.append(spawn)
+	var thrown := _server_game.projectiles.accept(outcome, &"u1")
+	_check(thrown == 1 and spawn.fuse_ticks == _server_game.tick_rate,
+		"the server flies it, its fuse rescaled to the server's tick rate",
+		"fuse %d ticks at %d Hz" % [spawn.fuse_ticks, _server_game.tick_rate])
+
+	var blasts: Array = []
+	var on_blast := func(_serial: int, at: Vector3, _radius: float) -> void: blasts.append(at)
+	_client_game.projectiles.detonated.connect(on_blast)
+	# An Array, because a lambda captures a local by value.
+	var server_blasts: Array = []
+	var on_server := func(_serial: int, at: Vector3, _radius: float) -> void: server_blasts.append(at)
+	_server_game.projectiles.detonated.connect(on_server)
+
+	await _steps(4)
+	_check(_client_game.projectiles.live_count() == 1, "the client is told and flies a copy")
+
+	var worst := 0.0
+	var client_live_while_server := true
+	for i in _server_game.tick_rate - 8:
+		await _step()
+		var server_live := _server_game.projectiles.flying()
+		var client_live := _client_game.projectiles.flying()
+		if server_live.is_empty():
+			break
+		if client_live.is_empty():
+			client_live_while_server = false
+			break
+		worst = maxf(worst, server_live[0].position.distance_to(client_live[0].position))
+	print("    the client's copy stayed within %.3f m of the server's" % worst)
+	_check(client_live_while_server, "the client's copy lasts as long as the server's")
+	_check(worst < 0.5, "and flies the same arc, within half a metre", "%.3f m" % worst)
+
+	await _steps(24)
+	_server_game.projectiles.detonated.disconnect(on_server)
+	_client_game.projectiles.detonated.disconnect(on_blast)
+	var server_at: Vector3 = server_blasts[0] if not server_blasts.is_empty() else Vector3.INF
+
+	_check(_server_game.projectiles.live_count() == 0 and server_blasts.size() == 1, "the server sets it off on its fuse")
+	_check(_client_game.projectiles.live_count() == 0 and blasts.size() == 1,
+		"and the client's copy goes with it, once", "%d blasts on the client" % blasts.size())
+	_check(not blasts.is_empty() and (blasts[0] as Vector3).distance_to(server_at) < 0.05,
+		"where the server says, not where the copy was",
+		"%s against %s" % [str(blasts[0]) if not blasts.is_empty() else "-", str(server_at)])
 	_done()
 
 

@@ -17,6 +17,10 @@ const PlaygroundVehicle := preload("../game/playground_vehicle.gd")
 const PlaygroundWeaponDef := preload("../game/weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("../game/playground_weapons.gd")
 const PlaygroundZee := preload("../game/playground_zee.gd")
+const PlaygroundProjectiles := preload("../game/playground_projectiles.gd")
+const PlaygroundEvents := preload("../game/net/playground_events.gd")
+const PlaygroundLimits := preload("../game/playground_limits.gd")
+const PlaygroundNpcNet := preload("../game/net/playground_npc_net.gd")
 
 ## Runs the whole playground: a bot surfs a map from start to finish, its run is
 ## timed and filed, props are spawned and moved, and the map is changed underneath.
@@ -49,13 +53,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 580
+const CHECKS := 663
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 32
+const SECTIONS := 36
 
 var _passed := 0
 var _failed := 0
@@ -107,6 +111,10 @@ func _run() -> void:
 	await _test_entities_run_their_scripts()
 	await _test_weapons()
 	await _test_zee_weapons()
+	await _test_limits_per_kind()
+	await _test_the_tool_gun()
+	await _test_armed_npcs()
+	await _test_grenades()
 	await _test_spawn_menu()
 	await _test_the_sandbox_and_its_course()
 	await _test_vehicles()
@@ -1707,6 +1715,595 @@ func _test_a_hunter_decides(playground: Playground) -> void:
 	playground.props.remove(spawned.instance_id)
 	playground.npc_candidates = []
 	playground.remove_player(&"seen")
+
+
+# --- Limits per kind, the tool gun, armed NPCs -------------------------------------
+
+## Clears the sandbox and puts the bot somewhere out of everybody's way.
+func _sandbox_floor() -> void:
+	var loaded: DotResult = await playground.change_map(&"pg_lobby")
+	_check(loaded.ok, "the sandbox loads")
+	playground.props.limits.spawn_interval = 0.0
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	var bot: PlaygroundPlayer = playground.players.get(&"bot")
+	if bot != null:
+		bot.teleport(Vector3(-60.0, 1.0, -60.0), 0.0)
+	await get_tree().physics_frame
+
+
+func _test_limits_per_kind() -> void:
+	_section("limits per kind, and per role")
+	await _sandbox_floor()
+
+	# The count is under test, not the cost: an earlier section leaves a cost budget set,
+	# and a turret costing three ran out of that rather than of anything checked here.
+	var budget_was := playground.props.limits.per_player_budget
+	playground.props.limits.per_player_budget = 0
+
+	var limits := playground.spawn_limits
+	limits.defaults[PlaygroundLimits.NPCS] = 3
+	limits.apply_to(playground.props.limits)
+
+	var placed := 0
+	for i in 3:
+		if playground.props.spawn(&"npc_wanderer", &"bot", Vector3(float(i) * 3.0, 1.2, 10.0)) != null:
+			placed += 1
+	_check(placed == 3, "three NPCs fit a limit of three")
+
+	var reasons: Array = []
+	var listen := func(_p: StringName, _id: StringName, why: String) -> void: reasons.append(why)
+	playground.props.refused.connect(listen)
+	_check(playground.props.spawn(&"npc_hunter", &"bot", Vector3(0, 1.2, 14)) == null,
+		"and a fourth, of another kind of NPC, is refused")
+	_check(not reasons.is_empty() and str(reasons[-1]).contains("npcs"),
+		"saying it is the NPC limit", str(reasons))
+	_check(playground.props.spawn(&"crate", &"bot", Vector3(0, 1.2, 18)) != null,
+		"while a crate is a prop and still spawns")
+	_check(playground.props.spawn(&"turret_spinner", &"bot", Vector3(6, 1.2, 18)) != null,
+		"and so does a turret, which is an entity and not an NPC", str(reasons))
+
+	# A role. The bot is a VIP, and VIPs get five.
+	limits.roles_fn = func(id: StringName) -> PackedStringArray:
+		return PackedStringArray(["vip"]) if id == &"bot" else PackedStringArray()
+	_check(limits.set_roles_from("vip: npcs=5 props=400; admin: npcs=0").ok, "per-role limits parse")
+	_check(playground.props.spawn(&"npc_wanderer", &"bot", Vector3(12, 1.2, 10)) != null,
+		"and a role with more lets its holder past the default")
+	_check(limits.limit_for(&"bot", PlaygroundLimits.NPCS) == 5
+		and limits.limit_for(&"somebody", PlaygroundLimits.NPCS) == 3,
+		"for them and nobody else")
+
+	limits.roles_fn = func(_id: StringName) -> PackedStringArray: return PackedStringArray(["vip", "admin"])
+	_check(limits.limit_for(&"bot", PlaygroundLimits.NPCS) == 0,
+		"the most generous role wins, and none at all beats any number")
+
+	var kept := limits.roles.duplicate(true)
+	_check(not limits.set_roles_from("vip: npcz=4").ok and limits.roles == kept,
+		"a typo is refused, and the roles that were there are kept")
+
+	var lines := "\n".join(limits.describe_for(&"bot", playground.props.group_usage(&"bot")))
+	_check(lines.contains("npcs") and lines.contains("balloons"),
+		"pg_limits names every kind", lines)
+
+	playground.props.refused.disconnect(listen)
+	limits.roles_fn = Callable()
+	limits.roles = {}
+	limits.defaults = PlaygroundLimits.DEFAULTS.duplicate()
+	limits.apply_to(playground.props.limits)
+	playground.props.limits.per_player_budget = budget_was
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_done()
+
+
+## Points the tool gun at [param body] from three metres away and presses [param button].
+##
+## [b]After a physics step, not in the same frame as the last press.[/b] A resize rebuilds
+## the body's collision shape, and the physics server's queries do not see a new shape
+## until it has stepped: the first version of this pressed four buttons in one frame and
+## every press after a resize traced straight through the crate. No player can click twice
+## inside one physics step, so the wait is the real sequence, not a workaround.
+func _tool_at(gun: Object, body: Node3D, button: StringName) -> DotResult:
+	await get_tree().physics_frame
+	var space := body.get_world_3d().direct_space_state
+	var origin := body.global_position + Vector3(0.0, 0.2, 3.0)
+	var aim := (body.global_position - origin).normalized()
+	return gun.call(button, space, origin, aim)
+
+
+func _test_the_tool_gun() -> void:
+	_section("the tool gun")
+	await _sandbox_floor()
+
+	var def := playground.weapon_def(&"toolgun")
+	_check(def != null, "the tool gun is a weapon on offer")
+	var gun := PlaygroundWeapons.make(def)
+	_check(gun != null and gun.has_method("set_mode"), "and it loads as one")
+
+	if gun == null:
+		_done()
+		return
+
+	gun.equip(playground, def)
+	gun.wielder = &"bot"
+
+	# --- Inflate and deflate ---------------------------------------------------------
+	var crate := playground.props.spawn(&"crate", &"bot", Vector3(0, 0.6, 0))
+	await get_tree().physics_frame
+	var body := crate.node as RigidBody3D
+	var base_mass := crate.def.mass
+
+	_check(gun.call("set_mode", &"resize", {"step": 0.5}).ok, "it switches to inflate/deflate")
+	_check((await _tool_at(gun, body, &"primary")).ok, "left click inflates")
+	_check(is_equal_approx(float(body.get("size_scale")), 1.5), "by the step",
+		"scale %.3f" % float(body.get("size_scale")))
+	var box := (body.get_node("Collision") as CollisionShape3D).shape as BoxShape3D
+	_check(box != null and box.size.x > 1.4, "and the collision is rebuilt bigger, not scaled",
+		str(box.size) if box != null else "no box")
+	_check(is_equal_approx(body.mass, base_mass * 1.5 * 1.5 * 1.5),
+		"and it weighs what a crate that size would", "%.1f kg" % body.mass)
+	var _down := await _tool_at(gun, body, &"secondary")
+	_check(is_equal_approx(float(body.get("size_scale")), 1.0), "right click deflates it back exactly")
+	var _down2 := await _tool_at(gun, body, &"secondary")
+	var _back := await _tool_at(gun, body, &"reload")
+	_check(is_equal_approx(float(body.get("size_scale")), 1.0) and is_equal_approx(body.mass, base_mass),
+		"and reload puts it back to its own size")
+	_check(gun.call("set_mode", &"resize", {"step": 99999.0}).ok
+		and float(gun.call("current").call("setting", "step")) <= 1.0,
+		"a setting from a client is clamped to the tool's own range")
+	var _reset_step: Variant = gun.call("set_mode", &"resize", {"step": 0.5})
+	for i in 10:
+		var _up := await _tool_at(gun, body, &"primary")
+	_check(float(body.get("size_scale")) <= PlaygroundProp.MAX_SCALE, "and nothing grows past the largest")
+	var _reset := await _tool_at(gun, body, &"reload")
+
+	# --- Paint -----------------------------------------------------------------------
+	var _c: Variant = gun.call("set_mode", &"colour", {"colour": "6fbf5a"})
+	var _p := await _tool_at(gun, body, &"primary")
+	_check((body.get("tint") as Color).is_equal_approx(Color.html("6fbf5a")), "the colour tool paints")
+	var other := playground.props.spawn(&"crate", &"bot", Vector3(4, 0.6, 0))
+	await get_tree().physics_frame
+	var _c2: Variant = gun.call("set_mode", &"colour", {"colour": "e05252"})
+	var _copied := await _tool_at(gun, body, &"secondary")
+	_check(str(gun.call("current").call("setting", "colour")) == "6fbf5a",
+		"right click copies a prop's colour into the tool")
+	var _unpaint := await _tool_at(gun, body, &"reload")
+	_check((body.get("tint") as Color).a == 0.0, "and reload takes the paint off")
+
+	# --- Weld ------------------------------------------------------------------------
+	var other_body := other.node as RigidBody3D
+	var _w: Variant = gun.call("set_mode", &"weld", {})
+	var first: DotResult = await _tool_at(gun, body, &"primary")
+	_check(first.ok and str(first.value) == "first", "a weld takes a first prop")
+	var made: DotResult = await _tool_at(gun, other_body, &"primary")
+	_check(made.ok and playground.constraints.size() == 1, "and a second, and they are welded")
+	_check(made.ok and is_instance_valid(made.value.joint) and made.value.joint is Generic6DOFJoint3D,
+		"by a real joint the physics enforces")
+	_check(playground.constraint_count(&"bot") == 1, "counted against its owner")
+	var _unweld := await _tool_at(gun, body, &"reload")
+	_check(playground.constraints.size() == 0, "and reload takes the weld off")
+
+	# --- The constraint limit ----------------------------------------------------------
+	playground.spawn_limits.defaults[PlaygroundLimits.CONSTRAINTS] = 1
+	var _w1 := await _tool_at(gun, body, &"secondary")
+	var refused: DotResult = await _tool_at(gun, other_body, &"secondary")
+	_check(not refused.ok and refused.error.message.contains("constraints"),
+		"welds, ropes and no-collides have their own limit",
+		refused.error.message if not refused.ok else "allowed")
+	playground.spawn_limits.defaults[PlaygroundLimits.CONSTRAINTS] = 100
+	playground.constraints.remove_owned(&"bot")
+
+	# --- No-collide --------------------------------------------------------------------
+	var _n: Variant = gun.call("set_mode", &"nocollide", {})
+	var _n1 := await _tool_at(gun, body, &"primary")
+	var _n2 := await _tool_at(gun, other_body, &"primary")
+	_check(body.get_collision_exceptions().has(other_body) and other_body.get_collision_exceptions().has(body),
+		"no-collide lets two props through each other, both ways")
+	var _n3 := await _tool_at(gun, body, &"reload")
+	_check(not body.get_collision_exceptions().has(other_body), "and reload puts their collision back")
+
+	# --- Rope ----------------------------------------------------------------------------
+	var anchor := playground.props.spawn(&"crate", &"bot", Vector3(10, 8, 0))
+	var hanging := playground.props.spawn(&"crate", &"bot", Vector3(10, 6, 0))
+	await get_tree().physics_frame
+	var anchor_body := anchor.node as RigidBody3D
+	var hanging_body := hanging.node as RigidBody3D
+	anchor_body.freeze = true
+	var _r: Variant = gun.call("set_mode", &"rope", {"slack": 1.0})
+	var _r1 := await _tool_at(gun, anchor_body, &"primary")
+	var roped: DotResult = await _tool_at(gun, hanging_body, &"primary")
+	_check(roped.ok, "a rope ties two props")
+	var length: float = roped.value.length if roped.ok else 0.0
+	for i in 180:
+		await get_tree().physics_frame
+	var span: float = roped.value.a_point().distance_to(roped.value.b_point()) if roped.ok else INF
+	_check(span <= length + 0.25, "and holds a falling crate at its length",
+		"%.2f m on a %.2f m rope" % [span, length])
+	_check(not (anchor_body.get("ropes") as Array).is_empty(),
+		"and one of its props carries the rope for a client to draw")
+
+	# --- Balloon ---------------------------------------------------------------------------
+	var lifted := playground.props.spawn(&"crate", &"bot", Vector3(-10, 0.6, 0))
+	await get_tree().physics_frame
+	var lifted_body := lifted.node as RigidBody3D
+	var start_y := lifted_body.global_position.y
+	var _b: Variant = gun.call("set_mode", &"balloon", {"lift": 3000.0, "length": 2.0})
+	var tied: DotResult = await _tool_at(gun, lifted_body, &"primary")
+	_check(tied.ok, "a balloon is tied on")
+	_check(playground.props.group_count(&"bot", &"balloons") == 1,
+		"counted as a balloon, not as a prop")
+	for i in 240:
+		await get_tree().physics_frame
+	_check(lifted_body.global_position.y > start_y + 1.0, "and lifts the crate",
+		"%.2f m up" % (lifted_body.global_position.y - start_y))
+
+	# --- Physical properties ------------------------------------------------------------------
+	var _pp: Variant = gun.call("set_mode", &"physprop", {"gravity": false, "weight": 2.0})
+	var _pp1 := await _tool_at(gun, other_body, &"primary")
+	_check(other_body.gravity_scale == 0.0 and is_equal_approx(other_body.mass, other.def.mass * 2.0),
+		"physical properties switch gravity off and change the weight")
+
+	# --- Ownership -----------------------------------------------------------------------------
+	var theirs := playground.props.spawn(&"crate", &"someone", Vector3(-4, 0.6, 6))
+	await get_tree().physics_frame
+	var was := playground.config.touch_others_props
+	playground.config.touch_others_props = false
+	var _rs: Variant = gun.call("set_mode", &"resize", {})
+	var not_mine: DotResult = await _tool_at(gun, theirs.node as Node3D, &"primary")
+	_check(not not_mine.ok and not_mine.error.message.contains("not yours"),
+		"and on a server that says so, it cannot touch somebody else's")
+	playground.config.touch_others_props = was
+
+	# --- The remover ------------------------------------------------------------------------------
+	var _rm: Variant = gun.call("set_mode", &"weld", {})
+	var _w2 := await _tool_at(gun, body, &"primary")
+	var _w3 := await _tool_at(gun, other_body, &"primary")
+	var _rmv: Variant = gun.call("set_mode", &"remover", {})
+	var gone: DotResult = await _tool_at(gun, body, &"secondary")
+	_check(gone.ok and int(gone.value) == 2, "right click with the remover takes a whole contraption",
+		str(gone.value) if gone.ok else gone.error.message)
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_check(playground.constraints.size() == 0, "and every constraint goes with its props")
+	_done()
+
+
+func _test_armed_npcs() -> void:
+	_section("NPCs with weapons")
+	await _sandbox_floor()
+
+	var soldier := playground.props.spawn(&"npc_soldier", &"bot", Vector3(0, 1.2, 0))
+	await get_tree().physics_frame
+	_check(soldier != null, "a soldier spawns")
+
+	if soldier == null:
+		_done()
+		return
+
+	var body := soldier.node
+	_check(String(body.get("weapon_id")) == "zee_smg" and body.call("is_armed"),
+		"carrying the weapon its catalogue entry names")
+	_check(playground.armed_npcs.has(body), "and the world knows it is armed")
+	_check(body.get("brain") != null and body.get("brain").get("squad") != null,
+		"with a tactical brain, in its owner's squad")
+
+	_check(playground.set_npc_weapon_choice(&"bot", &"zee_shotgun").ok, "a player picks what their NPCs carry")
+	_check(not playground.set_npc_weapon_choice(&"bot", &"zee_frag").ok,
+		"and cannot pick a grenade, which an NPC has no arc to throw")
+	var shotgunner := playground.props.spawn(&"npc_soldier", &"bot", Vector3(-6, 1.2, 0))
+	await get_tree().physics_frame
+	_check(shotgunner != null and String(shotgunner.node.get("weapon_id")) == "zee_shotgun",
+		"and the next one carries it")
+	playground.npc_weapon_choice.erase(&"bot")
+	if shotgunner != null:
+		playground.props.remove(shotgunner.instance_id)
+
+	# --- A player's shot hurts it -------------------------------------------------------------
+	var bot: PlaygroundPlayer = playground.players[&"bot"]
+	bot.teleport(Vector3(0, 1.0, 12.0), 0.0)
+	await get_tree().physics_frame
+	var rig := PlaygroundZee.arm(bot, playground.weapon_def(&"zee_rifle"), ZeeWeaponRig.Role.SERVER, true,
+		playground.tick_rate, playground.current_tick())
+	var target: Node3D = body
+	var before := float(body.get("health"))
+	var ctx := DotWeaponContext.new()
+	ctx.origin = bot.eye_position()
+	ctx.direction = (target.global_position + Vector3.UP * 0.3 - ctx.origin).normalized()
+	ctx.authority = true
+	for i in 40:
+		ctx.tick = playground.current_tick() + i
+		var command := DotWeaponCommand.new()
+		command.set_button(DotWeaponCommand.BUTTON_ATTACK, i % 2 == 0)
+		command.slot = PlaygroundZee.slot_of(rig)
+		var outcome := rig.simulate_tick(command, ctx.tick, ctx)
+		playground.player_shots_fired(&"bot", outcome)
+		if float(body.get("health")) < before:
+			break
+	_check(float(body.get("health")) < before, "a player's shot hurts an NPC",
+		"%.0f of %.0f" % [float(body.get("health")), before])
+	PlaygroundZee.disarm(bot)
+
+	# --- Replicated --------------------------------------------------------------------------
+	var net := PlaygroundNpcNet.new()
+	net.prop = body
+	net.pull()
+	_check(net.net_weapon == "zee_smg", "a client is told which weapon it holds")
+	net.free()
+
+	# --- Soldiers and rebels fight each other -------------------------------------------------
+	bot.teleport(Vector3(-60.0, 1.0, -60.0), 0.0)
+	# Healed first: the player's shots above already hurt it, and a fight measured against
+	# that would end before it began.
+	body.set("health", float(body.get("max_health")))
+	before = float(body.get("max_health"))
+	var rebel := playground.props.spawn(&"npc_rebel", &"bot", Vector3(0, 1.2, -14))
+	await get_tree().physics_frame
+	var rebel_body: Node = rebel.node if rebel != null else null
+	var fired_before := int((body.get("zee_rig") as ZeeWeaponRig).fire_seq)
+	var hurt := false
+	for i in 128 * 8:
+		await get_tree().physics_frame
+		if not is_instance_valid(body) or not is_instance_valid(rebel_body):
+			hurt = true
+			break
+		if float(body.get("health")) < before - 0.1 or float(rebel_body.get("health")) < float(rebel_body.get("max_health")):
+			hurt = true
+			break
+	_check(hurt, "a soldier and a rebel find each other and fight",
+		"soldier targets '%s', rebel targets '%s'" % [
+			String(body.get("npc").target_id) if is_instance_valid(body) else "(gone)",
+			String(rebel_body.get("npc").target_id) if is_instance_valid(rebel_body) else "(gone)",
+		])
+	_check(not is_instance_valid(body) or int((body.get("zee_rig") as ZeeWeaponRig).fire_seq) > fired_before
+		or (rebel_body != null and is_instance_valid(rebel_body) and int((rebel_body.get("zee_rig") as ZeeWeaponRig).fire_seq) > 0),
+		"with their own weapons")
+
+	# --- Death drops the weapon, and walking over it picks it up ---------------------------------
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	await get_tree().physics_frame
+	var doomed := playground.props.spawn(&"npc_soldier", &"bot", Vector3(0, 1.2, 0))
+	await get_tree().physics_frame
+	var at: Vector3 = (doomed.node as Node3D).global_position
+	doomed.node.call("take_damage", 9999.0, &"bot")
+	await get_tree().physics_frame
+	var dropped: DotPropInstance = null
+	for prop in playground.props.all_props():
+		if prop.def != null and String(prop.def.id) == "pickup_zee_smg":
+			dropped = prop
+	_check(dropped != null, "a soldier that dies drops its weapon")
+	_check(playground.armed_npcs.is_empty(), "and is no longer an armed NPC")
+
+	var picked: Array = []
+	var on_pick := func(who: StringName, weapon: StringName) -> void: picked.append([who, weapon])
+	playground.weapon_picked_up.connect(on_pick)
+	bot.teleport(at, 0.0)
+	for i in 160:
+		await get_tree().physics_frame
+		if not picked.is_empty():
+			break
+	_check(not picked.is_empty() and picked[0][0] == &"bot" and picked[0][1] == &"zee_smg",
+		"and the player who walks over it picks it up", str(picked))
+	playground.weapon_picked_up.disconnect(on_pick)
+
+	# --- A weapon spawned from the menu counts against `weapons` ----------------------------------
+	var placed := playground.props.spawn(Playground.pickup_id_of(&"zee_pistol"), &"bot", Vector3(8, 1, 8))
+	_check(placed != null and playground.props.group_count(&"bot", &"weapons") == 1,
+		"a weapon put on the ground counts against the weapons limit")
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	_done()
+
+
+## A zee grenade is thrown, flies, bounces, goes off, and NPCs get out from under it.
+##
+## [b]This game used to drop a weapon outcome's spawns[/b], so a thrown frag cost a grenade
+## and never existed. Every check here goes through the real path: a rig, its outcome, and
+## `player_shots_fired`, which is what the server's bridge and the offline client both call.
+func _test_grenades() -> void:
+	_section("grenades and rockets fly")
+	await _sandbox_floor()
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	playground.projectiles.clear()
+
+	var bot: PlaygroundPlayer = playground.players[&"bot"]
+	bot.teleport(Vector3(0, 1.0, 12.0), 0.0)
+	await get_tree().physics_frame
+
+	# A crate and a soldier where it will land, a little apart.
+	var crate := playground.props.spawn(&"crate", &"bot", Vector3(1.5, 0.6, 2.0))
+	var soldier := playground.props.spawn(&"npc_soldier", &"bot", Vector3(-1.5, 1.2, 2.0))
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+
+	var rig := PlaygroundZee.arm(bot, playground.weapon_def(&"zee_frag"), ZeeWeaponRig.Role.SERVER, true,
+		playground.tick_rate, playground.current_tick())
+	_check(rig != null, "a player holds a frag")
+
+	var ctx := DotWeaponContext.new()
+	ctx.origin = bot.eye_position()
+	# Thrown down at the floor ahead, so it lands and rolls between the crate and the
+	# soldier rather than sailing over both.
+	ctx.direction = Vector3(0, -0.6, -1).normalized()
+	ctx.authority = true
+	var thrown := 0
+	for i in 60:
+		ctx.tick = playground.current_tick() + i
+		var command := DotWeaponCommand.new()
+		command.set_button(DotWeaponCommand.BUTTON_ATTACK, i < 6)
+		command.slot = PlaygroundZee.slot_of(rig)
+		var outcome := rig.simulate_tick(command, ctx.tick, ctx)
+		thrown += outcome.spawns.size()
+		playground.player_shots_fired(&"bot", outcome)
+		if thrown > 0:
+			break
+	_check(thrown == 1 and playground.projectiles.live_count() == 1,
+		"releasing it throws one grenade, and the game flies it",
+		"%d thrown, %d live" % [thrown, playground.projectiles.live_count()])
+
+	var launched_at := bot.eye_position()
+	var danger_heard := false
+	var lowest := INF
+	var soldier_body: Node3D = soldier.node if soldier != null else null
+	var soldier_start := soldier_body.global_position if soldier_body != null else Vector3.ZERO
+	var soldier_health := float(soldier_body.get("health")) if soldier_body != null else 0.0
+	var crate_body: RigidBody3D = crate.node as RigidBody3D if crate != null else null
+	var crate_start := crate_body.global_position if crate_body != null else Vector3.ZERO
+	var blasts: Array = []
+	var on_blast := func(serial: int, at: Vector3, radius: float) -> void: blasts.append([serial, at, radius])
+	playground.projectiles.detonated.connect(on_blast)
+	var ticks := 0
+	var bounced := false
+
+	for i in 128 * 5:
+		await get_tree().physics_frame
+		ticks += 1
+		var live := playground.projectiles.flying()
+		if not live.is_empty():
+			lowest = minf(lowest, live[0].position.y)
+			bounced = bounced or live[0].bounces > 0
+			for sound in playground.npc_sounds.audible(live[0].position, playground.npc_world.now(), 1.0):
+				if sound.kind == DotNpcAiSounds.Kind.DANGER:
+					danger_heard = true
+		if not blasts.is_empty():
+			break
+
+	playground.projectiles.detonated.disconnect(on_blast)
+	_check(danger_heard, "while it is live it is a DANGER on the armed NPCs' board")
+	_check(bounced, "it bounces off the floor rather than going off on it")
+	_check(lowest > -0.5, "and never falls through the floor", "lowest %.2f" % lowest)
+	_check(blasts.size() == 1, "it goes off once, on its fuse",
+		"%d blasts in %d ticks" % [blasts.size(), ticks])
+	_check(ticks > 128 * 2, "not before the fuse", "%d ticks" % ticks)
+
+	if blasts.is_empty():
+		PlaygroundZee.disarm(bot)
+		_done()
+		return
+
+	var at: Vector3 = blasts[0][1]
+	print("    frag thrown from %s went off at %s after %d ticks" % [launched_at, at, ticks])
+	_check(at.z < launched_at.z - 3.0, "somewhere in front of the thrower", str(at))
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+
+	if crate_body != null and is_instance_valid(crate_body) and crate_body.global_position.distance_to(at) < 5.2:
+		_check(crate_body.global_position.distance_to(crate_start) > 0.2 or crate_body.linear_velocity.length() > 0.5,
+			"a crate inside the blast is thrown",
+			"moved %.2f m" % crate_body.global_position.distance_to(crate_start))
+	else:
+		_check(false, "a crate inside the blast is thrown", "the crate was not in it")
+
+	var soldier_gap := soldier_body.global_position.distance_to(at) \
+		if soldier_body != null and is_instance_valid(soldier_body) else INF
+	_check(soldier_body == null or not is_instance_valid(soldier_body)
+		or float(soldier_body.get("health")) < soldier_health or soldier_gap > 5.2,
+		"the soldier beside it was hurt or was out of the blast when it went off",
+		"%.1f m from it" % soldier_gap)
+	print("    the soldier was %.1f m from the blast (splash 5.2), at %.0f of %.0f" % [
+		soldier_gap, float(soldier_body.get("health")) if is_instance_valid(soldier_body) else 0.0, soldier_health])
+
+	# A grenade cooked past its fuse goes off where it is, so nobody beside it has time to run.
+	var stood := playground.props.spawn(&"npc_soldier", &"bot", Vector3(-8, 1.2, -8))
+	await get_tree().physics_frame
+	if stood != null:
+		var stood_health := float(stood.node.get("health"))
+		var cooked := DotWeaponSpawn.new()
+		cooked.id = &"frag"
+		cooked.origin = (stood.node as Node3D).global_position + Vector3(1.0, 0.0, 0.0)
+		cooked.splash_radius = 5.2
+		cooked.splash_damage = 115.0
+		cooked.life_ticks = 4
+		var _c := playground.projectiles.launch(cooked, &"bot")
+		for i in 3:
+			await get_tree().physics_frame
+		_check(not is_instance_valid(stood.node) or float(stood.node.get("health")) < stood_health,
+			"a soldier a metre from a blast is hurt by it",
+			"%.0f of %.0f" % [float(stood.node.get("health")) if is_instance_valid(stood.node) else 0.0, stood_health])
+	else:
+		_check(false, "a soldier a metre from a blast is hurt by it", "no soldier spawned")
+	_check(playground.projectiles.flashes_live() >= 1, "a flash is drawn where it went off")
+	PlaygroundZee.disarm(bot)
+
+	# --- An NPC gets out from under one ----------------------------------------------------------
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	await get_tree().physics_frame
+	var runner := playground.props.spawn(&"npc_soldier", &"bot", Vector3(10, 1.2, -10))
+	await get_tree().physics_frame
+	var runner_body: Node3D = runner.node if runner != null else null
+	var fused := DotWeaponSpawn.new()
+	fused.id = &"frag"
+	fused.origin = runner_body.global_position + Vector3(0.8, -0.4, 0.0) if runner_body != null else Vector3.ZERO
+	fused.gravity_scale = 1.0
+	fused.radius = 0.08
+	fused.splash_radius = 5.2
+	fused.splash_damage = 0.0
+	fused.fuse_ticks = 128 * 2
+	fused.life_ticks = 128 * 3
+	var _f := playground.projectiles.launch(fused, &"bot")
+	var start := runner_body.global_position if runner_body != null else Vector3.ZERO
+	var farthest := 0.0
+	for i in 128 * 2 - 4:
+		await get_tree().physics_frame
+		if runner_body == null or not is_instance_valid(runner_body):
+			break
+		farthest = maxf(farthest, runner_body.global_position.distance_to(fused.origin))
+	_check(farthest > start.distance_to(fused.origin) + 2.0, "a soldier next to a live grenade runs from it",
+		"from %.1f m to at most %.1f m" % [start.distance_to(fused.origin), farthest])
+	for i in 16:
+		await get_tree().physics_frame
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+
+	# --- A rocket goes off on contact -------------------------------------------------------------
+	var rocket := DotWeaponSpawn.new()
+	rocket.id = &"launcher"
+	rocket.origin = Vector3(0, 1.5, 0)
+	rocket.velocity = Vector3(0, -30, 0)
+	rocket.splash_radius = 3.0
+	rocket.splash_damage = 0.0
+	rocket.life_ticks = 128 * 4
+	var rocket_blasts: Array = []
+	var on_rocket := func(_serial: int, where: Vector3, _radius: float) -> void: rocket_blasts.append(where)
+	playground.projectiles.detonated.connect(on_rocket)
+	var _r := playground.projectiles.launch(rocket, &"bot")
+	for i in 32:
+		await get_tree().physics_frame
+		if not rocket_blasts.is_empty():
+			break
+	playground.projectiles.detonated.disconnect(on_rocket)
+	_check(rocket_blasts.size() == 1 and absf((rocket_blasts[0] as Vector3).y) < 0.3,
+		"a rocket with no fuse goes off where it meets the floor", str(rocket_blasts))
+
+	# --- What a client is told, and its copy decides nothing --------------------------------------
+	var spawn := DotWeaponSpawn.new()
+	spawn.id = &"sticky"
+	spawn.origin = Vector3(1, 2, 3)
+	spawn.velocity = Vector3(4.5, 6.25, -7.0)
+	spawn.gravity_scale = 1.0
+	spawn.radius = 0.08
+	spawn.splash_radius = 4.0
+	spawn.fuse_ticks = 200
+	spawn.life_ticks = 300
+	var wire := PlaygroundEvents.write_launch(9, spawn, &"u3", true)
+	var reader := DotNetReader.new(wire)
+	_check(reader.read_uint(PlaygroundEvents.PROJECTILE_SUB_BITS) == PlaygroundEvents.ProjectileTell.LAUNCH,
+		"a launch says it is one")
+	var read := PlaygroundEvents.read_launch(reader)
+	var back: DotWeaponSpawn = read["spawn"]
+	_check(bool(read["ok"]) and int(read["serial"]) == 9 and back.velocity == spawn.velocity
+		and back.fuse_ticks == 200 and bool(back.meta[&"sticks"]) and read["owner_id"] == &"u3"
+		and back.origin.distance_to(spawn.origin) < 0.01,
+		"and carries everything a client flies its copy from", str(read))
+
+	var mirror := PlaygroundProjectiles.new()
+	mirror.authority = false
+	add_child(mirror)
+	var copy := mirror.launch(back, &"u3", RID(), 9)
+	for i in 320:
+		mirror.tick(1.0 / 128.0)
+	_check(mirror.live_count() == 1, "a client's copy does not go off by itself, past its fuse")
+	mirror.detonate_remote(9, Vector3(2, 0, 2), 4.0)
+	_check(mirror.live_count() == 0 and copy.view == null, "and goes when the server says it went off")
+	mirror.queue_free()
+
+	_done()
 
 
 ## An entity is a prop with a script, and the script is loaded by path.

@@ -101,6 +101,17 @@ static func built_in() -> Array[PlaygroundWeaponDef]:
 	remover.colour = Color(0.78, 0.34, 0.32)
 	out.append(remover)
 
+	# The tool gun: one weapon, a mode per tool — inflate and deflate, paint, weld, rope,
+	# no-collide, balloons, physical properties, arming an NPC. The mode and its settings
+	# are picked on the Q menu's tools tab. See `swep_toolgun.gd`.
+	var toolgun := PlaygroundWeaponDef.make(
+		&"toolgun", "Tool gun", "%s/swep_toolgun.gd" % DIRECTORY
+	)
+	toolgun.description = "Does whatever the tool picked on the Q menu's Tools tab does."
+	toolgun.category = &"tools"
+	toolgun.colour = Color(0.56, 0.72, 0.86)
+	out.append(toolgun)
+
 	var impulse := PlaygroundWeaponDef.make(
 		&"impulse", "Impulse", "%s/swep_impulse.gd" % DIRECTORY
 	)

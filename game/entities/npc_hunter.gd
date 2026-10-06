@@ -17,9 +17,10 @@ extends "playground_entity.gd"
 ##   `has_reacted()` is the gate every "act on what you see" branch belongs behind. An NPC
 ##   that turns and commits on the tick it first perceives somebody is one no player can
 ##   ever surprise, and that is the difference between a bot and a target.
-## - **A character per NPC, not a difficulty setting.** Each one gets its own seed from its
-##   instance id, so twenty of them do not all react at the same moment — which reads as a
-##   firing squad and is the bug the seeding exists to prevent.
+## - **A character per NPC, which the server moves rather than replaces.** Each one gets its
+##   own seed from its instance id, so twenty of them do not all react at the same moment —
+##   which reads as a firing squad and is the bug the seeding exists to prevent. `npc_skill`
+##   and `npc_reaction_scale` ([member Playground.npc_skill]) shift it live.
 ## - **Separation.** Twelve of these converging on one player climb each other, and the one
 ##   on top has a horizontal offset of nothing from the one below: it chases perfectly at a
 ##   dead stop with every number about it correct. `steer_with_spacing` is the fix and
@@ -43,6 +44,10 @@ var blackboard: DotNpcAiBlackboard = null
 var context: DotNpcAiContext = null
 var character: DotNpcAiCharacter = null
 
+## The character as the catalogue named it, before the server's skill moved it.
+var _base_character: DotNpcAiCharacter = null
+var _skill_revision: int = -1
+
 var _heading: Vector3 = Vector3.FORWARD
 var _stand_off: float = 1.8
 var _speed: float = 5.0
@@ -55,13 +60,13 @@ func _entity_ready() -> void:
 	# [b]A character per NPC, seeded from the instance.[/b] A preset is one resource, and
 	# twenty NPCs sharing it share a seed — so every one of them reacts at the same
 	# moment, which reads as a firing squad. `with_seed` is the one call that prevents it.
-	character = _character_for(tune_string(&"skill", "normal")).with_seed(
+	_base_character = DotNpcAiCharacter.preset(tune_string(&"skill", "normal")).with_seed(
 		instance.instance_id if instance != null else 1
 	)
 
 	blackboard = DotNpcAiBlackboard.new()
 	context = DotNpcAiContext.make(npc, self, blackboard)
-	context.character = character
+	_refresh_character()
 
 	_heading = Vector3.FORWARD.rotated(
 		Vector3.UP, float(instance.instance_id if instance != null else 0)
@@ -108,7 +113,28 @@ func _entity_tick(delta: float) -> void:
 		return
 
 	context.advance(delta)
+	_refresh_character()
 	machine.tick(context)
+
+
+## The character in force, worked out again only when the server's skill changed.
+##
+## The same thing `DotNpcAiBrain` does for a spawned NPC; this entity is built by the spawn
+## menu rather than by a spawner, so it has no brain to do it and asks the world instead.
+func _refresh_character() -> void:
+	var skill: DotNpcAiSkill = game.npc_skill if game != null else null
+	var revision := skill.revision if skill != null else 0
+
+	if revision == _skill_revision and character != null:
+		return
+
+	_skill_revision = revision
+	character = skill.apply(_base_character) if skill != null else _base_character
+	context.character = character
+
+	# How far this one sees, from its character. dot-npc's senses read it per NPC.
+	if npc != null:
+		npc.sight_scale = character.alertness
 
 
 # --- States ----------------------------------------------------------------
@@ -196,9 +222,11 @@ func _sees_somebody(_ctx: DotNpcAiContext) -> bool:
 	if not _has_target():
 		return false
 
-	# Remembered on the tick it is seen, with a lifetime — a blackboard that never forgot
-	# would send an NPC to a position from five minutes ago.
-	blackboard.put(&"last_seen", _target_position(), 8.0)
+	# Remembered on the tick it is seen, for as long as this character remembers — a
+	# blackboard that never forgot would send an NPC to a position from five minutes ago.
+	# A memory of nothing is skipped rather than written: a lifetime of 0 is "for ever".
+	if character != null and character.memory_time > 0.0:
+		blackboard.put(&"last_seen", _target_position(), context.now, character.memory_time)
 	return true
 
 
@@ -253,22 +281,6 @@ func _neighbours(radius: float) -> Array:
 			out.append(other.global_position)
 
 	return out
-
-
-## The character a catalogue's `skill` names.
-##
-## [b]There is no difficulty setting; the character IS the difficulty, per NPC.[/b] That is
-## dot-npc-ai's claim, and it is what lets one server run a mix rather than a slider.
-static func _character_for(skill: String) -> DotNpcAiCharacter:
-	match skill.to_lower():
-		"easy":
-			return DotNpcAiCharacter.easy()
-		"hard":
-			return DotNpcAiCharacter.hard()
-		"nightmare":
-			return DotNpcAiCharacter.nightmare()
-		_:
-			return DotNpcAiCharacter.normal()
 
 
 func describe() -> Dictionary:

@@ -51,6 +51,7 @@ const LINK_SERVICE := &"dot_client_link"
 ## Ids the tools are addressed by, here and in [PlaygroundSpawnMenu].
 const TOOL_PHYS := &"phys"
 const TOOL_GRAV := &"grav"
+const TOOLGUN := &"toolgun"
 
 ## How long Q may be held before releasing it closes the menu.
 ##
@@ -136,6 +137,10 @@ signal server_chosen(address: String)
 
 ## Which prop the spawn key places. Armed by the menu.
 var selected_prop: StringName = &"crate"
+
+## The tool gun mode and its settings, as last picked on the Q menu's tools tab.
+var tool_mode: StringName = &"resize"
+var tool_mode_settings: Dictionary = {}
 
 ## Which tool is in hand: [constant TOOL_PHYS], [constant TOOL_GRAV], or a weapon id.
 var tool: StringName = TOOL_PHYS
@@ -360,6 +365,13 @@ func _wire_presentation() -> void:
 		func(id: StringName, _prop: StringName, _reason: String) -> void:
 			if id == player_id:
 				presentation.on_refused()
+	)
+
+	# Offline the client IS the server, so walking over a weapon equips it here. On a
+	# server the bridge gives it, and the WEAPON event that follows equips it.
+	playground.weapon_picked_up.connect(func(who: StringName, weapon_id: StringName) -> void:
+		if who == player_id:
+			_set_tool(weapon_id)
 	)
 
 
@@ -794,6 +806,9 @@ func _build_screens() -> void:
 	menu.weapon_chosen.connect(_on_weapon_chosen)
 	menu.tool_chosen.connect(_on_tool_chosen)
 	menu.action_requested.connect(_on_menu_action)
+	menu.tool_mode_chosen.connect(_on_tool_mode_chosen)
+	menu.npc_weapon_chosen.connect(_on_npc_weapon_chosen)
+	menu.weapon_spawn_requested.connect(_on_weapon_spawn_requested)
 
 	var registered := screens.register(menu)
 	DotLog.result(CHANNEL, "registering the spawn menu", registered)
@@ -1141,8 +1156,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	# R reloads while a gun is in hand, as it does in every shooter, and unfreezes
-	# everything otherwise. Held and read on both edges like a trigger.
-	if key.physical_keycode == KEY_R and _zee_rig() != null:
+	# everything otherwise. Held and read on both edges like a trigger. The tool gun counts
+	# as a gun here: its R is each tool's third button — reset a size, take paint off, cut
+	# a rope — and a player resetting a balloon's size must not thaw every crate they own.
+	if key.physical_keycode == KEY_R and (_zee_rig() != null or tool == TOOLGUN):
 		_set_reload(key.pressed)
 		return
 
@@ -1385,6 +1402,9 @@ func _set_tool(id: StringName) -> void:
 			weapon.wielder = player_id
 			weapon.armed = selected_prop
 
+			if weapon.has_method("set_mode"):
+				var _moded: DotResult = weapon.call("set_mode", tool_mode, tool_mode_settings)
+
 	if menu != null:
 		menu.tool = tool
 
@@ -1396,6 +1416,10 @@ func _set_tool(id: StringName) -> void:
 
 ## What is in hand, in words. A weapon's own name, or one of the two guns'.
 func _tool_name() -> String:
+	if tool == TOOLGUN:
+		var held := playground.weapon_def(TOOLGUN) if playground != null else null
+		return "%s: %s" % [held.name_or_id() if held != null else "Tool gun", _tool_mode_name()]
+
 	if weapon != null and weapon.def != null:
 		return weapon.def.name_or_id()
 
@@ -1412,6 +1436,16 @@ func _tool_name() -> String:
 ## physics gun is the tool a sandbox is actually played with; a cycle that could not
 ## reach it would leave a player who pressed 3 twice holding a remover with no
 ## obvious way back.
+## The tool gun mode in hand, by its own name. Read off the menu's copy of the modes, which
+## exists on a connected client where no tool gun runs.
+func _tool_mode_name() -> String:
+	if menu != null:
+		for mode in menu.call("_tools"):
+			if mode.get("id") == tool_mode:
+				return str(mode.get("display_name"))
+	return String(tool_mode)
+
+
 func _cycle_weapon() -> void:
 	if playground.weapons.is_empty():
 		if hud != null:
@@ -1613,6 +1647,8 @@ func _physics_process(delta: float) -> void:
 			Engine.get_physics_frames()
 		)
 		var _moved := PlaygroundZee.shove_props(player, outcome, playground.may_touch_others())
+		# And the NPCs it hits are hurt, and the ones in earshot hear it.
+		playground.player_shots_fired(player_id, outcome)
 
 
 # --- Props -----------------------------------------------------------------
@@ -1707,6 +1743,50 @@ func _on_weapon_chosen(weapon_id: StringName) -> void:
 
 func _on_tool_chosen(tool_id: StringName) -> void:
 	_set_tool(tool_id)
+
+
+## A tool picked, or a setting changed, on the Q menu's tools tab. The tool gun comes out if
+## it is not already in hand, and is told the mode — this client's own offline, the
+## server's otherwise (which keeps the choice for the next tool gun it hands out too).
+func _on_tool_mode_chosen(mode: StringName, settings: Dictionary) -> void:
+	tool_mode = mode
+	tool_mode_settings = settings
+
+	if tool != TOOLGUN:
+		_set_tool(TOOLGUN)
+
+	if bridge != null:
+		bridge.ask_tool_mode(mode, settings)
+	elif weapon != null and weapon.has_method("set_mode"):
+		_report(weapon.call("set_mode", mode, settings))
+
+	_sync_hud()
+
+	# What the three buttons now do. Said once, on the change: a tool gun whose left click
+	# means something different from a minute ago is a tool gun nobody can use blind.
+	if hud != null and menu != null:
+		for each in menu.call("_tools"):
+			if each.get("id") == mode:
+				hud.notice("%s   %s" % [str(each.get("display_name")), "   ".join(each.call("help_lines"))])
+
+
+func _on_npc_weapon_chosen(weapon_id: StringName) -> void:
+	if bridge != null:
+		bridge.ask_npc_weapon(weapon_id)
+		return
+
+	_report(playground.set_npc_weapon_choice(player_id, weapon_id))
+
+
+## Right click on a weapon: one on the ground in front of the player, counted against their
+## weapons limit like anything else they spawn.
+func _on_weapon_spawn_requested(weapon_id: StringName) -> void:
+	if bridge != null:
+		bridge.ask_spawn_weapon(weapon_id)
+		return
+
+	var at := player.eye_position() + player.aim_direction() * SPAWN_REACH
+	playground.props.spawn(Playground.pickup_id_of(weapon_id), player_id, at)
 
 
 func _on_menu_action(action: StringName) -> void:
@@ -1988,6 +2068,11 @@ func _disarm_zee() -> void:
 
 
 func _set_reload(down: bool) -> void:
+	# Offline, a toy's reload — the tool gun's third button — is run here, on the press.
+	# Online it rides the same bit the zee weapons' reload does, and the server runs it.
+	if down and bridge == null and weapon != null and _zee_rig() == null:
+		_report(weapon.reload(_space(), player.eye_position(), player.aim_direction()))
+
 	if down:
 		_zee_buttons |= DotFpsCommand.BUTTON_USER_2
 		_net_buttons |= DotFpsCommand.BUTTON_USER_2

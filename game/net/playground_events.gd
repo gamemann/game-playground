@@ -55,7 +55,15 @@ enum Kind {
 	## The player's OWN inventory: an answer to one op they sent, or the whole bag. Only
 	## ever to the owner's peer — see [PlaygroundInventoryNet]. Last, for the same reason.
 	INVENTORY,
+	## A grenade or a rocket: launched (everything a client needs to fly its own copy), or
+	## gone off (where, and how big). One kind with a sub-kind, [enum ProjectileTell]. Last,
+	## because a kind is its index on the wire; an older client refuses it as unknown.
+	PROJECTILE,
 }
+
+## What a [constant Kind.PROJECTILE] event says.
+enum ProjectileTell { LAUNCH, DETONATE }
+const PROJECTILE_SUB_BITS := 2
 
 enum Ask {
 	## I have loaded and can receive. Tell me everything.
@@ -386,6 +394,48 @@ static func write_id(id: StringName) -> PackedByteArray:
 
 static func read_id(r: DotNetReader) -> StringName:
 	return StringName(r.read_string(ID_BYTES))
+
+
+# --- ARM_PROP and its sub-kinds ---------------------------------------------------
+#
+# The Ask enum is four bits and full, so the tool gun's settings, the NPC weapon choice and
+# spawning a weapon into the world ride on ARM_PROP as sub-kinds after its id — the way
+# INVENTORY carries its own. A body with nothing after the id is the original ARM_PROP,
+# which is what an older client sends and an older server reads.
+
+const ARM_PROP_SUB := 0
+## The tool gun: id is the mode, payload its settings as JSON.
+const ARM_TOOL := 1
+## What my NPCs carry: id is the weapon, or `none`, or empty for the catalogue's choice.
+const ARM_NPC_WEAPON := 2
+## Put this weapon on the ground in front of me: id is the weapon.
+const ARM_SPAWN_WEAPON := 3
+
+## The most a tool's settings may take on the wire. A tool has a handful of numbers.
+const TOOL_SETTINGS_BYTES := 512
+
+
+static func write_arm(sub: int, id: StringName, payload: String = "") -> PackedByteArray:
+	var w := _w()
+	w.write_string(String(id), ID_BYTES)
+
+	if sub != ARM_PROP_SUB:
+		w.write_uint(sub, 8)
+		w.write_string(payload, TOOL_SETTINGS_BYTES)
+
+	return w.to_bytes()
+
+
+static func read_arm(r: DotNetReader) -> Dictionary:
+	var id := StringName(r.read_string(ID_BYTES))
+	var out := {"id": id, "sub": ARM_PROP_SUB, "payload": ""}
+
+	if r.has_more():
+		out["sub"] = r.read_uint(8)
+		out["payload"] = r.read_string(TOOL_SETTINGS_BYTES)
+
+	out["ok"] = r.ok()
+	return out
 
 
 static func write_index(index: int) -> PackedByteArray:
@@ -852,3 +902,62 @@ static func read_inv_doc(r: DotNetReader) -> Dictionary:
 	if not (parsed is Dictionary):
 		return {"ok": false}
 	return {"through": through, "doc": parsed as Dictionary, "ok": true}
+
+
+# --- Projectiles ----------------------------------------------------------------
+
+## A projectile left a weapon. Floats in full for the velocity and the fuse numbers: a client
+## flies its copy from these, and a quantised velocity is an arc that lands somewhere else.
+static func write_launch(
+	serial: int, spawn: DotWeaponSpawn, owner_id: StringName, sticks: bool
+) -> PackedByteArray:
+	var w := _w()
+	w.write_uint(ProjectileTell.LAUNCH, PROJECTILE_SUB_BITS)
+	w.write_varint(serial)
+	w.write_string(String(spawn.id), ID_BYTES)
+	w.write_string(String(owner_id), ID_BYTES)
+	w.write_vector3_range(spawn.origin, -WORLD_EXTENT, WORLD_EXTENT, POS_BITS)
+	w.write_float32(spawn.velocity.x)
+	w.write_float32(spawn.velocity.y)
+	w.write_float32(spawn.velocity.z)
+	w.write_float32(spawn.gravity_scale)
+	w.write_float32(spawn.radius)
+	w.write_float32(spawn.splash_radius)
+	w.write_varint(maxi(spawn.fuse_ticks, 0))
+	w.write_varint(maxi(spawn.life_ticks, 0))
+	w.write_bool(sticks)
+	return w.to_bytes()
+
+
+## Reads what [method write_launch] wrote, after the sub-kind, as a [DotWeaponSpawn] a
+## client can fly. Damage is not sent: a client's copy hurts nobody.
+static func read_launch(r: DotNetReader) -> Dictionary:
+	var serial := r.read_varint()
+	var spawn := DotWeaponSpawn.new()
+	spawn.id = StringName(r.read_string(ID_BYTES))
+	var owner_id := StringName(r.read_string(ID_BYTES))
+	spawn.origin = r.read_vector3_range(-WORLD_EXTENT, WORLD_EXTENT, POS_BITS)
+	spawn.velocity = Vector3(r.read_float32(), r.read_float32(), r.read_float32())
+	spawn.gravity_scale = r.read_float32()
+	spawn.radius = r.read_float32()
+	spawn.splash_radius = r.read_float32()
+	spawn.fuse_ticks = r.read_varint()
+	spawn.life_ticks = r.read_varint()
+	spawn.meta[&"sticks"] = r.read_bool()
+	return {"serial": serial, "spawn": spawn, "owner_id": owner_id, "ok": r.ok()}
+
+
+static func write_detonate(serial: int, at: Vector3, radius: float) -> PackedByteArray:
+	var w := _w()
+	w.write_uint(ProjectileTell.DETONATE, PROJECTILE_SUB_BITS)
+	w.write_varint(serial)
+	w.write_vector3_range(at, -WORLD_EXTENT, WORLD_EXTENT, POS_BITS)
+	w.write_float32(radius)
+	return w.to_bytes()
+
+
+static func read_detonate(r: DotNetReader) -> Dictionary:
+	var serial := r.read_varint()
+	var at := r.read_vector3_range(-WORLD_EXTENT, WORLD_EXTENT, POS_BITS)
+	var radius := r.read_float32()
+	return {"serial": serial, "position": at, "radius": radius, "ok": r.ok()}

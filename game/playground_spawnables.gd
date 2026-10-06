@@ -3,6 +3,7 @@ extends RefCounted
 const PlaygroundPaths := preload("playground_paths.gd")
 
 const PlaygroundVehicles := preload("playground_vehicles.gd")
+const PlaygroundZee := preload("playground_zee.gd")
 
 ## Everything this build can put in the world, and what kind of thing each one is.
 ##
@@ -226,10 +227,40 @@ static func catalogue() -> DotPropCatalogue:
 			}],
 	]
 
+	# Armed NPCs: dot-npc-ai's tactical brain with a zee weapon in hand. What they carry is
+	# the player's choice on the entities tab, or `weapon` here when they made none. A
+	# soldier is on `hostile` and fights players and rebels; a rebel is on `player`, never
+	# targets one, fights soldiers and follows whoever spawned it.
+	var armed := {
+		"health": 100.0, "speed": 4.6, "sight": 50.0, "sight_angle": 150.0,
+		# No line-of-sight cast, as for every NPC in this sandbox: the cast ends at the
+		# other NPC's centre, inside its own body, and the props layer it is on blocks it —
+		# so two armed NPCs on open ground never saw each other.
+		"hearing": 18.0, "line_of_sight": 0.0, "near": 8.0, "far": 18.0, "reach": 1.6,
+		"armed": true,
+	}
+	entities.append([&"npc_soldier", "Soldier", "npc_soldier", Vector3(0.8, 1.8, 0.8),
+		"5a6470", 85.0, 6, _merged(armed, {
+			"faction": "hostile", "skill": "normal", "weapon": "zee_smg",
+		})])
+	entities.append([&"npc_soldier_elite", "Soldier (elite)", "npc_soldier", Vector3(0.8, 1.9, 0.8),
+		"2c3138", 95.0, 8, _merged(armed, {
+			"faction": "hostile", "skill": "hard", "weapon": "zee_rifle", "health": 160.0,
+		})])
+	entities.append([&"npc_rebel", "Rebel", "npc_soldier", Vector3(0.8, 1.75, 0.8),
+		"6f8a4e", 80.0, 6, _merged(armed, {
+			"faction": "player", "skill": "normal", "weapon": "zee_pistol", "follow": 1.0,
+		})])
+
 	for row in entities:
 		var entity := DotPropDef.make(row[0], SCENE_ENTITY)
 		entity.display_name = row[1]
 		entity.category = &"entities"
+		# Something that thinks about players is an NPC and counts against `pg_max_npcs`;
+		# a turret that only spins is an entity. The limit is on what a thing DOES to a
+		# server, and an NPC's senses and decisions are the cost worth capping.
+		# By the entry's id, not its script: the turret runs `npc_spinner.gd` and is not an NPC.
+		entity.limit_group = &"npcs" if String(row[0]).begins_with("npc_") else &"entities"
 		entity.mass = row[5]
 		entity.cost = row[6]
 		entity.size = DotPropDef.Size.MEDIUM
@@ -254,6 +285,64 @@ static func catalogue() -> DotPropCatalogue:
 	for vehicle in PlaygroundVehicles.catalogue().vehicles:
 		out.add(_vehicle_prop(vehicle))
 
+	out.add(_balloon())
+
+	for weapon in PlaygroundZee.defs():
+		out.add(_pickup(weapon))
+
+	return out
+
+
+## A balloon, as the tool gun ties on. Hidden from the menu — it is the tool's, not a prop to
+## place — and counted against `balloons`, not `props`.
+static func _balloon() -> DotPropDef:
+	var def := DotPropDef.make(&"balloon", SCENE_ENTITY)
+	def.display_name = "Balloon"
+	def.category = &"tools"
+	def.limit_group = &"balloons"
+	def.mass = 0.4
+	def.cost = 1
+	def.size = DotPropDef.Size.SMALL
+	def.meta = {
+		"kind": "entity",
+		"script": PlaygroundPaths.rebase("res://game/entities/balloon.gd"),
+		"shape": "sphere",
+		"extent": [1.0, 1.0, 1.0],
+		"colour": "e05252",
+		"hidden": true,
+	}
+	return def
+
+
+## A weapon lying in the world. Hidden from the props and entities tabs — it is spawned
+## from the weapons tab with a right click — and counted against `weapons`.
+static func _pickup(weapon: Object) -> DotPropDef:
+	var weapon_id := StringName(str(weapon.get("id")))
+	var def := DotPropDef.make(StringName("pickup_%s" % String(weapon_id).replace(":", "_")), SCENE_ENTITY)
+	def.display_name = str(weapon.call("name_or_id"))
+	def.category = &"weapons"
+	def.limit_group = &"weapons"
+	def.mass = 4.0
+	def.cost = 1
+	def.size = DotPropDef.Size.SMALL
+	def.meta = {
+		"kind": "entity",
+		"script": PlaygroundPaths.rebase("res://game/entities/weapon_pickup.gd"),
+		"shape": "box",
+		"extent": [0.9, 0.25, 0.3],
+		"colour": (weapon.get("colour") as Color).to_html(false),
+		"weapon": String(weapon_id),
+		"hidden": true,
+	}
+	return def
+
+
+static func _merged(a: Dictionary, b: Dictionary) -> Dictionary:
+	var out := a.duplicate(true)
+
+	for key in b:
+		out[key] = b[key]
+
 	return out
 
 
@@ -269,6 +358,7 @@ static func _vehicle_prop(vehicle: DotVehicleDef) -> DotPropDef:
 	var def := DotPropDef.make(vehicle.id, PlaygroundVehicles.SCENE)
 	def.display_name = vehicle.name_or_id()
 	def.category = &"vehicles"
+	def.limit_group = &"vehicles"
 	def.mass = vehicle.tuning().mass
 	def.cost = vehicle.cost
 	def.size = DotPropDef.Size.LARGE

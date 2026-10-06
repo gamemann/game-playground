@@ -68,6 +68,11 @@ func secondary(space: Variant, origin: Vector3, aim: Vector3) -> DotResult:
 	return _secondary(space, origin, aim.normalized())
 
 
+## The reload key. Most toys ignore it; the tool gun's modes each give it a meaning.
+func reload(space: Variant, origin: Vector3, aim: Vector3) -> DotResult:
+	return _reload(space, origin, aim.normalized())
+
+
 func tick(space: Variant, origin: Vector3, aim: Vector3, delta: float) -> void:
 	age += delta
 	_tick(space, origin, aim.normalized(), delta)
@@ -89,6 +94,10 @@ func _primary(_space: Variant, _origin: Vector3, _aim: Vector3) -> DotResult:
 
 func _secondary(_space: Variant, _origin: Vector3, _aim: Vector3) -> DotResult:
 	return DotResult.fail(DotError.CODE_UNSUPPORTED, "This does nothing.")
+
+
+func _reload(_space: Variant, _origin: Vector3, _aim: Vector3) -> DotResult:
+	return DotResult.fail(DotError.CODE_UNSUPPORTED, "")
 
 
 func _tick(_space: Variant, _origin: Vector3, _aim: Vector3, _delta: float) -> void:

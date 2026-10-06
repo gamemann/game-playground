@@ -4,6 +4,8 @@ const PlaygroundIcons := preload("playground_icons.gd")
 const PlaygroundSpawnables := preload("playground_spawnables.gd")
 const PlaygroundWeaponDef := preload("weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("playground_weapons.gd")
+const PlaygroundZee := preload("playground_zee.gd")
+const SwepToolgun := preload("weapons/swep_toolgun.gd")
 
 ## The spawn menu: hold Q, pick something, click it.
 ##
@@ -54,6 +56,7 @@ enum Tab {
 	PROPS,
 	ENTITIES,
 	WEAPONS,
+	TOOLS,
 }
 
 ## A prop or an entity was clicked. The client turns this into a spawn request.
@@ -68,6 +71,17 @@ signal tool_chosen(tool_id: StringName)
 ## Something that is neither — undo, unfreeze everything, clear my props.
 signal action_requested(action: StringName)
 
+## A tool gun mode was picked, or one of its settings changed. The client equips the tool
+## gun and tells it — itself offline, the server otherwise.
+signal tool_mode_chosen(mode: StringName, settings: Dictionary)
+
+## What the NPCs this player spawns should carry: a weapon id, `none`, or empty for each
+## NPC's own.
+signal npc_weapon_chosen(weapon_id: StringName)
+
+## Right click on a weapon: put one on the ground rather than in hand.
+signal weapon_spawn_requested(weapon_id: StringName)
+
 ## What the props and entities tabs are built from. Set before the first push.
 var catalogue: DotPropCatalogue = null
 
@@ -79,6 +93,19 @@ var selected: StringName = &""
 
 ## What is in the player's hands, for the footer.
 var tool: StringName = &""
+
+## The tool gun mode picked on the tools tab, and every mode's settings as last set.
+var tool_mode: StringName = &"resize"
+var tool_settings: Dictionary = {}
+
+## The NPC weapon picked on the entities tab: empty for each NPC's own.
+var npc_weapon: StringName = &""
+
+## One of each tool gun mode, for its name, description and settings schema.
+var _tool_modes: Array = []
+
+var _settings_box: VBoxContainer = null
+var _npc_weapon_row: Control = null
 
 var _tab: Tab = Tab.PROPS
 var _category: StringName = ALL
@@ -176,6 +203,7 @@ func _build_header() -> Control:
 	_tabs.add_tab("Props")
 	_tabs.add_tab("Entities")
 	_tabs.add_tab("Weapons")
+	_tabs.add_tab("Tools")
 	_tabs.tab_changed.connect(_on_tab_changed)
 	header.add_child(_tabs)
 
@@ -209,6 +237,8 @@ func _build_sidebar() -> Control:
 	_categories.name = "Categories"
 	_categories.add_theme_constant_override("separation", 4)
 	side.add_child(_categories)
+
+	side.add_child(_build_npc_weapon_row())
 
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -291,7 +321,48 @@ func _build_grid() -> Control:
 	_empty.visible = false
 	holder.add_child(_empty)
 
+	# The picked tool's settings, under the grid on the tools tab: what the tool gun's
+	# panel was in the sandboxes this is shaped like.
+	_settings_box = VBoxContainer.new()
+	_settings_box.name = "ToolSettings"
+	_settings_box.add_theme_constant_override("separation", 6)
+	_settings_box.visible = false
+	holder.add_child(_settings_box)
+
 	return holder
+
+
+## "NPCs carry: …" — on the entities tab only. What every armed NPC this player spawns
+## holds, unless they pick "Their own".
+func _build_npc_weapon_row() -> Control:
+	var row := VBoxContainer.new()
+	row.name = "NpcWeapon"
+
+	var label := Label.new()
+	label.text = "NPCs carry"
+	row.add_child(label)
+
+	var choice := OptionButton.new()
+	choice.name = "Choice"
+	choice.add_item("Their own")
+	choice.set_item_metadata(0, "")
+	choice.add_item("Nothing")
+	choice.set_item_metadata(1, "none")
+
+	for def in PlaygroundZee.defs():
+		if PlaygroundZee.npc_can_use(def):
+			choice.add_item(def.name_or_id())
+			choice.set_item_metadata(choice.item_count - 1, String(def.id))
+
+	choice.item_selected.connect(func(index: int) -> void:
+		npc_weapon = StringName(str(choice.get_item_metadata(index)))
+		npc_weapon_chosen.emit(npc_weapon)
+	)
+	row.add_child(choice)
+
+	_npc_weapon_row = row
+	row.visible = false
+	return row
 
 
 # --- Lifecycle --------------------------------------------------------------
@@ -321,7 +392,11 @@ func _on_pop() -> void:
 func refresh() -> void:
 	_rebuild_categories()
 	_rebuild_grid()
+	_rebuild_settings()
 	_rebuild_footer()
+
+	if _npc_weapon_row != null:
+		_npc_weapon_row.visible = _tab == Tab.ENTITIES
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -374,6 +449,9 @@ func _categories_for_tab() -> PackedStringArray:
 	if _tab == Tab.WEAPONS:
 		return PlaygroundWeapons.categories(weapons)
 
+	if _tab == Tab.TOOLS:
+		return PackedStringArray()
+
 	var seen := {}
 
 	for entry in _all_in_tab():
@@ -416,11 +494,14 @@ func _rebuild_grid() -> void:
 	var visible_now := _visible()
 
 	for entry in visible_now:
-		var card: Button = (
-			_weapon_card(entry as PlaygroundWeaponDef)
-			if _tab == Tab.WEAPONS
-			else _prop_card(entry as DotPropDef)
-		)
+		var card: Button
+
+		if _tab == Tab.WEAPONS:
+			card = _weapon_card(entry as PlaygroundWeaponDef)
+		elif _tab == Tab.TOOLS:
+			card = _tool_card(entry as Object)
+		else:
+			card = _prop_card(entry as DotPropDef)
 
 		_grid.add_child(card)
 
@@ -492,7 +573,160 @@ func _weapon_card(def: PlaygroundWeaponDef) -> Button:
 	card.pressed.connect(_on_weapon_pressed.bind(def.id))
 	card.set_meta(&"entry", def.id)
 
+	# Right click puts one on the ground instead — a weapon to hand to somebody, or to
+	# leave for whoever walks past. Only the zee weapons: a tool gun lying in the road is
+	# not a thing anybody wants.
+	if PlaygroundZee.is_zee(def):
+		card.tooltip_text += "\nRight click to drop one on the ground."
+		card.gui_input.connect(func(event: InputEvent) -> void:
+			var click := event as InputEventMouseButton
+			if click != null and click.pressed and click.button_index == MOUSE_BUTTON_RIGHT:
+				weapon_spawn_requested.emit(def.id)
+				card.accept_event()
+		)
+
 	return card
+
+
+func _tool_card(mode: Object) -> Button:
+	var id: StringName = mode.get("id")
+	var card := _card(null, str(mode.get("display_name")), str(mode.get("description")))
+	card.toggle_mode = true
+	card.button_pressed = id == tool_mode
+	card.pressed.connect(_on_tool_pressed.bind(id))
+	card.set_meta(&"entry", id)
+	return card
+
+
+func _on_tool_pressed(id: StringName) -> void:
+	tool_mode = id
+	_rebuild_grid()
+	_rebuild_settings()
+	_rebuild_footer()
+	tool_mode_chosen.emit(id, (tool_settings.get(id, {}) as Dictionary).duplicate())
+
+
+## The picked tool's settings, drawn from its schema: a slider per number, a tick box per
+## switch, swatches per colour, a list per choice. Every change is sent at once — a
+## settings panel with an Apply button is one where the tool does the wrong thing until
+## somebody notices the button.
+func _rebuild_settings() -> void:
+	if _settings_box == null:
+		return
+
+	for child in _settings_box.get_children():
+		child.queue_free()
+
+	_settings_box.visible = _tab == Tab.TOOLS
+
+	if _tab != Tab.TOOLS:
+		return
+
+	var mode := _tool_for(tool_mode)
+
+	if mode == null:
+		return
+
+	var title := Label.new()
+	title.text = "%s — %s" % [str(mode.get("display_name")), str(mode.get("description"))]
+	_settings_box.add_child(title)
+
+	var help := Label.new()
+	help.text = "   ".join(mode.call("help_lines"))
+	help.modulate = Color(1, 1, 1, 0.7)
+	_settings_box.add_child(help)
+
+	var values: Dictionary = tool_settings.get(tool_mode, {})
+
+	for field in mode.call("schema"):
+		_settings_box.add_child(_setting_row(field, values))
+
+
+func _setting_row(field: Dictionary, values: Dictionary) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var key: String = field["key"]
+
+	var label := Label.new()
+	label.text = str(field["label"])
+	label.custom_minimum_size = Vector2(110, 0)
+	row.add_child(label)
+
+	match str(field["type"]):
+		"float":
+			var slider := HSlider.new()
+			slider.min_value = float(field["min"])
+			slider.max_value = float(field["max"])
+			slider.step = float(field.get("step", 0.05))
+			slider.value = float(values.get(key, field["default"]))
+			slider.custom_minimum_size = Vector2(220, 0)
+			# A track, drawn. The theme here draws a slider as its grabber alone, and a lone
+			# dot gives no sense of where in the range a value is — a rendered frame showed
+			# "Lift" and "String" as two dots floating beside their numbers.
+			var track := StyleBoxFlat.new()
+			track.bg_color = Color(1, 1, 1, 0.18)
+			track.content_margin_top = 2.0
+			track.content_margin_bottom = 2.0
+			track.set_corner_radius_all(2)
+			var filled := StyleBoxFlat.new()
+			filled.bg_color = Color(0.42, 0.66, 0.92, 0.85)
+			filled.content_margin_top = 2.0
+			filled.content_margin_bottom = 2.0
+			filled.set_corner_radius_all(2)
+			slider.add_theme_stylebox_override("slider", track)
+			slider.add_theme_stylebox_override("grabber_area", filled)
+			slider.add_theme_stylebox_override("grabber_area_highlight", filled)
+			var shown := Label.new()
+			shown.text = "%.2f" % slider.value
+			slider.value_changed.connect(func(value: float) -> void:
+				shown.text = "%.2f" % value
+				_set_setting(key, value)
+			)
+			row.add_child(slider)
+			row.add_child(shown)
+		"bool":
+			var tick := CheckBox.new()
+			tick.button_pressed = bool(values.get(key, field["default"]))
+			tick.toggled.connect(func(on: bool) -> void: _set_setting(key, on))
+			row.add_child(tick)
+		"colour":
+			for hex in field.get("options", []):
+				var swatch := Button.new()
+				swatch.custom_minimum_size = Vector2(26, 26)
+				swatch.tooltip_text = "#%s" % hex
+				var fill := StyleBoxFlat.new()
+				fill.bg_color = Color.html(str(hex))
+				fill.set_border_width_all(3 if str(values.get(key, "")) == str(hex) else 0)
+				fill.border_color = Color.WHITE
+				swatch.add_theme_stylebox_override("normal", fill)
+				swatch.add_theme_stylebox_override("hover", fill)
+				swatch.pressed.connect(func() -> void:
+					_set_setting(key, str(hex))
+					_rebuild_settings()
+				)
+				row.add_child(swatch)
+		"choice":
+			var list := OptionButton.new()
+			var options: Array = field.get("options", [])
+			for option in options:
+				var def := PlaygroundZee.find_def(StringName(str(option)))
+				list.add_item(def.name_or_id() if def != null else str(option))
+				list.set_item_metadata(list.item_count - 1, str(option))
+				if str(option) == str(values.get(key, field["default"])):
+					list.select(list.item_count - 1)
+			list.item_selected.connect(func(index: int) -> void:
+				_set_setting(key, str(list.get_item_metadata(index)))
+			)
+			row.add_child(list)
+
+	return row
+
+
+func _set_setting(key: String, value: Variant) -> void:
+	var values: Dictionary = tool_settings.get(tool_mode, {})
+	values[key] = value
+	tool_settings[tool_mode] = values
+	tool_mode_chosen.emit(tool_mode, values.duplicate())
 
 
 # --- What is on screen ------------------------------------------------------
@@ -501,6 +735,9 @@ func _weapon_card(def: PlaygroundWeaponDef) -> Button:
 func _all_in_tab() -> Array:
 	if _tab == Tab.WEAPONS:
 		return weapons
+
+	if _tab == Tab.TOOLS:
+		return _tools()
 
 	if catalogue == null:
 		return []
@@ -514,7 +751,9 @@ func _all_in_tab() -> Array:
 	var out: Array = []
 
 	for def in catalogue.props:
-		if PlaygroundSpawnables.kind_of(def) == wanted:
+		# A balloon is the tool gun's and a pickup is the weapons tab's right click: in the
+		# catalogue so the spawner can count and limit them, not on a tab to be placed.
+		if PlaygroundSpawnables.kind_of(def) == wanted and not bool(def.meta.get("hidden", false)):
 			out.append(def)
 
 	return out
@@ -531,6 +770,8 @@ func _count_in_category(category: StringName) -> int:
 
 
 func _category_of(entry: Variant) -> StringName:
+	if entry is Object and not (entry is PlaygroundWeaponDef) and not (entry is DotPropDef):
+		return &"tools"
 	return (
 		(entry as PlaygroundWeaponDef).category
 		if entry is PlaygroundWeaponDef
@@ -539,6 +780,8 @@ func _category_of(entry: Variant) -> StringName:
 
 
 func _name_of(entry: Variant) -> String:
+	if entry is Object and not (entry is PlaygroundWeaponDef) and not (entry is DotPropDef):
+		return str((entry as Object).get("display_name"))
 	return (
 		(entry as PlaygroundWeaponDef).name_or_id()
 		if entry is PlaygroundWeaponDef
@@ -547,11 +790,33 @@ func _name_of(entry: Variant) -> String:
 
 
 func _id_of(entry: Variant) -> StringName:
+	if entry is Object and not (entry is PlaygroundWeaponDef) and not (entry is DotPropDef):
+		return (entry as Object).get("id")
 	return (
 		(entry as PlaygroundWeaponDef).id
 		if entry is PlaygroundWeaponDef
 		else (entry as DotPropDef).id
 	)
+
+
+## One of each tool gun mode. Built once: a mode is a name, a description and a schema here.
+func _tools() -> Array:
+	if _tool_modes.is_empty():
+		for script in SwepToolgun.MODES:
+			var made: Object = script.new()
+			_tool_modes.append(made)
+
+			if not tool_settings.has(made.get("id")):
+				tool_settings[made.get("id")] = (made.get("settings") as Dictionary).duplicate()
+
+	return _tool_modes
+
+
+func _tool_for(id: StringName) -> Object:
+	for mode in _tools():
+		if mode.get("id") == id:
+			return mode
+	return null
 
 
 ## The entries the grid should show: the search if there is one, else the category.
@@ -650,8 +915,16 @@ func _rebuild_footer() -> void:
 	# The verb follows the tab. "Click to spawn" over a grid of weapons is wrong in
 	# the one place a player looks to find out what a click will do — and clicking a
 	# weapon really does something different from clicking a prop.
+	var verb := "Click to spawn"
+
+	match _tab:
+		Tab.WEAPONS:
+			verb = "Click to equip, right click to drop one"
+		Tab.TOOLS:
+			verb = "Click a tool, then use it with the tool gun"
+
 	_footer.text = "   ·   ".join(PackedStringArray([
-		"Click to equip" if _tab == Tab.WEAPONS else "Click to spawn",
+		verb,
 		"E spawns %s again" % _armed_name(),
 		"%s in hand" % name_of_tool(tool),
 		"/ to search",
@@ -691,4 +964,6 @@ func describe() -> Dictionary:
 	out["category"] = String(_category)
 	out["shown"] = shown().size()
 	out["selected"] = String(selected)
+	out["tool_mode"] = String(tool_mode)
+	out["npc_weapon"] = String(npc_weapon)
 	return out
