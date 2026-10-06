@@ -109,6 +109,10 @@ func may_pick_up(holder: PlaygroundPlayer, target: PlaygroundPlayer) -> DotResul
 		return DotResult.fail(DotError.CODE_STATE, "You are already holding somebody.")
 	if target.riding or _holder_of.has(target.player_id):
 		return DotResult.fail(DotError.CODE_STATE, "%s cannot be picked up right now." % target.display_name)
+	if target.creative:
+		return DotResult.fail(DotError.CODE_FORBIDDEN, "%s is in creative mode." % target.display_name)
+	if holder.creative:
+		return DotResult.fail(DotError.CODE_FORBIDDEN, "You cannot pick anybody up in creative mode.")
 	if _holds.has(target.player_id):
 		# A holder picked up would carry their own beam with them: A holds B, C holds A,
 		# and B now moves with C's mouse through A's. Refused rather than modelled.

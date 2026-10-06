@@ -169,6 +169,10 @@ func may_touch(prop: DotPropInstance) -> bool:
 	if prop.owner_id == wielder:
 		return true
 
+	# Creative mode: the owner protected it in dot-props, and the tool gun asks too.
+	if game != null and game.props != null and not game.props.may_act_for(prop, wielder):
+		return false
+
 	return game == null or game.config == null or game.config.touch_others_props
 
 

@@ -244,6 +244,11 @@ func _process(delta: float) -> void:
 		if player.timer != null and player.timer.run.used_checkpoints:
 			parts.append("PRACTICE")
 
+		# On the HUD for the same reason: a builder who forgot it was on would wonder why
+		# their shots did nothing.
+		if player.creative:
+			parts.append("CREATIVE")
+
 		# The track, always, and not only when it is a bonus. On a map that is a
 		# sandbox on one track and a course on another, "which one am I on" is the
 		# difference between a timer that is broken and a timer that is not running

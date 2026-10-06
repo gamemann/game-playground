@@ -118,6 +118,10 @@ var blinded: bool = false
 ## each draw it in [method present_beacon].
 var beacon: bool = false
 
+## Creative mode: see [member PlaygroundConfig.allow_creative] and [method Playground.set_creative].
+## Replicated, so everybody's picture can say who is building.
+var creative: bool = false
+
 ## The marker [member beacon] draws, while it does. Client side; built and freed by
 ## [method present_beacon], and never built on a server, which calls nothing that draws.
 var beacon_marker: PlaygroundBeacon = null

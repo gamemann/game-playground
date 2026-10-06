@@ -36,6 +36,10 @@ var net_blind: bool = false
 ## `PlaygroundPlayer.beacon`. Everybody's.
 var net_beacon: bool = false
 
+## `PlaygroundPlayer.creative`. Everybody's: a watcher sees who is building, and the client's
+## own tools refuse a creative player's props before asking.
+var net_creative: bool = false
+
 # --- A zee weapon, from `ZeeWeaponNet.all_specs()` ---
 #
 # Seven fields, because GDScript has no dynamic properties and the spec table names one
@@ -84,6 +88,7 @@ func _register_net_vars() -> void:
 	# marked out of everybody else's world.
 	replicate(&"net_blind", DotNetVar.Type.BOOL).to_owner_only()
 	replicate(&"net_beacon", DotNetVar.Type.BOOL)
+	replicate(&"net_creative", DotNetVar.Type.BOOL)
 
 	for spec in ZeeWeaponNet.all_specs():
 		var weapon := replicate(spec["property"], DotNetVar.Type[spec["type"]])
@@ -134,6 +139,7 @@ func pull() -> void:
 		DotFpsNetSync.pull(player.controller.state, self)
 		net_blind = player.blinded
 		net_beacon = player.beacon
+		net_creative = player.creative
 		# A rig that has gone leaves the last values: the counter stops, so nothing fires.
 		if player.zee_rig != null:
 			ZeeWeaponNet.pull(player.zee_rig, self)
@@ -148,6 +154,7 @@ func _net_state_applied(tick: int) -> void:
 	DotFpsNetSync.push(self, player.controller.state)
 	player.blinded = net_blind
 	player.beacon = net_beacon
+	player.creative = net_creative
 	_apply_weapon()
 	# NOT the node, on a predicted entity: receive_snapshot calls this before the
 	# predictor reconciles, and reconcile's first act is to read the node as "what the

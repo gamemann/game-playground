@@ -45,8 +45,8 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## This suite had neither until 2026-09-24. Each section calls [method _section_done] as
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
-const SECTIONS := 25
-const CHECKS := 225
+const SECTIONS := 26
+const CHECKS := 235
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -129,6 +129,7 @@ func _run() -> void:
 		_test_identity()
 		await _test_live_tools()
 		await _test_blind_and_beacon()
+		_test_creative()
 		_test_inventory_commands()
 		_test_welcome_waits_for_ready()
 		_test_disconnect_is_handled()
@@ -1821,6 +1822,79 @@ func _test_blind_and_beacon() -> void:
 
 	var _released := server.release_session(session.peer_id)
 	game.remove_player(&"u78")
+	_section_done()
+
+
+## [method _run_command] as a player: what `!creative` in chat arrives as.
+func _run_as(session: DotClientSession, line: String) -> PackedStringArray:
+	var captured: Array[String] = []
+	var template := DotCmdContext.console("", PackedStringArray())
+	template.session = session
+	template.reply_sink = func(text: String) -> void: captured.append(text)
+	server.console.execute(line, template)
+	return PackedStringArray(captured)
+
+
+## Creative mode: `!creative` from a player, their props protected, out of the fight both
+## ways, and `pg_creative 0` ending it for everybody.
+func _test_creative() -> void:
+	print("")
+	print("[creative mode]")
+
+	var builder := game.add_player(&"u79", "Builder")
+	var other := game.add_player(&"u80", "Other")
+	var session := DotClientSession.new()
+	session.peer_id = 7909
+	session.userid = 79
+	session.display_name = "Builder"
+	var _adopted := server.adopt_session(session)
+
+	var said := _run_as(session, "creative")
+	_check(builder.creative and _said(said, "on"), "`!creative` switches it on for the caller", " | ".join(said))
+	_check(game.props.is_protected(&"u79"), "and protects their props in dot-props")
+
+	var crate := game.props.spawn(&"crate", &"u79", Vector3(0.0, 40.0, 0.0))
+	var tool := DotPropTool.new()
+	tool.spawner = game.props
+	tool.wielder = &"u80"
+	_check(crate != null and not tool.may_act_on(crate).ok, "nobody else's tool may touch what they build")
+
+	var net := builder.get_node_or_null("Net")
+	if net != null:
+		net.call("pull")
+	_check(net != null and bool(net.get("net_creative")), "and it is on the entity everybody is sent")
+
+	var arena: PlaygroundArena = _module().get("arena")
+	_run_command("pg_arena on")
+	arena.admit(&"u79", "Builder")
+	arena.admit(&"u80", "Other")
+	for step in range(game.tick_rate * 5):
+		arena.tick(step, 1.0 / float(game.tick_rate))
+	var at_them := arena.hurt(&"u80", &"u79", 30.0, 5.0)
+	var by_them := arena.hurt(&"u79", &"u80", 30.0, 5.0)
+	_check(at_them != null and at_them.refused, "nobody can hurt them", str(at_them))
+	_check(by_them != null and by_them.refused, "and they cannot hurt anybody", str(by_them))
+
+	said = _run_as(session, "creative")
+	var lands := arena.hurt(&"u80", &"u79", 30.0, 5.0)
+	_check(not builder.creative and lands != null and not lands.refused, "`!creative` again turns it off, and a hit lands", str(lands))
+
+	var _on := _run_as(session, "creative")
+	_run_command("pg_creative 0")
+	_check(not builder.creative and not game.props.is_protected(&"u79"), "`pg_creative 0` ends it for everybody")
+	said = _run_as(session, "creative")
+	_check(not builder.creative and _said(said, "off on this server"), "and refuses it after", " | ".join(said))
+	_run_command("pg_creative 1")
+	_check(game.config.allow_creative, "`pg_creative 1` allows it again")
+
+	arena.release(&"u79")
+	arena.release(&"u80")
+	_run_command("pg_arena off")
+	if crate != null:
+		var _gone := game.props.remove(crate.instance_id)
+	var _released := server.release_session(session.peer_id)
+	game.remove_player(&"u79")
+	game.remove_player(&"u80")
 	_section_done()
 
 

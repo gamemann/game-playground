@@ -93,6 +93,12 @@ extends DotConfig
 ## `can_touch_others`. On by default, because this is a sandbox.
 @export var touch_others_props: bool = true
 
+## Whether a player may switch on creative mode (`!creative`): their props refuse
+## everybody else's tools and harm, nobody can pick them up, and they neither take nor
+## deal damage from other players. What a building server offers somebody who wants to
+## build while the rest of it plays. Falls, pits and their own props still reach them.
+@export var allow_creative: bool = true
+
 ## Props in the world at once, from everybody. 0 = unlimited.
 @export_range(0, 10000, 1) var prop_world_budget: int = 1024
 

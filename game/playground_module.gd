@@ -341,6 +341,7 @@ func _module_load() -> DotResult:
 
 	_bind_limits()
 	_bind_pickup()
+	_bind_creative()
 
 	server.client_disconnected.connect(_on_client_disconnected)
 	game.maps.map_over.connect(_on_map_over)
@@ -1886,6 +1887,40 @@ func _bind_pickup() -> void:
 	override.changed.connect(func(_old: String, value: String) -> void:
 		pickup.override_roles = PlaygroundPickup.parse_roles(value)
 	)
+
+
+## `pg_creative` allows creative mode (on by default) and `!creative` toggles it for the
+## caller. Turning the cvar off takes everybody out of it at once, because an operator who
+## switched it off mid-match meant now.
+func _bind_creative() -> void:
+	var allowed := add_cvar("pg_creative", "1" if game.config.allow_creative else "0",
+		"1 lets players switch on creative mode (!creative); 0 refuses it and ends it for everybody.",
+		DotConVar.FLAG_NOTIFY)
+	allowed.changed.connect(func(_old: String, value: String) -> void:
+		game.config.allow_creative = value.to_int() != 0
+		if not game.config.allow_creative:
+			for id in game.players.keys():
+				var _off := game.set_creative(id, false)
+	)
+
+	add_command("creative", _cmd_creative,
+		"Creative mode: your props and you cannot be touched, and you cannot hurt anybody", "").with_chat()
+
+
+func _cmd_creative(ctx: DotCmdContext) -> void:
+	var player := _caller(ctx)
+
+	if player == null:
+		ctx.reply("Only a player has a creative mode.")
+		return
+
+	var turned := game.set_creative(player.player_id, not player.creative)
+
+	if not turned.ok:
+		ctx.reply_error(turned)
+		return
+
+	ctx.reply("Creative mode %s." % ("on: your props and you cannot be touched" if player.creative else "off"))
 
 
 ## The roles a world player holds: their admin groups by name, and `admin` / `root`.

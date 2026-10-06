@@ -71,6 +71,9 @@ signal player_added(id: StringName)
 ## still read what they were.
 signal player_removed(id: StringName)
 
+## Somebody switched creative mode on or off. See [method set_creative].
+signal creative_changed(id: StringName, on: bool)
+
 ## Somebody walked over a weapon lying in the world. The bridge gives it to them on a
 ## server; the client equips it offline.
 signal weapon_picked_up(player_id: StringName, weapon_id: StringName)
@@ -1686,6 +1689,56 @@ func phys_gun_grab(
 func phys_gun_release(player: PlaygroundPlayer) -> void:
 	pickup.release(players, player.player_id, true)
 	player.phys_gun.release()
+
+
+## Turns creative mode on or off for [param id]: their props protected in dot-props (every
+## tool and every source of harm asks the spawner), out of anybody's beam, and the arena's
+## damage refused both ways. Refused when the server does not allow it.
+##
+## [b]Both ways[/b]: a player nobody can hurt who could still hurt everybody would be the
+## best way to win the arena, not a way to build.
+func set_creative(id: StringName, on: bool) -> DotResult:
+	var player: PlaygroundPlayer = players.get(id)
+
+	if player == null:
+		return DotResult.fail(DotError.CODE_INVALID, "No such player.")
+
+	if on and config != null and not config.allow_creative:
+		return DotResult.fail(DotError.CODE_FORBIDDEN, "Creative mode is off on this server.")
+
+	if player.creative == on:
+		return DotResult.success(on)
+
+	player.creative = on
+
+	if props != null:
+		props.set_protected(id, on)
+
+	if on:
+		# Out of anybody's hands now, and out of their own grip on anybody else.
+		pickup.forget(players, id)
+
+		# A prop of theirs somebody else is holding is let go: protection that waited for
+		# the holder to let go first would not be protection.
+		for other_id in players:
+			if other_id == id:
+				continue
+			var other: PlaygroundPlayer = players[other_id]
+			var held: DotPropInstance = other.phys_gun.held if other.phys_gun != null else null
+			if held != null and held.owner_id == id:
+				other.phys_gun.release()
+			var carried: DotPropInstance = other.grav_gun.carried if other.grav_gun != null else null
+			if carried != null and carried.owner_id == id:
+				var _dropped := other.grav_gun.drop()
+
+	DotLog.info(CHANNEL, "creative mode", {"player": String(id), "on": on})
+	creative_changed.emit(id, on)
+	return DotResult.success(on)
+
+
+func is_creative(id: StringName) -> bool:
+	var player: PlaygroundPlayer = players.get(id)
+	return player != null and player.creative
 
 
 func may_touch_others() -> bool:

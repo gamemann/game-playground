@@ -1219,11 +1219,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 663 checks, 36 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 687 checks, 37 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 318 checks, 34 sections
-godot --headless --path . res://examples/dedicated.tscn             # 225 checks, 25 sections
+godot --headless --path . res://examples/headless_net.tscn          # 320 checks, 34 sections
+godot --headless --path . res://examples/dedicated.tscn             # 235 checks, 26 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
@@ -1766,6 +1766,10 @@ Before it was closed it stood at 358 and 274, growing by one script's worth when
 ## Picking players up (2026-10-06)
 
 The physics gun picks up a PLAYER in its beam before a prop (`PlaygroundPickup`, `Playground.phys_gun_grab` / `phys_gun_release`). A held player is a rider with no vehicle: their own movement, their client's prediction and their timer stop, exactly as in a seat, and on the wire it is a SEAT with vehicle 0, which an older client already understands. They are moved by sweeping the body, so a wall stops them as it stops a held crate, and letting go keeps the beam's velocity: a throw. Immunity is by role (`pg_pickup_immune`, roles from `PlaygroundLimits`), an override role beats it (`pg_pickup_override`, `root` by default), and `pg_pickup 0` turns it off. A refusal is an answer, so the prop behind an immune player is not grabbed instead. A seat, a respawn, a map change or a holder leaving all let go. `headless_playground`'s *picking players up* (21 checks). Started by the 2026-10-06 nightly run, which ended before committing it; finished the same morning (the new file named `PlaygroundPlayer` without preloading it, so nothing parsed).
+
+## Creative mode (2026-10-06)
+
+`!creative` toggles it for the caller, `pg_creative` (on) allows it and turning it off ends it for everybody. A builder in creative mode is out of everybody's way and out of the fight, both ways: their props are protected in **dot-props** (`DotPropSpawner.set_protected`, which every tool's `may_act_on` and dot-props' damage ask, so no tool can forget it; the tool gun's own `may_touch` asks too), nobody can pick them up and they cannot pick anybody up (`PlaygroundPickup.may_pick_up`), and the arena refuses damage to them and from them (`PlaygroundArena._adjust_damage`; a player nobody can hurt who could still hurt everybody would be the way to win the arena, not a way to build). A fall or a pit still reaches them, or a player could stand in a kill zone for ever. Switching it on also lets go of their props anybody else is holding. `PlaygroundPlayer.creative` is replicated to everybody (`net_creative`) and the HUD says CREATIVE. Checks: `dedicated`'s *creative mode* (10: the command, the protection, another player's tool, the replicated field, arena damage refused both ways and landing again once off, the cvar ending and refusing it), `headless_playground`'s picking-up section (3), `headless_net`'s who-is-told section (2); `tools/screenshot_views.sh` renders `hud_creative`. Writing the pickup checks found that "with picking up off, nobody is held" had been aiming the beam the wrong way (yaw 180 from -36 toward -40) and passed with nobody in it.
 
 ## Things deliberately not here
 

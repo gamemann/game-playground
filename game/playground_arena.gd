@@ -263,6 +263,15 @@ func _adjust_damage(damage: DotDamage) -> void:
 	if damage == null or game == null or game.player_stack == null:
 		return
 
+	# Creative mode, both ways: a builder is out of the fight. A fall or a pit still reaches
+	# them, or a player could make themselves unkillable and stand in a kill zone.
+	if not damage.is_world_damage() and damage.attacker != damage.victim:
+		var attacker_id := StringName(str(game.entity_table.key_for_id(damage.attacker)))
+		var victim_id := StringName(str(game.entity_table.key_for_id(damage.victim)))
+		if game.is_creative(victim_id) or game.is_creative(attacker_id):
+			damage.refuse("creative mode")
+			return
+
 	if game.player_stack.blocks_damage(
 		str(game.entity_table.key_for_id(damage.attacker)),
 		str(game.entity_table.key_for_id(damage.victim)),

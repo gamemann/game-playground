@@ -54,7 +54,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 684
+const CHECKS := 687
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -303,15 +303,36 @@ func _test_picking_players_up() -> void:
 	# Off is off: the beam meets a player and does nothing to them.
 	pickup.enabled = false
 	held.teleport(Vector3(-60.0, 1.0, -40.0), 0.0)
+	# Yaw 0 looks along -Z, from -36 toward them at -40. (It said 180 once, and this check
+	# passed with the beam pointed at nobody.)
 	var third_look := DotFpsCommand.new()
-	third_look.yaw = 180.0
+	third_look.yaw = 0.0
 	await _drive(&"third", third_look, 20)
 	took = _beam_grab(third)
-	_check(not pickup.is_held(&"held"), "with picking up off, nobody is held")
+	# Off, the beam skips players and falls through to the prop gun, which finds no prop.
+	_check(not pickup.is_held(&"held") and not took.ok,
+		"with picking up off, nobody is held", took.error.message if not took.ok else "held")
 
 	pickup.enabled = true
 	pickup.immune_roles = PackedStringArray()
 	pickup.roles_fn = Callable()
+
+	# Creative mode: out of anybody's beam, and nobody's beam is theirs.
+	held.teleport(Vector3(-60.0, 1.0, -40.0), 0.0)
+	await _drive(&"third", third_look, 10)
+	var _creative := playground.set_creative(&"held", true)
+	took = _beam_grab(third)
+	_check(not took.ok and not pickup.is_held(&"held") and took.error.message.contains("creative"),
+		"a player in creative mode cannot be picked up", took.error.message if not took.ok else "")
+	var _off := playground.set_creative(&"held", false)
+	var _creative_third := playground.set_creative(&"third", true)
+	took = _beam_grab(third)
+	_check(not took.ok and not pickup.is_held(&"held"), "and cannot pick anybody up")
+	var _off_third := playground.set_creative(&"third", false)
+	took = _beam_grab(third)
+	_check(took.ok and pickup.is_held(&"held"), "and with it off, both are ordinary again")
+	playground.phys_gun_release(third)
+
 	playground.remove_player(&"held")
 	playground.remove_player(&"third")
 	_done()

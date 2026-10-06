@@ -57,7 +57,7 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 318
+const CHECKS := 320
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -2393,6 +2393,15 @@ func _test_blind_and_beacon() -> void:
 		not _client_player().blinded and theirs != null and not theirs.beacon,
 		"and turning both off reaches the client"
 	)
+
+	# Creative mode is everybody's too: a watcher sees who is building, and this client's
+	# own tools ask before the server has to refuse.
+	var _creative := _server_game.set_creative(&"u%d" % (SESSION + 1), true)
+	await _steps(12)
+	_check(theirs != null and theirs.creative, "creative mode on somebody else reaches this client")
+	var _plain := _server_game.set_creative(&"u%d" % (SESSION + 1), false)
+	await _steps(12)
+	_check(theirs != null and not theirs.creative, "and so does turning it off")
 
 	_server_bridge.remove_player(SESSION + 1)
 	await _steps(4)

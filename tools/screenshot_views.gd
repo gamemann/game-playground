@@ -115,6 +115,7 @@ func _process(_delta: float) -> bool:
 			{"name": "admin_beacon", "third": false, "beacon": true},
 			{"name": "admin_beacon_wall", "third": false, "beacon": true, "wall": true},
 			{"name": "admin_blind", "third": false, "blind": true},
+			{"name": "hud_creative", "third": false, "creative": true},
 			{"name": "body_standing", "third": false, "other": true},
 			{"name": "rider_seated", "third": false, "other": true, "seated": true},
 		]
@@ -156,7 +157,8 @@ func _process(_delta: float) -> bool:
 			(_player.get_node("Camera") as Camera3D).make_current()
 
 		_arrange_admin(shot)
-		_hud.visible = shot.has("clock") or shot.has("beacon") or shot.has("blind")
+		_player.creative = bool(shot.get("creative", false))
+		_hud.visible = shot.has("clock") or shot.has("beacon") or shot.has("blind") or shot.has("creative")
 		if shot.has("clock"):
 			var view := DotVoteClockView.new()
 			view.adopt(shot["clock"], Time.get_ticks_msec() / 1000.0)
