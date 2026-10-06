@@ -99,6 +99,12 @@ extends DotConfig
 ## build while the rest of it plays. Falls, pits and their own props still reach them.
 @export var allow_creative: bool = true
 
+## Whether standing on a moving prop carries you with it: a crate somebody else swings with
+## the physics gun, a plank sliding down a ramp, or the one you are holding yourself under
+## your own feet (which is prop surfing). dot-props' DotPropCarry; the prop also takes some
+## of your weight. Off leaves a crate exactly as solid and as still as the floor.
+@export var prop_surfing: bool = true
+
 ## Props in the world at once, from everybody. 0 = unlimited.
 @export_range(0, 10000, 1) var prop_world_budget: int = 1024
 

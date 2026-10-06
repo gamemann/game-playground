@@ -72,6 +72,16 @@ var _class_base: DotFpsTunables = null
 ## This player's timer. Owned by the world's [DotTimerManager], not by this node.
 var timer: DotTimer = null
 
+## Standing on a moving prop. Set by the game on join; see [method _ride_prop].
+var carry: DotPropCarry = null
+var carry_enabled_fn: Callable = Callable()
+
+## What a player weighs to a prop they stand on (DotPropCarry takes a share of it).
+const MASS_KG := 80.0
+
+## How far props have carried this player, all told. For `describe` and the suites.
+var carried_metres: float = 0.0
+
 ## The movement half of the style in force.
 var movement_style: DotFpsStyle = null
 
@@ -666,6 +676,31 @@ func _on_simulated(_tick: int, state: DotFpsState) -> void:
 	if gravity_zone != null and not state.is_grounded() and controller.tunables != null:
 		state.velocity.y += controller.tunables.gravity * (1.0 - gravity_zone.number) \
 			/ float(maxi(1, controller.tick_rate))
+
+	_ride_prop(state)
+
+
+## Carried by the prop underfoot, after the move (mg-buses-from-hell's shape).
+##
+## [b]`ground_id` is a local physics handle, not simulation state[/b], so riding is
+## resolved on each machine from its own bodies. Written into the state as well as the
+## node: the next move starts from `state.position`, and a lift applied to the node alone
+## is undone by it, so the player would ride one frame a tick and stand still overall.
+func _ride_prop(state: DotFpsState) -> void:
+	if carry == null or not state.is_grounded() or riding:
+		return
+
+	if carry_enabled_fn.is_valid() and not bool(carry_enabled_fn.call()):
+		return
+
+	var lift := carry.ride(state.ground_id, state.position, MASS_KG, 1.0 / float(maxi(1, controller.tick_rate)))
+
+	if lift == Vector3.ZERO:
+		return
+
+	state.position += lift
+	global_position = state.position
+	carried_metres += lift.length()
 
 
 ## The EFFECT zone of [param kind] at [param point], or null. Read off the timer's zone index

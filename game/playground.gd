@@ -195,6 +195,11 @@ var spawn_limits: PlaygroundLimits = PlaygroundLimits.new()
 ## Welds, ropes and no-collides between props. Built by the tool gun.
 var constraints: PlaygroundConstraints = null
 
+## Standing on a moving prop carries a player with it (`config.prop_surfing`). dot-props'
+## own, under the spawner; each player asks it once a tick after its move
+## ([method PlaygroundPlayer._on_simulated]).
+var carry: DotPropCarry = null
+
 ## Who is holding whom with the physics gun. The module binds `pg_pickup*` to it and hands
 ## it the same roles [member spawn_limits] uses.
 var pickup: PlaygroundPickup = PlaygroundPickup.new()
@@ -687,6 +692,10 @@ func _build_props() -> void:
 	props.removed.connect(_on_prop_removed)
 
 	add_child(props)
+
+	carry = DotPropCarry.new()
+	carry.name = "PropCarry"
+	props.add_child(carry)
 
 
 ## After the props, because the item catalogue is derived from the prop catalogue — one
@@ -1423,6 +1432,8 @@ func add_player(id: StringName, display_name: String) -> PlaygroundPlayer:
 		})
 
 	player.timer = timers.timer_for(id)
+	player.carry = carry
+	player.carry_enabled_fn = func() -> bool: return config == null or config.prop_surfing
 
 	player.set_style(
 		movement_styles[&"normal"], timers.style_for(&"normal")

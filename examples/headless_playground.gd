@@ -54,13 +54,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 687
+const CHECKS := 692
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 37
+const SECTIONS := 38
 
 var _passed := 0
 var _failed := 0
@@ -98,6 +98,19 @@ func _run() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+	# `-- --only=<method>` runs the boot and that one section, for working on it: nothing
+	# else runs, so the totals are not checked and the exit code is the section's alone.
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--only="):
+			await _test_boots()
+			await Callable(self, arg.substr(7)).call()
+			print("")
+			print("ONLY %s: %d passed, %d failed (totals not checked)" % [arg.substr(7), _passed, _failed])
+			for line in _failures:
+				print("  FAIL  %s" % line)
+			get_tree().quit(1 if _failed > 0 else 0)
+			return
+
 	await _test_boots()
 	await _test_tick_rate_comes_from_the_engine()
 	await _test_zone_file_matches_the_map()
@@ -120,6 +133,7 @@ func _run() -> void:
 	await _test_the_sandbox_and_its_course()
 	await _test_vehicles()
 	await _test_picking_players_up()
+	await _test_riding_a_moving_prop()
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
@@ -335,6 +349,62 @@ func _test_picking_players_up() -> void:
 
 	playground.remove_player(&"held")
 	playground.remove_player(&"third")
+	_done()
+
+
+# --- Prop surfing ----------------------------------------------------------
+
+## Moves [param body] at [param velocity] for [param ticks] ticks, written every tick so
+## nothing but this moves it, while [param rider] stands still on top.
+func _slide(body: RigidBody3D, velocity: Vector3, rider: StringName, ticks: int) -> void:
+	var still := DotFpsCommand.new()
+	for i in ticks:
+		body.linear_velocity = velocity
+		body.angular_velocity = Vector3.ZERO
+		await _drive(rider, still, 1)
+
+
+func _test_riding_a_moving_prop() -> void:
+	_section("riding a moving prop")
+
+	var rider := playground.add_player(&"surfer", "Surfer")
+	playground.props.limits.spawn_interval = 0.0
+	# A 4 m platform floating in the empty vehicle corner, gravity off so only the test
+	# moves it, and the rider stood on its middle.
+	var deck := playground.props.spawn(&"platform", &"surfer", Vector3(-60.0, 3.0, -60.0))
+	var body := deck.body() as RigidBody3D if deck != null else null
+	_check(body != null, "a platform to stand on")
+	if body == null:
+		_done()
+		return
+	body.gravity_scale = 0.0
+	rider.teleport(Vector3(-60.0, 3.4, -60.0), 0.0)
+	await _slide(body, Vector3.ZERO, &"surfer", 30)
+	_check(rider.controller.state.is_grounded(), "the rider stands on it",
+		"rider y %.2f, deck at %s, rider mask %d node mask %d, deck layer %d, ground %d" % [rider.controller.state.position.y, body.global_position, rider.collision_mask,
+			rider.controller.tunables.collision_mask, body.collision_layer, rider.controller.state.ground_id])
+
+	var start := rider.controller.state.position
+	var deck_start := body.global_position
+	await _slide(body, Vector3(3.0, 0.0, 0.0), &"surfer", 128)
+	var moved := rider.controller.state.position.x - start.x
+	var deck_moved := body.global_position.x - deck_start.x
+	_check(deck_moved > 2.0 and absf(moved - deck_moved) < 0.4,
+		"a moving prop carries whoever stands on it", "rider %.2f m, deck %.2f m" % [moved, deck_moved])
+	_check(rider.global_position.is_equal_approx(rider.controller.state.position) and rider.controller.state.is_grounded(),
+		"and they stay on it, node and state together")
+
+	playground.config.prop_surfing = false
+	start = rider.controller.state.position
+	deck_start = body.global_position
+	await _slide(body, Vector3(-1.0, 0.0, 0.0), &"surfer", 64)
+	moved = rider.controller.state.position.x - start.x
+	_check(absf(moved) < 0.1 and body.global_position.x - deck_start.x < -0.4,
+		"with prop surfing off, the deck slides out from under them", "rider %.2f m" % moved)
+	playground.config.prop_surfing = true
+
+	var _gone := playground.props.remove(deck.instance_id)
+	playground.remove_player(&"surfer")
 	_done()
 
 

@@ -1219,7 +1219,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 687 checks, 37 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 692 checks, 38 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 320 checks, 34 sections
@@ -1770,6 +1770,14 @@ The physics gun picks up a PLAYER in its beam before a prop (`PlaygroundPickup`,
 ## Creative mode (2026-10-06)
 
 `!creative` toggles it for the caller, `pg_creative` (on) allows it and turning it off ends it for everybody. A builder in creative mode is out of everybody's way and out of the fight, both ways: their props are protected in **dot-props** (`DotPropSpawner.set_protected`, which every tool's `may_act_on` and dot-props' damage ask, so no tool can forget it; the tool gun's own `may_touch` asks too), nobody can pick them up and they cannot pick anybody up (`PlaygroundPickup.may_pick_up`), and the arena refuses damage to them and from them (`PlaygroundArena._adjust_damage`; a player nobody can hurt who could still hurt everybody would be the way to win the arena, not a way to build). A fall or a pit still reaches them, or a player could stand in a kill zone for ever. Switching it on also lets go of their props anybody else is holding. `PlaygroundPlayer.creative` is replicated to everybody (`net_creative`) and the HUD says CREATIVE. Checks: `dedicated`'s *creative mode* (10: the command, the protection, another player's tool, the replicated field, arena damage refused both ways and landing again once off, the cvar ending and refusing it), `headless_playground`'s picking-up section (3), `headless_net`'s who-is-told section (2); `tools/screenshot_views.sh` renders `hud_creative`. Writing the pickup checks found that "with picking up off, nobody is held" had been aiming the beam the wrong way (yaw 180 from -36 toward -40) and passed with nobody in it.
+
+## Prop surfing, and players who walked through every prop (2026-10-06)
+
+Standing on a moving prop carries a player with it (`pg` config `prop_surfing`, on): dot-props' `DotPropCarry` beside the spawner (`Playground.carry`), asked once a tick by `PlaygroundPlayer._ride_prop` after the move, with the lift written into the state as well as the node (mg-buses-from-hell's shape: `ground_id` is a local physics handle, so riding is resolved on each machine from its own bodies). A crate somebody swings with the physics gun, a plank sliding down a ramp, and the one you hold under your own feet all carry you. `headless_playground`'s *riding a moving prop* (5 checks: carried 3 m with a deck that moved 3 m, staying on it, and with surfing off the deck slides out from under them).
+
+**Building it found that no player here had ever collided with a prop.** `use_collision_mask` set the tunables' mask after the controller's setup, and dot-player-controller's body had copied the mask (1) when it was built, so every sweep saw the world layer only: players walked through every crate, NPC and vehicle, and a rider stood on a platform fell straight through it. Fixed in dot-player-controller (dc06578: the controller hands the tunables' mask to its body every tick), which changes the same thing in five other games. **Not yet measured over the wire**: a client's prop mirrors are frozen, so `DotPropCarry.velocity_at` answers zero there and a connected rider is carried by corrections, not by prediction. Measuring that, and giving a mirror the velocity of its interpolated motion if it is bad, is the next step.
+
+`headless_playground` takes `-- --only=<method>` to run the boot and one section, for working on it; the totals are not checked when it is used.
 
 ## Things deliberately not here
 
