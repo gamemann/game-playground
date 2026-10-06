@@ -297,6 +297,9 @@ static func catalogue() -> DotPropCatalogue:
 	out.add(_balloon())
 	out.add(_debris())
 
+	for machine in _machines():
+		out.add(machine)
+
 	for weapon in PlaygroundZee.defs():
 		out.add(_pickup(weapon))
 
@@ -310,6 +313,36 @@ const BREAKABLE := {
 	&"plank": 60.0, &"beam": 150.0, &"panel": 80.0,
 	&"crate": 40.0, &"crate_large": 120.0, &"barrel": 30.0, &"can": 5.0, &"die": 10.0,
 }
+
+
+## Things that say and hear: a button, a lever and a door, wired with the tool gun's Wire
+## mode and pressed with F. dot-props' [DotPropIO] reads `outputs` and `inputs` here; what
+## each one does is [Playground]'s (`_on_io_input`, `use_prop`).
+##
+## [b]A door is a frozen body the server swings[/b], round the hinge on its left edge, by
+## writing its transform each tick: a static body teleported is exactly where it is told, which
+## a door that people stand in the way of needs (mg-wipeout's finding about moving parts).
+static func _machines() -> Array[DotPropDef]:
+	var out: Array[DotPropDef] = []
+	# id, name, extent, colour, mass, meta
+	var rows := [
+		[&"button", "Button", Vector3(0.6, 0.6, 0.25), "c23b3b", 6.0, {"outputs": ["pressed"]}],
+		[&"lever", "Lever", Vector3(0.35, 0.9, 0.35), "c2a23b", 8.0, {"outputs": ["switched"]}],
+		[&"door", "Door", Vector3(2.0, 2.6, 0.2), "7b5a3a", 120.0,
+			{"inputs": ["toggle", "open", "close"], "outputs": ["opened", "closed"], "door": true}],
+	]
+	for row in rows:
+		var def := DotPropDef.make(row[0], SCENE_PROP)
+		def.display_name = row[1]
+		def.category = &"machines"
+		def.mass = row[4]
+		def.cost = 1
+		def.size = DotPropDef.Size.SMALL if row[0] != &"door" else DotPropDef.Size.MEDIUM
+		var meta := {"shape": "box", "extent": [row[2].x, row[2].y, row[2].z], "colour": row[3]}
+		meta.merge(row[5])
+		def.meta = meta
+		out.append(def)
+	return out
 
 
 ## A piece of something broken: hidden, owned by nobody, cleaned up after a few seconds by

@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 323
+const CHECKS := 326
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 35
+const SECTIONS := 36
 
 var _passed := 0
 var _failed := 0
@@ -167,6 +167,7 @@ func _run() -> void:
 		await _test_grenade_over_the_wire()
 		# Spawns a platform and takes it out again; nothing after it but the leave.
 		await _test_riding_over_the_wire()
+		await _test_button_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -3444,6 +3445,50 @@ func _test_riding_over_the_wire() -> void:
 	_exchange()
 	theirs.teleport(Vector3(0.0, 1.0, 0.0), 0.0)
 	await _steps(32)
+	_done()
+
+
+## A connected player presses a button with F, and a door wired to it swings on the server and
+## on this client's mirror of it. F is the vehicle request already on the wire; the server
+## tries a button first ([method Playground.use_vehicle]).
+func _test_button_over_the_wire() -> void:
+	_section("a button pressed over the wire opens a door")
+
+	var theirs := _server_player()
+	await _steps(32)
+	var eye := theirs.eye_position()
+	var button := _server_game.props.spawn(&"button", theirs.player_id, eye + theirs.aim_direction() * 1.8)
+	var door := _server_game.props.spawn(&"door", theirs.player_id, theirs.controller.state.position + Vector3(4.0, 1.3, 0.0))
+	if button == null or door == null:
+		_check(false, "a button and a door")
+		_done()
+		return
+	DotPhysGun.set_frozen(button, true)
+	var _wired := _server_game.io.link(button.instance_id, &"pressed", door.instance_id, &"toggle")
+	_exchange()
+	await _steps(8)
+	# The server keys its behaviours by instance id; a client keys its mirrors by net id.
+	var server_net: PlaygroundPropNet = _server_bridge._prop_nets.get(door.instance_id)
+	var mirror: PlaygroundPropNet = _client_bridge._prop_nets.get(server_net.identity.net_id) \
+		if server_net != null and server_net.identity != null else null
+	var shut_basis := (door.node as Node3D).global_basis
+
+	_client_bridge.ask_use_vehicle()
+	_exchange()
+	await _steps(int(_server_game.DOOR_SECONDS * _server_game.tick_rate) + 48)
+
+	var server_turn := rad_to_deg(shut_basis.z.angle_to((door.node as Node3D).global_basis.z))
+	_check(_server_game.door_is_open(door.instance_id) and absf(server_turn - 90.0) < 2.0,
+		"F at a button opens the door wired to it, on the server", "%.1f degrees" % server_turn)
+	var client_turn := rad_to_deg(shut_basis.z.angle_to(mirror.prop.global_basis.z)) if mirror != null and mirror.prop != null else -1.0
+	_check(absf(client_turn - server_turn) < 2.0, "and this client's door swung with it", "%.1f against %.1f" % [client_turn, server_turn])
+	_check(mirror != null and mirror.prop.global_position.distance_to((door.node as Node3D).global_position) < 0.05,
+		"standing where the server's does")
+
+	var _a := _server_game.props.remove(button.instance_id)
+	var _b := _server_game.props.remove(door.instance_id)
+	_exchange()
+	await _steps(4)
 	_done()
 
 

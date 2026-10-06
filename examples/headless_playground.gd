@@ -54,13 +54,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 701
+const CHECKS := 713
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 39
+const SECTIONS := 40
 
 var _passed := 0
 var _failed := 0
@@ -135,6 +135,7 @@ func _run() -> void:
 	await _test_picking_players_up()
 	await _test_riding_a_moving_prop()
 	await _test_breaking_props()
+	await _test_buttons_and_doors()
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
@@ -368,6 +369,13 @@ func _slide(body: RigidBody3D, velocity: Vector3, rider: StringName, ticks: int)
 func _test_riding_a_moving_prop() -> void:
 	_section("riding a moving prop")
 
+	# The lobby, whichever map the section before left loaded: the corner this uses is its.
+	var on_lobby: DotResult = await playground.change_map(&"pg_lobby")
+	if not on_lobby.ok:
+		_check(false, "the sandbox loads", on_lobby.error.message)
+		_done()
+		return
+
 	var rider := playground.add_player(&"surfer", "Surfer")
 	playground.props.limits.spawn_interval = 0.0
 	# A 4 m platform floating in the empty vehicle corner, gravity off so only the test
@@ -413,6 +421,13 @@ func _test_riding_a_moving_prop() -> void:
 
 func _test_breaking_props() -> void:
 	_section("breaking props")
+
+	# The lobby, whichever map the section before left loaded: the corner this uses is its.
+	var on_lobby: DotResult = await playground.change_map(&"pg_lobby")
+	if not on_lobby.ok:
+		_check(false, "the sandbox loads", on_lobby.error.message)
+		_done()
+		return
 
 	var player: PlaygroundPlayer = playground.players[&"bot"]
 	playground.props.limits.spawn_interval = 0.0
@@ -493,6 +508,92 @@ func _fire_at_crates(rig: ZeeWeaponRig, player: PlaygroundPlayer, ticks: int, un
 		if until != null and not until.is_alive():
 			break
 	return fired
+
+
+# --- Buttons and doors -----------------------------------------------------
+
+## A stand-in for the tool gun: a mode asks its gun for the game and nothing else.
+class WireGun:
+	extends RefCounted
+	var game: Node = null
+
+
+func _test_buttons_and_doors() -> void:
+	_section("buttons, levers and doors")
+
+	# The lobby, whichever map the section before left loaded: the corner this uses is its.
+	var on_lobby: DotResult = await playground.change_map(&"pg_lobby")
+	if not on_lobby.ok:
+		_check(false, "the sandbox loads", on_lobby.error.message)
+		_done()
+		return
+
+	# A player of its own, as the other sections that need a body do: "bot" carries whatever
+	# the sections before left it with.
+	var player := playground.add_player(&"presser", "Presser")
+	playground.props.limits.spawn_interval = 0.0
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	player.teleport(Vector3(-60.0, 1.0, -36.0), 0.0)
+	# Landed before the button goes at eye height: a metre's fall is forty ticks.
+	await _look(&"presser", 0.0, 90)
+
+	var eye := player.eye_position()
+	var button := playground.props.spawn(&"button", &"presser", Vector3(-60.0, eye.y, -38.0))
+	DotPhysGun.set_frozen(button, true)
+	var lever := playground.props.spawn(&"lever", &"presser", Vector3(-57.0, 0.5, -38.0))
+	DotPhysGun.set_frozen(lever, true)
+	var door := playground.props.spawn(&"door", &"presser", Vector3(-62.0, 1.3, -44.0))
+	await get_tree().physics_frame
+	_check(door != null and door.frozen, "a door stands frozen where it is put")
+	var shut := (door.node as Node3D).global_transform
+
+	var wire := preload("res://game/tools/tool_wire.gd").new()
+	var gun := WireGun.new()
+	gun.game = playground
+	var first: DotResult = wire.primary(gun, {"prop": button})
+	var second: DotResult = wire.primary(gun, {"prop": door})
+	_check(first.ok and second.ok and playground.io.links_from(button.instance_id).size() == 1,
+		"the Wire mode wires the button to the door", "%s / %s" % [first.error if not first.ok else "ok", second.error if not second.ok else "ok"])
+	var from_door: DotResult = wire.primary(gun, {"prop": door})
+	_check(from_door.ok and not wire.pending.is_empty(), "a door can start a wire too: it says opened and closed")
+	wire.cancel()
+
+	var used := playground.use_vehicle(&"presser")
+	_check(used.ok and playground.door_is_open(door.instance_id), "F on the button opens the door", used.error.message if not used.ok else "")
+	for i in range(int(playground.DOOR_SECONDS * playground.tick_rate) + 4):
+		await get_tree().physics_frame
+	var swung := shut.basis.z.angle_to((door.node as Node3D).global_transform.basis.z)
+	_check(is_equal_approx(playground.door_swing(door.instance_id), 1.0) and absf(rad_to_deg(swung) - 90.0) < 2.0,
+		"and it swings a quarter turn about its hinge", "%.1f degrees" % rad_to_deg(swung))
+	var hinge := shut * Vector3(-1.0, 0.0, 0.0)
+	_check(((door.node as Node3D).global_transform * Vector3(-1.0, 0.0, 0.0)).distance_to(hinge) < 0.01, "the hinge edge stays where it was")
+
+	var again := playground.use_vehicle(&"presser")
+	for i in range(int(playground.DOOR_SECONDS * playground.tick_rate) + 4):
+		await get_tree().physics_frame
+	_check(again.ok and not playground.door_is_open(door.instance_id) and (door.node as Node3D).global_transform.is_equal_approx(shut),
+		"F again closes it, back where it stood", "%s, open %s, at %s vs %s" % [again.error.message if not again.ok else "ok", playground.door_is_open(door.instance_id), (door.node as Node3D).global_transform.origin, shut.origin])
+
+	# A lever sets rather than flips: on is open, off is shut.
+	var _lw := playground.io.link(lever.instance_id, &"switched", door.instance_id, &"toggle")
+	player.teleport(Vector3(-57.0, 1.0, -36.0), 0.0)
+	# Down at the lever on the floor: the sign of pitch is read off the aim, not assumed.
+	await _look(&"presser", 30.0, 4)
+	var down := -30.0 if player.aim_direction().y > 0.0 else 30.0
+	await _look(&"presser", down, 30)
+	var thrown := playground.use_prop(&"presser")
+	_check(thrown.ok and playground.door_is_open(door.instance_id), "a lever thrown on opens it",
+		"%s; aim %s from %s, lever at %s" % [thrown.error.message if not thrown.ok else "ok", player.aim_direction(), player.eye_position(), lever.position()])
+	var _off := playground.use_prop(&"presser")
+	_check(not playground.door_is_open(door.instance_id), "and thrown off shuts it")
+
+	playground.props.remove(button.instance_id)
+	_check(playground.io.links_to(door.instance_id).size() == 1, "removing the button takes its wire and leaves the lever's")
+	_check(not playground.use_prop(&"nobody").ok, "and nobody uses anything from nowhere")
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	playground.remove_player(&"presser")
+	_done()
 
 
 # --- Boot ------------------------------------------------------------------

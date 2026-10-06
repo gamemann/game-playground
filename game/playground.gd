@@ -204,6 +204,22 @@ var carry: DotPropCarry = null
 ## authoritative one hurts anything (see [method hurt_prop]).
 var prop_damage: DotPropDamage = null
 
+## Props wired to props (dot-props' DotPropIO): buttons, levers and doors. See `_machines`
+## in PlaygroundSpawnables, [method use_prop] and [method _on_io_input].
+var io: DotPropIO = null
+
+## How long a door takes to swing, and how far a player reaches to press something.
+const DOOR_SECONDS := 0.6
+const USE_REACH := 2.6
+
+## Door instance id -> {"open": bool, "t": float 0..1, "base": Transform3D}. `base` is where
+## it stood shut, taken when it starts to open from shut, so a door somebody moved first
+## swings from where they put it.
+var _doors: Dictionary = {}
+
+## Lever instance id -> on.
+var _levers: Dictionary = {}
+
 ## Debris instance id -> the game time it goes, in seconds.
 var _debris_expiry: Dictionary = {}
 
@@ -495,6 +511,7 @@ func _simulate_tick(step: float) -> void:
 		projectiles.tick(step)
 
 	_expire_debris()
+	_swing_doors(step)
 
 	# After the moves and before the timers, which is the same ordering rule: a rider's
 	# position for this tick is where the vehicle carried them, not where they were.
@@ -712,6 +729,12 @@ func _build_props() -> void:
 	carry.name = "PropCarry"
 	props.add_child(carry)
 
+	io = DotPropIO.new()
+	io.name = "PropIO"
+	io.authoritative = authoritative
+	props.add_child(io)
+	io.input_received.connect(_on_io_input)
+
 	prop_damage = DotPropDamage.new()
 	prop_damage.name = "PropDamage"
 	prop_damage.authoritative = authoritative
@@ -763,6 +786,12 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		return
 
 	body.configure(prop.def)
+
+	# A door stands frozen where it was put, and the server swings it (see `_swing_doors`).
+	if bool(prop.def.meta.get("door", false)) and authoritative:
+		DotPhysGun.set_frozen(prop, true)
+		reclassify_prop(prop.node, true, false)
+		_doors[prop.instance_id] = {"open": false, "t": 0.0, "base": (prop.node as Node3D).global_transform}
 
 
 ## Puts a spawned body on the layer that matches what it is.
@@ -1137,6 +1166,8 @@ func _on_prop_removed(prop: DotPropInstance, _reason: StringName) -> void:
 	if _blast_depth == 0:
 		_breaking.erase(prop.instance_id)
 	_debris_expiry.erase(prop.instance_id)
+	_doors.erase(prop.instance_id)
+	_levers.erase(prop.instance_id)
 
 	# A vehicle first, because it may still have people in it. `remove` evacuates them —
 	# forcing the exit, because a car being deleted is exactly the case where there may
@@ -2126,11 +2157,19 @@ func vehicle_near(player_id: StringName, reach: float = 3.5) -> DotVehicleInstan
 ## [b]One entry point for both, because the player pressed one key.[/b] A game with
 ## separate "enter" and "exit" calls has a client deciding which one to send, and a
 ## client that guesses wrong asks to get into the car it is already in.
+## What F does: presses the button, throws the lever or swings the door in front of the
+## player, and otherwise gets in or out of a vehicle. One key, because both are "use" and the
+## bridge already carries it (`ask_use_vehicle`), so pressing a button needs no new message.
 func use_vehicle(player_id: StringName) -> DotResult:
 	var player: PlaygroundPlayer = players.get(player_id)
 
 	if player == null or vehicles == null:
 		return DotResult.fail(DotError.CODE_STATE, "No such player.")
+
+	if vehicles.vehicle_of_rider(player_id) == null:
+		var used := use_prop(player_id)
+		if used.ok:
+			return used
 
 	var riding := vehicles.vehicle_of_rider(player_id)
 
@@ -2143,6 +2182,117 @@ func use_vehicle(player_id: StringName) -> DotResult:
 		return DotResult.fail(DotError.CODE_STATE, "There is nothing to get into.")
 
 	return vehicles.ride.enter(near, player_id, player)
+
+
+## Presses what [param player_id] is looking at within [constant USE_REACH]: a button fires
+## `pressed`, a lever switches and fires `switched` with its new state, a door swings. Fails
+## when there is nothing usable in front of them. On the authority only.
+func use_prop(player_id: StringName) -> DotResult:
+	var player: PlaygroundPlayer = players.get(player_id)
+
+	if player == null or io == null or not authoritative or player.grav_gun == null or not player.is_inside_tree():
+		return DotResult.fail(DotError.CODE_STATE, "Nothing to use.")
+
+	var gun := player.grav_gun
+	var reach := gun.reach
+	gun.reach = USE_REACH
+	var prop := gun.target(player.get_world_3d().direct_space_state, player.eye_position(), player.aim_direction())
+	gun.reach = reach
+
+	if prop == null or prop.def == null:
+		return DotResult.fail(DotError.CODE_STATE, "Nothing to use.")
+
+	if _doors.has(prop.instance_id):
+		_set_door(prop, not bool(_doors[prop.instance_id]["open"]))
+		return DotResult.success(prop)
+
+	var outputs := DotPropIO.outputs_of(prop.def)
+
+	if outputs.has("pressed"):
+		var _heard := io.fire(prop.instance_id, &"pressed")
+		return DotResult.success(prop)
+
+	if outputs.has("switched"):
+		var on := not bool(_levers.get(prop.instance_id, false))
+		_levers[prop.instance_id] = on
+		if prop.node is PlaygroundProp:
+			(prop.node as PlaygroundProp).set_tint(Color(0.3, 0.8, 0.35) if on else Color(0.8, 0.3, 0.3))
+		var _heard := io.fire(prop.instance_id, &"switched", on)
+		return DotResult.success(prop)
+
+	return DotResult.fail(DotError.CODE_STATE, "Nothing to use.")
+
+
+## An input reached a prop through a wire. A door is the one that hears: `open`, `close`, and
+## `toggle`, which a button (no value) flips and a lever (its on/off) sets.
+func _on_io_input(target: DotPropInstance, input: StringName, value: Variant, _source: DotPropInstance) -> void:
+	if not _doors.has(target.instance_id):
+		return
+
+	var open: bool = _doors[target.instance_id]["open"]
+
+	match input:
+		&"open":
+			open = true
+		&"close":
+			open = false
+		&"toggle":
+			open = bool(value) if value is bool else not open
+
+	_set_door(target, open)
+
+
+func _set_door(prop: DotPropInstance, open: bool) -> void:
+	var state: Dictionary = _doors.get(prop.instance_id, {})
+
+	if state.is_empty() or bool(state["open"]) == open:
+		return
+
+	# Shut and about to open: where it stands now is where it swings from.
+	if open and float(state["t"]) <= 0.0 and prop.node is Node3D:
+		state["base"] = (prop.node as Node3D).global_transform
+
+	state["open"] = open
+
+
+## Every door moving toward where it was told, about the hinge on its left edge, written as a
+## transform: frozen, so nothing else moves it. Says `opened` / `closed` on arriving.
+func _swing_doors(step: float) -> void:
+	if _doors.is_empty() or props == null:
+		return
+
+	for instance_id: int in _doors.keys():
+		var prop := props.get_prop(instance_id)
+		var state: Dictionary = _doors[instance_id]
+
+		if prop == null or not prop.is_alive() or not (prop.node is Node3D) or not prop.frozen:
+			continue
+
+		var target := 1.0 if bool(state["open"]) else 0.0
+		var t := float(state["t"])
+
+		if is_equal_approx(t, target):
+			continue
+
+		t = move_toward(t, target, step / DOOR_SECONDS)
+		state["t"] = t
+		var width := PlaygroundProp.extent_of(prop.def).x
+		var pivot := Vector3(-width * 0.5, 0.0, 0.0)
+		var swing := Transform3D(Basis(Vector3.UP, deg_to_rad(90.0) * t), Vector3.ZERO)
+		var local := Transform3D(Basis.IDENTITY, pivot) * swing * Transform3D(Basis.IDENTITY, -pivot)
+		(prop.node as Node3D).global_transform = (state["base"] as Transform3D) * local
+
+		if is_equal_approx(t, target):
+			var _said := io.fire(instance_id, &"opened" if target > 0.5 else &"closed")
+
+
+## Whether the door [param instance_id] is open (or opening). For the suites and `describe`.
+func door_is_open(instance_id: int) -> bool:
+	return bool(_doors.get(instance_id, {}).get("open", false))
+
+
+func door_swing(instance_id: int) -> float:
+	return float(_doors.get(instance_id, {}).get("t", 0.0))
 
 
 func rock_the_vote(player_id: StringName) -> bool:

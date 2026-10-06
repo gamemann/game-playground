@@ -1219,10 +1219,10 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 701 checks, 39 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 713 checks, 40 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 323 checks, 35 sections
+godot --headless --path . res://examples/headless_net.tscn          # 326 checks, 36 sections
 godot --headless --path . res://examples/dedicated.tscn             # 235 checks, 26 sections
 ```
 
@@ -1782,6 +1782,12 @@ Standing on a moving prop carries a player with it (`pg` config `prop_surfing`, 
 ## Breaking props (2026-10-06)
 
 `pg_destruction` (off, `PlaygroundConfig.destruction`) lets shots and blasts break props that have health: `PlaygroundSpawnables.BREAKABLE` gives the plank, beam, panel, crates, barrel, can and die a `max_health` (always declared, so the switch is all it takes), and the slab, pillar and platform none, because a floor shot out from under a build is not the fun kind. dot-props' `DotPropDamage` (`Playground.prop_damage`) keeps the health; `Playground.hurt_prop` is the one door, called by a player's zee shot (`player_shots_fired`), an armed NPC's (`npc_shots_fired`, before the shove) and a grenade's blast (`PlaygroundProjectiles._blast`). A broken prop leaves `debris_pieces` (4) hidden, ownerless `debris` props in its colour, cleaned up after `debris_seconds` (6) by `_expire_debris`, spawned through the spawner so every client draws them. A barrel shot open explodes (5 m): players through the arena (so only with it on), armed NPCs through their health, other breakables through `hurt_prop`. **A blast reaches the barrel that made it**, still in the spawner while it explodes, and the first version recursed until the stack ran out; `_breaking` skips whatever is mid-break until the outermost blast is done, so a chain of barrels still goes up, once each. A creative builder's props do not break (dot-props refuses a protected owner's). `headless_playground`'s *breaking props* (9: off breaks nothing, a real pistol through `player_shots_fired` shoots a crate apart, debris owned by nobody and gone in six seconds, a barrel taking the crate a metre away and not the one ten off, a creative builder's crate, a slab). `pg_prop_surf` is the cvar for the surfing above.
+
+## Buttons, levers and doors (2026-10-06)
+
+The **Machines** category (`PlaygroundSpawnables._machines`): a button (says `pressed`), a lever (says `switched`, with its new state) and a door (hears `toggle`, `open`, `close`; says `opened` and `closed`). The wiring is dot-props' `DotPropIO` (`Playground.io`), added for this and for any other game that wants it; the tool gun's **Wire** mode (`tools/tool_wire.gd`) wires what you click first to what you click second, into the input its setting names (`toggle` by default), and right click takes a prop's wires off. **F presses what you look at**, within `USE_REACH` (2.6 m), before it gets you into a vehicle (`Playground.use_vehicle` asks `use_prop` first): F was already the "use" request on the wire, so a button over the network needed no new message. A button flips a door, a lever sets it (on is open), and F on a door swings it directly. **A door is a frozen body the server swings** a quarter turn about the hinge on its left edge in `DOOR_SECONDS` (0.6), by writing its transform each tick (`_swing_doors`); frozen so physics never moves it, so it reaches clients through the prop path like any other transform, and it swings from wherever it stood shut. Levers show their state as a tint (green on, red off), which replicates as the tool gun's paint does.
+
+`headless_playground`'s *buttons, levers and doors* (11) and `headless_net`'s *a button pressed over the wire opens a door* (3: the server's door turns 90°, the client's mirror within 2° of it and in the same place). `tools/screenshot_menus.sh` shows the Machines category and the Wire tool. **Writing it found** that a section run by itself (`--only`) is on whatever map the boot left: the prop sections assumed the lobby the section before them loaded, and a button placed at a falling player's eye height was pressed once by luck; each now loads `pg_lobby` and lands its player first.
 
 ## Things deliberately not here
 
