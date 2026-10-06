@@ -45,8 +45,8 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## This suite had neither until 2026-09-24. Each section calls [method _section_done] as
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
-const SECTIONS := 26
-const CHECKS := 235
+const SECTIONS := 27
+const CHECKS := 240
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -130,6 +130,7 @@ func _run() -> void:
 		await _test_live_tools()
 		await _test_blind_and_beacon()
 		_test_creative()
+		_test_saved_builds()
 		_test_inventory_commands()
 		_test_welcome_waits_for_ready()
 		_test_disconnect_is_handled()
@@ -1895,6 +1896,42 @@ func _test_creative() -> void:
 	var _released := server.release_session(session.peer_id)
 	game.remove_player(&"u79")
 	game.remove_player(&"u80")
+	_section_done()
+
+
+## `pg_save`, `pg_builds`, `pg_load` and `pg_build_delete`, typed by a player.
+func _test_saved_builds() -> void:
+	print("")
+	print("[saved builds]")
+
+	var module := _module()
+	module.get("builds").set("directory", "%s/builds" % SERVER_DIR)
+	var builder := game.add_player(&"u81", "Mason")
+	var session := DotClientSession.new()
+	session.peer_id = 8101
+	session.userid = 81
+	session.display_name = "Mason"
+	var _adopted := server.adopt_session(session)
+
+	var at := builder.controller.state.position
+	var _a := game.props.spawn(&"crate", &"u81", at + Vector3(0.0, 30.0, -3.0))
+	var _b := game.props.spawn(&"plank", &"u81", at + Vector3(1.0, 30.0, -3.0))
+
+	var said := _run_as(session, "pg_save tower")
+	_check(_said(said, "saved") and _said(said, "2 props"), "`pg_save tower` saves what they built", " | ".join(said))
+	said = _run_as(session, "pg_builds")
+	_check(_said(said, "tower"), "`pg_builds` lists it", " | ".join(said))
+	game.props.clear_player(&"u81")
+	said = _run_as(session, "pg_load tower")
+	_check(_said(said, "put down") and game.props.props_of(&"u81").size() == 2, "`pg_load tower` puts it back", " | ".join(said))
+	said = _run_as(session, "pg_load nothing")
+	_check(_said(said, "no build called"), "a build they never saved is refused by name", " | ".join(said))
+	said = _run_as(session, "pg_build_delete tower")
+	_check(_said(said, "deleted") and not _said(_run_as(session, "pg_builds"), "tower"), "and `pg_build_delete` takes it away", " | ".join(said))
+
+	game.props.clear_player(&"u81")
+	var _released := server.release_session(session.peer_id)
+	game.remove_player(&"u81")
 	_section_done()
 
 

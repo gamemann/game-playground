@@ -276,6 +276,11 @@ func joined_to(body: Node) -> Array[Node]:
 	return out
 
 
+## Every constraint, each a [Constraint]. A copy: what a saved build reads.
+func all_items() -> Array:
+	return _items.values()
+
+
 func on(body: Node, kind: int = -1) -> Array:
 	var out: Array = []
 

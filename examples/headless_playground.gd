@@ -8,6 +8,7 @@ const PlaygroundEntity := preload("../game/entities/playground_entity.gd")
 const PlaygroundIcons := preload("../game/playground_icons.gd")
 const PlaygroundMapSurvey := preload("../game/playground_map_survey.gd")
 const PlaygroundPickup := preload("../game/playground_pickup.gd")
+const PlaygroundBuilds := preload("../game/playground_builds.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
 const PlaygroundProp := preload("../game/playground_prop.gd")
 const PlaygroundSpawnMenu := preload("../game/playground_spawn_menu.gd")
@@ -54,13 +55,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 713
+const CHECKS := 723
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 40
+const SECTIONS := 41
 
 var _passed := 0
 var _failed := 0
@@ -136,6 +137,7 @@ func _run() -> void:
 	await _test_riding_a_moving_prop()
 	await _test_breaking_props()
 	await _test_buttons_and_doors()
+	await _test_saved_builds()
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
@@ -593,6 +595,111 @@ func _test_buttons_and_doors() -> void:
 
 	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
 	playground.remove_player(&"presser")
+	_done()
+
+
+# --- Saved builds ----------------------------------------------------------
+
+func _test_saved_builds() -> void:
+	_section("saved builds")
+
+	var on_lobby: DotResult = await playground.change_map(&"pg_lobby")
+	if not on_lobby.ok:
+		_check(false, "the sandbox loads", on_lobby.error.message)
+		_done()
+		return
+
+	var builder := playground.add_player(&"builder", "Builder")
+	playground.props.limits.spawn_interval = 0.0
+	builder.teleport(Vector3(-60.0, 1.0, -30.0), 30.0)
+	await _look(&"builder", 0.0, 90)
+	var at := builder.controller.state.position
+	var yaw := builder.controller.state.yaw
+
+	# A small build: two planks welded, a painted crate on top, a big one frozen, and a button
+	# wired to a door.
+	var a := playground.props.spawn(&"plank", &"builder", at + Vector3(0.0, 0.2, -3.0))
+	var b := playground.props.spawn(&"plank", &"builder", at + Vector3(1.0, 0.2, -3.0))
+	var crate := playground.props.spawn(&"crate", &"builder", at + Vector3(0.0, 0.8, -3.0))
+	var big := playground.props.spawn(&"crate_large", &"builder", at + Vector3(-3.0, 1.0, -3.0))
+	var button := playground.props.spawn(&"button", &"builder", at + Vector3(2.0, 1.0, -3.0))
+	var door := playground.props.spawn(&"door", &"builder", at + Vector3(4.0, 1.3, -4.0))
+	await get_tree().physics_frame
+	for p: DotPropInstance in [a, b, crate, big, button]:
+		DotPhysGun.set_frozen(p, true)
+	var _w: DotResult = playground.constraints.weld(&"builder", a.node as RigidBody3D, b.node as RigidBody3D, a.position())
+	(crate.node as PlaygroundProp).set_tint(Color(0.2, 0.4, 0.9))
+	var _grown := (big.node as PlaygroundProp).set_size_scale(1.5)
+	var _wire := playground.io.link(button.instance_id, &"pressed", door.instance_id, &"toggle")
+	var before := {}
+	for p in playground.props.props_of(&"builder"):
+		before[p.def.id] = before.get(p.def.id, []) + [(p.node as Node3D).global_transform]
+
+	var store := PlaygroundBuilds.new()
+	store.directory = "user://test_builds"
+	DotPaths.remove_tree(store.directory)
+	var doc := store.capture(playground, &"builder", at, yaw)
+	_check(doc.ok and (doc.value["props"] as Array).size() == 6 and (doc.value["links"] as Array).size() == 1
+		and (doc.value["wires"] as Array).size() == 1, "a build captures its props, its weld and its wire", str(doc.error) if not doc.ok else "")
+	_check(store.save("key:1", "bridge", doc.value).ok and store.names("key:1") == PackedStringArray(["bridge"]), "it is saved under the player's key")
+	_check(not store.save("key:1", "../escape", doc.value).ok, "and a name that is a path is refused")
+
+	playground.props.clear_player(&"builder")
+	await get_tree().physics_frame
+	var loaded := store.load_build("key:1", "bridge")
+	var placed := store.place(playground, &"builder", loaded.value, at, yaw)
+	await get_tree().physics_frame
+	_check(placed.ok and int(placed.value) == 6 and playground.props.props_of(&"builder").size() == 6,
+		"loaded back, every prop is there again", str(placed.error) if not placed.ok else "")
+
+	var worst := 0.0
+	for p in playground.props.props_of(&"builder"):
+		var nearest := INF
+		for t: Transform3D in before.get(p.def.id, []):
+			nearest = minf(nearest, t.origin.distance_to((p.node as Node3D).global_position))
+		worst = maxf(worst, nearest)
+	_check(worst < 0.01, "where they stood", "%.4f m off" % worst)
+	var again := playground.props.props_of(&"builder")
+	var painted := again.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"crate")
+	var grown := again.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"crate_large")
+	# Paint is kept as an HTML colour, so to the nearest 1/255.
+	var paint: Color = (painted[0].node as PlaygroundProp).tint if not painted.is_empty() else Color.BLACK
+	var paint_off := absf(paint.r - 0.2) + absf(paint.g - 0.4) + absf(paint.b - 0.9)
+	_check(paint_off < 0.02 and not grown.is_empty() and is_equal_approx((grown[0].node as PlaygroundProp).size_scale, 1.5) and grown[0].frozen,
+		"painted, resized and frozen as they were", "paint %s, scale %s, frozen %s" % [paint,
+			(grown[0].node as PlaygroundProp).size_scale if not grown.is_empty() else -1.0, grown[0].frozen if not grown.is_empty() else false])
+	var new_button: DotPropInstance = again.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"button")[0]
+	_check(playground.constraints.count_owned(&"builder") >= 1 and playground.io.links_from(new_button.instance_id).size() == 1,
+		"with the weld and the wire made again")
+
+	# Put down somewhere else, turned: it goes in front of whoever loads it.
+	playground.props.clear_player(&"builder")
+	var turned := store.place(playground, &"builder", loaded.value, at + Vector3(0.0, 0.0, 20.0), yaw + 90.0)
+	var centre := Vector3.ZERO
+	for p in playground.props.props_of(&"builder"):
+		centre += p.position()
+	centre /= maxf(playground.props.props_of(&"builder").size(), 1)
+	_check(turned.ok and centre.z > at.z + 15.0, "and loaded elsewhere, it is put down there", "centre %s" % centre)
+
+	# A catalogue that has lost a prop refuses the build by name.
+	var broken: Dictionary = (loaded.value as Dictionary).duplicate(true)
+	broken["props"][0]["id"] = "crate_old"
+	var refused := PlaygroundBuilds.validate(broken, playground.props.catalogue)
+	_check(not refused.ok and refused.error.message.contains("crate_old"), "a build with a prop this server lacks is refused by name",
+		refused.error.message if not refused.ok else "")
+
+	# Limits are asked first, so nothing appears when it will not all fit.
+	playground.props.clear_player(&"builder")
+	var old_limits: Dictionary = playground.props.limits.group_limits.duplicate()
+	playground.props.limits.group_limits[DotPropDef.GROUP_PROPS] = 3
+	var too_big := store.place(playground, &"builder", loaded.value, at, yaw)
+	_check(not too_big.ok and playground.props.props_of(&"builder").is_empty(), "a build past the player's limit puts nothing down",
+		too_big.error.message if not too_big.ok else "")
+	playground.props.limits.group_limits = old_limits
+
+	DotPaths.remove_tree(store.directory)
+	playground.props.clear_player(&"builder")
+	playground.remove_player(&"builder")
 	_done()
 
 

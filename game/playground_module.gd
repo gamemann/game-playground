@@ -8,6 +8,7 @@ const PlaygroundDowns := preload("playground_downs.gd")
 const PlaygroundModTools := preload("playground_mod_tools.gd")
 const PlaygroundLimits := preload("playground_limits.gd")
 const PlaygroundPickup := preload("playground_pickup.gd")
+const PlaygroundBuilds := preload("playground_builds.gd")
 const PlaygroundNetBridge := preload("net/playground_net_bridge.gd")
 const PlaygroundPlatform := preload("playground_platform.gd")
 const PlaygroundPlayer := preload("playground_player.gd")
@@ -260,6 +261,10 @@ func _module_load() -> DotResult:
 	# --- Props -------------------------------------------------------------
 	add_command("pg_prop", _cmd_prop, "Spawn a prop in front of you", "").with_chat()
 	add_command("pg_undo", _cmd_undo, "Remove the last prop you spawned", "").with_chat()
+	add_command("pg_save", _cmd_save, "Save everything you have built: pg_save <name>", "").with_chat()
+	add_command("pg_load", _cmd_load, "Put a saved build down in front of you: pg_load <name>", "").with_chat()
+	add_command("pg_builds", _cmd_builds, "List your saved builds", "").with_chat()
+	add_command("pg_build_delete", _cmd_build_delete, "Delete a saved build: pg_build_delete <name>", "").with_chat()
 	add_command(
 		"pg_props_clear", _cmd_props_clear,
 		"Remove every prop, or one player's",
@@ -1797,6 +1802,73 @@ func _cmd_prop(ctx: DotCmdContext) -> void:
 	# saying it twice.
 	if spawned != null:
 		ctx.reply("Spawned %s." % found[0].name_or_id())
+
+
+# --- Saved builds -------------------------------------------------------------
+#
+# Relative to the player both ways: a build is saved around where its builder stands and the
+# way they face, and put down around whoever loads it, the way they face. Kept under the
+# player's statistics key, so a build outlives a reconnect wherever there are accounts.
+
+## Where saved builds are kept. The suites point it somewhere of their own.
+var builds := PlaygroundBuilds.new()
+
+
+func _build_key(ctx: DotCmdContext) -> String:
+	return PlaygroundPlatform.key_for_session(server, ctx.session) if server != null and ctx.session != null else ""
+
+
+func _cmd_save(ctx: DotCmdContext) -> void:
+	var player := _caller(ctx)
+	if player == null or ctx.args.is_empty():
+		ctx.reply("Usage: pg_save <name>, as a player.")
+		return
+	var state := player.controller.state
+	var doc := builds.capture(game, player.player_id, state.position, state.yaw)
+	if not doc.ok:
+		ctx.reply_error(doc)
+		return
+	var saved := builds.save(_build_key(ctx), ctx.args[0], doc.value)
+	if not saved.ok:
+		ctx.reply_error(saved)
+		return
+	ctx.reply("Saved \"%s\": %d props." % [ctx.args[0], (doc.value["props"] as Array).size()])
+
+
+func _cmd_load(ctx: DotCmdContext) -> void:
+	var player := _caller(ctx)
+	if player == null or ctx.args.is_empty():
+		ctx.reply("Usage: pg_load <name>, as a player.")
+		return
+	var doc := builds.load_build(_build_key(ctx), ctx.args[0])
+	if not doc.ok:
+		ctx.reply_error(doc)
+		return
+	var state := player.controller.state
+	var placed := builds.place(game, player.player_id, doc.value, state.position, state.yaw)
+	if not placed.ok:
+		ctx.reply_error(placed)
+		return
+	ctx.reply("Put down \"%s\": %d props." % [ctx.args[0], int(placed.value)])
+
+
+func _cmd_builds(ctx: DotCmdContext) -> void:
+	if ctx.session == null:
+		ctx.reply("Only a player has builds.")
+		return
+	var listed := builds.names(_build_key(ctx))
+	ctx.reply("Your builds: %s" % (", ".join(listed) if not listed.is_empty() else "none yet (pg_save <name>)"))
+
+
+func _cmd_build_delete(ctx: DotCmdContext) -> void:
+	if ctx.session == null or ctx.args.is_empty():
+		ctx.reply("Usage: pg_build_delete <name>, as a player.")
+		return
+	var gone := builds.delete(_build_key(ctx), ctx.args[0])
+	if not gone.ok:
+		ctx.reply_error(gone)
+		return
+	ctx.reply("Deleted \"%s\"." % ctx.args[0])
 
 
 func _cmd_undo(ctx: DotCmdContext) -> void:

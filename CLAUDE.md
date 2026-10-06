@@ -1219,11 +1219,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 713 checks, 40 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 723 checks, 41 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 326 checks, 36 sections
-godot --headless --path . res://examples/dedicated.tscn             # 235 checks, 26 sections
+godot --headless --path . res://examples/dedicated.tscn             # 240 checks, 27 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
@@ -1789,6 +1789,10 @@ The **Machines** category (`PlaygroundSpawnables._machines`): a button (says `pr
 
 `headless_playground`'s *buttons, levers and doors* (11) and `headless_net`'s *a button pressed over the wire opens a door* (3: the server's door turns 90°, the client's mirror within 2° of it and in the same place). `tools/screenshot_menus.sh` shows the Machines category and the Wire tool. **Writing it found** that a section run by itself (`--only`) is on whatever map the boot left: the prop sections assumed the lobby the section before them loaded, and a button placed at a falling player's eye height was pressed once by luck; each now loads `pg_lobby` and lands its player first.
 
+## Saved builds (2026-10-06)
+
+`pg_save <name>`, `pg_load <name>`, `pg_builds` and `pg_build_delete <name>` (chat or console, as a player). `PlaygroundBuilds` captures everything the player owns relative to where they stand and the way they face, and puts a build down around whoever loads it, the way they face. **A document of catalogue ids**, because what it must survive is the catalogue changing: each prop's id, position and turn, frozen, the tool gun's size and paint; the welds, ropes and no-collides between them (a weld to the world as a point in the build's frame); and the wires between them. A build that names a prop the server lacks is refused, naming every missing id. **Whole or not at all**: the player's per-kind limits are asked first, so a build that will not fit puts nothing down, and a spawn the spawner refuses mid-way takes back what this load placed. At most 200 props. Kept as JSON in `user://builds/<statistics key>/<name>.json` (a name is letters, digits, `-`, `_`, up to 32; a key is made safe for a folder). `headless_playground`'s *saved builds* (10: capture, save, a path refused as a name, loaded back where they stood to the centimetre, painted/resized/frozen, the weld and the wire, loaded elsewhere and turned, a missing prop refused by name, a limit putting nothing down; armed by not re-making welds), `dedicated`'s *saved builds* (5, through a real console as a player). Not yet: a Q-menu tab of builds, and "custom props" (one welded group saved and listed in the menu); both want the menu, not the format.
+
 ## Things deliberately not here
 
 - **A screen for the bag, and a key that buys into it.** The wire, the server's rules and the client's copy are all here (`PlaygroundNetBridge.inventory_manager()`, `ask_buy`); `DotInvPanel` is the grid, and its `_can_drop_data` asks the same `validate` the server does. A pickup — pocketing a prop you own back into the bag — is the other missing producer, and wants a use verb this game does not have yet (see `F` above). Weapons are not items: they are not in the prop catalogue and `weapon_changed` already carries them.
@@ -1838,8 +1842,6 @@ The **Machines** category (`PlaygroundSpawnables._machines`): a button (says `pr
 - **Welding, ropes, thrusters, duplicators.** dot-props says why: constraints are a much
   larger surface than spawning, they interact with each other, and a half-built
   constraint system is worse than none. `DotPropTool` is the hook.
-- **Saving a build.** A save format has to survive the catalogue changing under it,
-  which is a versioning problem rather than a physics one.
 - **Real maps.** These three are test fixtures that happen to be playable. A real map
   is authored in the editor and zoned with `DotTimerZonePainter`.
 - **Sound, art, animation.** The maps are unshaded boxes on purpose, drawn with a generated world-space one-metre grid (`PlaygroundGeometry._material`, 2026-09-25) so a gap can be counted in squares — flat colour gave a rendered map no scale at all.
