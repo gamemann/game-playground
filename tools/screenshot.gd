@@ -99,6 +99,12 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_quarry", "from": Vector3(55.0, 38.0, 85.0), "at": Vector3(0.0, -10.0, 0.0)},
 			{"name": "pgc_quarry_spawn", "from": Vector3(0.0, 1.7, 62.0), "at": Vector3(0.0, -10.0, 10.0)},
 		]
+	if id == "pgc_slopes":
+		return [
+			{"name": "pgc_slopes", "from": Vector3(95.0, 55.0, 85.0), "at": Vector3(10.0, 5.0, -10.0)},
+			{"name": "pgc_slopes_deck", "from": Vector3(9.0, 26.0, -3.0), "at": Vector3(0.0, 20.0, -24.0)},
+			{"name": "pgc_slopes_halfpipe", "from": Vector3(55.0, 9.0, 40.0), "at": Vector3(55.0, 0.0, -10.0)},
+		]
 	if id == "pg_bhop_intro":
 		# Two routes, and the frames have to show they ARE two: the main run down x = 0
 		# and the narrows six metres up at x = 28. An overview from straight above shows
