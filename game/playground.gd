@@ -1436,7 +1436,74 @@ static func map_catalogue() -> DotMapCatalogue:
 		map.author = "playground"
 		catalogue.add(map)
 
+	# Custom maps from game-playground-maps, where a checkout links them in (dot-bootstrap's
+	# `maps/custom`). A delivered server and client add the same documents from the mounted
+	# pack instead, with [method add_map_directory].
+	var _linked := add_map_docs(catalogue, PlaygroundPaths.rebase(CUSTOM_MAPS_DIR))
+
 	return catalogue
+
+
+## Where a checkout links game-playground-maps' documents.
+const CUSTOM_MAPS_DIR := "res://maps/custom"
+
+## The one scene every map document is built by. See `maps/pg_data.gd`.
+const DATA_MAP_SCENE := "res://maps/pg_data.tscn"
+
+
+## Adds every map document (`*.json`) in [param dir] to [param catalogue], each built by
+## [constant DATA_MAP_SCENE] with its path in `meta.doc`. A document that does not read is
+## left out with a WARN; an id already in the catalogue is left as it was, so a delivered map
+## can never replace a built-in one under the same name. Returns how many were added.
+static func add_map_docs(catalogue: DotMapCatalogue, dir: String) -> int:
+	if not DirAccess.dir_exists_absolute(dir):
+		return 0
+	var added := 0
+	var files := DirAccess.get_files_at(dir)
+	files.sort()
+	for file in files:
+		if not file.ends_with(".json"):
+			continue
+		var path := dir.path_join(file)
+		var read: DotResult = _data_map_script().read_doc(path)
+		if not read.ok:
+			DotLog.warn(CHANNEL, "a map document was left out", {"path": path, "why": read.error.message})
+			continue
+		var doc: Dictionary = read.value
+		var id := StringName(str(doc["id"]))
+		if catalogue.get_map(id) != null:
+			continue
+		var map := DotMapDef.new()
+		map.id = id
+		map.display_name = str(doc.get("name", String(id)))
+		map.kind = StringName(str(doc.get("map_kind", DotMapDef.KIND_SANDBOX)))
+		map.tier = int(doc.get("tier", 1))
+		map.author = str(doc.get("author", ""))
+		map.scene_path = PlaygroundPaths.rebase(DATA_MAP_SCENE)
+		map.meta["doc"] = path
+		catalogue.add(map)
+		added += 1
+	return added
+
+
+## `maps/pg_data.gd`, loaded when first wanted rather than preloaded: it extends the map
+## base, which preloads the player, and this file is preloaded by both.
+static func _data_map_script() -> GDScript:
+	return load(PlaygroundPaths.rebase("res://maps/pg_data.gd")) as GDScript
+
+
+## Adds the map documents in [param dir] to this game's live catalogue, and puts them in
+## the rotation. For a mounted maps pack: the module calls it with each dependency's mount
+## prefix on a server, the client with each pack the server told it to fetch.
+func add_map_directory(dir: String) -> int:
+	if maps == null or maps.catalogue == null:
+		return 0
+	var added := add_map_docs(maps.catalogue, dir)
+	if added > 0:
+		maps.rotation = DotMapRotation.of(maps.catalogue)
+		maps.rotation.cooldown = 1
+		DotLog.info(CHANNEL, "custom maps added", {"dir": dir, "maps": added})
+	return added
 
 
 func _prop_catalogue() -> DotPropCatalogue:
@@ -2008,6 +2075,10 @@ func _on_map_changed(map: DotMapDef, loaded: Node) -> void:
 	# and a guess inside a wall is a player who cannot move.
 	if loaded != null and loaded.has_method("configure"):
 		loaded.call("configure", map_seed(), DotRegistry.get_service(&"dot_random_source"))
+
+	# A map that is a document is told which one, for the same reason and in the same place.
+	if loaded != null and loaded.has_method("configure_doc"):
+		loaded.call("configure_doc", str(map.meta.get("doc", "")))
 
 	# A map that carries its own zones hands them over; one that ships a JSON file
 	# has already had it read by dot-map, into `maps.zones_json`. Both routes end

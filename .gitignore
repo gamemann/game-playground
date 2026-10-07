@@ -71,3 +71,7 @@ Thumbs.db
 /addons/dot_game
 /addons/dot_weapon
 /addons/zee_weapons
+
+# The custom sandbox maps are game-playground-maps, a repository and a pack of their own.
+# bootstrap-link: game-playground-maps/maps
+/maps/custom

@@ -1173,6 +1173,10 @@ What it does not model, on purpose, and each errs toward reporting: a jump is ju
 
 `PlaygroundModule` calls `DotModTools.clear_history()` from `DotMapSession.changed`. Every entry is a point on the map just freed, so `return Pat` after `map <id>` put Pat where they had stood on the previous map. `dedicated`'s live-tools section moves Pat, changes the map, asserts `return` has nowhere to put them, and changes it back (armed: Pat returned to a pg_surf_intro spot on pg_bhop_intro).
 
+## Custom maps are documents (game-playground-maps, 2026-10-07)
+
+`maps/pg_data.gd` (scene `maps/pg_data.tscn`) builds a map from a JSON document: boxes (centre, size, colour, an optional turn), a spawn and yaw, and the areas the survey may find unreached. `Playground.map_catalogue()` adds every document in `maps/custom` (game-playground-maps' `maps/`, linked by dot-bootstrap) as a `DotMapDef` with `meta.doc`; `_on_map_changed` calls `configure_doc` before anybody is spawned, `pg_generated`'s pattern. **Documents, not scripts**, because a map delivered in its own pack is mounted at another prefix and a script there that extends this game's map base by path is right in only one of the two places it runs. Delivered, the pack is a `dependencies` entry (a client builds the map too): `PlaygroundModule._add_delivered_maps` adds `<mount>/maps` from the game manager's dependency keys, and `PlaygroundClient` adds the same from `DotClientLink.content_extra`, both through `Playground.add_map_directory`, which also rebuilds the rotation. An id already in the catalogue is never replaced. `headless_playground`'s survey section surveys `CUSTOM_MAPS` (5 checks each) and its boot check counts them; `dedicated`'s map commands load `pgc_quarry` with `map`; `tools/screenshot.sh pgc_plots` / `pgc_quarry` renders them. The deploy wiring (a `tmc/playground_maps` pack in dot-server-deploy and the `dependencies` line) is written down in game-playground-maps' CLAUDE.md and not done.
+
 ## Maps are content, not projects
 
 Three maps, one game. See [dot-map's CLAUDE.md](../dot-map/CLAUDE.md) for why a
@@ -1219,11 +1223,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 730 checks, 41 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 740 checks, 41 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 329 checks, 37 sections
-godot --headless --path . res://examples/dedicated.tscn             # 242 checks, 27 sections
+godot --headless --path . res://examples/dedicated.tscn             # 243 checks, 27 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.

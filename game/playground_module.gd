@@ -122,6 +122,25 @@ func _module_version() -> String:
 	return "0.1.0"
 
 
+## The custom maps delivered beside this game: every pack its descriptor names, read for a
+## `maps/` directory where it is mounted (game-playground-maps is one). A client builds the
+## map too, so such a pack is a `dependencies` entry and every client fetches it; the client
+## adds the same directories from what the server told it to fetch. Duck-typed through the
+## manager, so a dot-server without the field simply offers the built-in maps.
+func _add_delivered_maps() -> void:
+	var games: Object = server.get("games") if server != null else null
+	if games == null:
+		return
+	var keys := PackedStringArray()
+	for method in ["current_dependencies", "current_server_dependencies"]:
+		if games.has_method(method):
+			keys.append_array(games.call(method))
+	for key in keys:
+		var parts := DotGameDescriptor.split_key(key)
+		var _added := game.add_map_directory(
+			DotCloudClient.mount_prefix_for(StringName(parts[0]), parts[1]).path_join("maps"))
+
+
 func _module_description() -> String:
 	return "Surf, bunny-hop and a sandbox: timers, maps, zones and props."
 
@@ -141,6 +160,8 @@ func _module_load() -> DotResult:
 			DotError.CODE_STATE,
 			"No Playground is registered. Create one before loading this module."
 		)
+
+	_add_delivered_maps()
 
 	var netted := _build_netcode()
 

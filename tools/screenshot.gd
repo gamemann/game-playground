@@ -35,21 +35,28 @@ func _initialize() -> void:
 	var index := args.find("--map")
 	var id := args[index + 1] if index >= 0 and index + 1 < args.size() else "pg_lobby"
 
-	if not MAPS.has(id):
-		push_error("no such map: %s. Known: %s" % [id, str(MAPS.keys())])
+	# A custom map (game-playground-maps, linked as maps/custom) is a document the shared
+	# data-map scene builds.
+	var custom := "res://maps/custom/%s.json" % id
+
+	if not MAPS.has(id) and not FileAccess.file_exists(custom):
+		push_error("no such map: %s. Known: %s and maps/custom/*.json" % [id, str(MAPS.keys())])
 		quit(1)
 		return
 
-	var scene: Resource = load(MAPS[id])
+	var scene: Resource = load(MAPS[id] if MAPS.has(id) else "res://maps/pg_data.tscn")
 
 	if not (scene is PackedScene):
-		push_error("%s is not a PackedScene" % MAPS[id])
+		push_error("%s is not a PackedScene" % MAPS.get(id, "pg_data"))
 		quit(1)
 		return
 
 	DirAccess.make_dir_recursive_absolute(OUT_DIR)
 
-	root.add_child((scene as PackedScene).instantiate())
+	var map_node := (scene as PackedScene).instantiate()
+	if not MAPS.has(id):
+		map_node.call("configure_doc", custom)
+	root.add_child(map_node)
 
 	# The map builds its own sun, but not a sky or any ambient light — a server has no
 	# use for either. Without them every surface facing away from the sun is pure black,
@@ -82,6 +89,16 @@ func _initialize() -> void:
 ## Angles per map, because a 200 m sandbox with two courses in opposite corners has
 ## nothing useful to say from one camera.
 func _shots_for(id: String) -> Array[Dictionary]:
+	if id == "pgc_plots":
+		return [
+			{"name": "pgc_plots", "from": Vector3(0.0, 70.0, 95.0), "at": Vector3(0.0, 0.0, -5.0)},
+			{"name": "pgc_plots_deck", "from": Vector3(-66.0, 5.7, -66.0), "at": Vector3(0.0, 0.0, 0.0)},
+		]
+	if id == "pgc_quarry":
+		return [
+			{"name": "pgc_quarry", "from": Vector3(55.0, 38.0, 85.0), "at": Vector3(0.0, -10.0, 0.0)},
+			{"name": "pgc_quarry_spawn", "from": Vector3(0.0, 1.7, 62.0), "at": Vector3(0.0, -10.0, 10.0)},
+		]
 	if id == "pg_bhop_intro":
 		# Two routes, and the frames have to show they ARE two: the main run down x = 0
 		# and the narrows six metres up at x = 28. An overview from straight above shows

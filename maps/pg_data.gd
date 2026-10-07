@@ -1,0 +1,189 @@
+extends "../game/playground_map.gd"
+
+const PlaygroundGeometry := preload("../game/playground_geometry.gd")
+
+## A map that is a document: the one scene every custom sandbox map is built by.
+##
+## [b]Why a document and not a script.[/b] The built-in maps are `_build()`s full of
+## constants, which is right for a map that ships inside this game. A map written for one
+## server and delivered beside the game is a different thing: it lives in another pack
+## (game-playground-maps), mounted at its own prefix, and a script there that `extends`
+## this game's map base by path names a path that is only right in one of the two places it
+## runs — the family's mount constraint. A JSON document of boxes is data: both packs can be
+## anywhere, a person can read it when a map will not load, and dot-map's catalogue lists it
+## without loading anything.
+##
+## The document ([constant FORMAT] 1):
+##
+## [codeblock]
+## {"format": 1, "kind": "playground_map", "id": "pgc_plots", "name": "Build Plots",
+##  "map_kind": "sandbox", "tier": 1, "author": "...",
+##  "spawn": [0, 1, 0], "spawn_yaw": 0,
+##  "boxes": [{"at": [x, y, z], "size": [x, y, z], "colour": "floor" | "#rrggbb",
+##             "turn": [ax, ay, az, degrees]}],
+##  "declared": [{"min": [x, y, z], "max": [x, y, z], "why": "..."}]}
+## [/codeblock]
+##
+## A box is centred on `at` (the [method PlaygroundGeometry.box] convention) and turned
+## about its own centre. `declared` is [method survey_declared]: ground only a noclip
+## reaches, with the reason.
+##
+## [b]Built by [method configure_doc], not in `_ready`[/b], for `pg_generated`'s reason:
+## dot-map instantiates the shared scene and adds it, and the document is only known from
+## the catalogue entry, which [Playground] hands over from its `map_changed` handler before
+## anybody is spawned.
+
+const CHANNEL := "playground.maps"
+
+const FORMAT := 1
+
+## The most boxes one map may hold. A map is a few hundred; past this it is a mistake or a
+## document meant to stall a server's load.
+const MAX_BOXES := 4000
+
+## How far from the origin anything may be, in metres. The wire's own extent is larger.
+const MAX_EXTENT := 2000.0
+
+const NAMED_COLOURS := {
+	"floor": PlaygroundGeometry.COLOUR_FLOOR,
+	"ramp": PlaygroundGeometry.COLOUR_RAMP,
+	"start": PlaygroundGeometry.COLOUR_START,
+	"end": PlaygroundGeometry.COLOUR_END,
+	"platform": PlaygroundGeometry.COLOUR_PLATFORM,
+	"boost": PlaygroundGeometry.COLOUR_BOOST,
+	"float": PlaygroundGeometry.COLOUR_FLOAT,
+}
+
+## The document this was built from, or empty before [method configure_doc].
+var doc: Dictionary = {}
+
+var _built := false
+var _declared: Array = []
+
+
+func _ready() -> void:
+	# Deliberately not `_build()`. See the class note.
+	pass
+
+
+## Reads [param path] and builds the map it describes. Idempotent. A document that does not
+## read leaves the fallback floor, so a broken custom map is a flat plate with a WARN rather
+## than a player falling through nothing.
+func configure_doc(path: String) -> DotResult:
+	if _built:
+		return DotResult.success(self)
+	_built = true
+
+	var read := read_doc(path)
+	if not read.ok:
+		DotLog.warn(CHANNEL, "a map document did not load; building a bare floor",
+			{"path": path, "why": read.error.message})
+		_build_fallback()
+		return read
+
+	doc = read.value
+	build_into(self, doc)
+	fallback_spawn = _vec(doc.get("spawn", [0, 1, 0]))
+	_declared = declared_of(doc)
+	return DotResult.success(self)
+
+
+## The yaw a player spawns facing, in degrees. Read by [Playground] beside the spawn.
+func spawn_yaw() -> float:
+	return float(doc.get("spawn_yaw", 0.0))
+
+
+func spawn_yaw_for(_track: int) -> float:
+	return spawn_yaw()
+
+
+func survey_declared() -> Array:
+	return _declared
+
+
+func _build_fallback() -> void:
+	PlaygroundGeometry.sun(self)
+	PlaygroundGeometry.box(self, Vector3(0.0, -0.5, 0.0), Vector3(40.0, 1.0, 40.0))
+	fallback_spawn = Vector3(0.0, 1.0, 0.0)
+
+
+# --- The document --------------------------------------------------------------
+
+## Reads and checks a map document.
+static func read_doc(path: String) -> DotResult:
+	if not FileAccess.file_exists(path):
+		return DotResult.fail(DotError.CODE_IO, "No map document at %s." % path)
+	var text := FileAccess.get_file_as_string(path)
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary):
+		return DotResult.fail(DotError.CODE_PARSE, "%s is not a JSON object." % path)
+	return validate(parsed)
+
+
+## Whether a document is one this builds. Every field is checked before anything is built,
+## so a bad map is refused whole rather than half drawn.
+static func validate(d: Dictionary) -> DotResult:
+	if int(d.get("format", 0)) != FORMAT or str(d.get("kind", "")) != "playground_map":
+		return DotResult.fail(DotError.CODE_VERSION,
+			"Not a playground map document of format %d." % FORMAT)
+	var id := str(d.get("id", ""))
+	if not id.is_valid_identifier():
+		return DotResult.fail(DotError.CODE_INVALID, "A map id must be an identifier, not \"%s\"." % id)
+	if not _is_vec(d.get("spawn")):
+		return DotResult.fail(DotError.CODE_INVALID, "Map %s has no spawn." % id)
+	var boxes: Variant = d.get("boxes")
+	if not (boxes is Array) or (boxes as Array).is_empty() or (boxes as Array).size() > MAX_BOXES:
+		return DotResult.fail(DotError.CODE_INVALID,
+			"Map %s needs between 1 and %d boxes." % [id, MAX_BOXES])
+	for i in (boxes as Array).size():
+		var b: Variant = boxes[i]
+		if not (b is Dictionary) or not _is_vec(b.get("at")) or not _is_vec(b.get("size")):
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d needs at and size." % [id, i])
+		var size := _vec(b["size"])
+		if size.x <= 0.0 or size.y <= 0.0 or size.z <= 0.0:
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d has no volume." % [id, i])
+		if _vec(b["at"]).length() > MAX_EXTENT:
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d is out of the world." % [id, i])
+		if b.has("turn") and not (b["turn"] is Array and (b["turn"] as Array).size() == 4):
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d's turn is [axis x, y, z, degrees]." % [id, i])
+	return DotResult.success(d)
+
+
+## Builds a checked document's boxes under [param parent].
+static func build_into(parent: Node3D, d: Dictionary) -> void:
+	PlaygroundGeometry.sun(parent)
+	for b: Dictionary in d.get("boxes", []):
+		var basis := Basis.IDENTITY
+		if b.has("turn"):
+			var t: Array = b["turn"]
+			var axis := Vector3(float(t[0]), float(t[1]), float(t[2]))
+			if axis.length() > 0.0:
+				basis = Basis(axis.normalized(), deg_to_rad(float(t[3])))
+		PlaygroundGeometry.box(parent, _vec(b["at"]), _vec(b["size"]), colour_of(b.get("colour", "floor")), basis)
+
+
+static func declared_of(d: Dictionary) -> Array:
+	var out: Array = []
+	for entry: Variant in d.get("declared", []):
+		if entry is Dictionary and _is_vec(entry.get("min")) and _is_vec(entry.get("max")):
+			var lo := _vec(entry["min"])
+			out.append({"box": AABB(lo, _vec(entry["max"]) - lo), "why": str(entry.get("why", ""))})
+	return out
+
+
+static func colour_of(value: Variant) -> Color:
+	var name := str(value)
+	if NAMED_COLOURS.has(name):
+		return NAMED_COLOURS[name]
+	if name.begins_with("#") and Color.html_is_valid(name):
+		return Color.html(name)
+	return PlaygroundGeometry.COLOUR_FLOOR
+
+
+static func _is_vec(v: Variant) -> bool:
+	return v is Array and (v as Array).size() == 3
+
+
+static func _vec(v: Variant) -> Vector3:
+	var a: Array = v
+	return Vector3(float(a[0]), float(a[1]), float(a[2]))

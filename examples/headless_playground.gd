@@ -55,7 +55,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 730
+const CHECKS := 740
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -728,14 +728,19 @@ func _test_boots() -> void:
 	_check(playground.props != null, "the prop spawner exists")
 	_check(playground.boards != null, "the leaderboards exist")
 
-	# Four: the sandbox, two courses, and `pg_generated` -- the one map in this family
-	# that is not written down. The count is asserted rather than the ids because a map
+	# Four built in: the sandbox, two courses, and `pg_generated` -- the one map in this
+	# family that is not written down -- and the custom maps game-playground-maps links in,
+	# each built by `pg_data`. The count is asserted rather than the ids because a map
 	# added and not registered is the failure this is here to catch, and a list of ids
 	# would be a second copy of `Playground.map_catalogue()`.
+	var data_maps := 0
+	for map: DotMapDef in playground.maps.catalogue.maps:
+		if map.meta.has("doc"):
+			data_maps += 1
 	_check(
-		playground.maps.catalogue.size() == 4,
-		"four maps are in the catalogue, one of them generated",
-		"%d" % playground.maps.catalogue.size()
+		playground.maps.catalogue.size() == 4 + CUSTOM_MAPS.size() and data_maps == CUSTOM_MAPS.size(),
+		"four maps built in and the custom ones beside them, one of them generated",
+		"%d in all, %d documents" % [playground.maps.catalogue.size(), data_maps]
 	)
 	_check(
 		playground.maps.catalogue.has(&"pg_generated"),
@@ -6396,7 +6401,38 @@ func _test_the_maps_are_surveyed() -> void:
 			"%s: and nowhere a spawn reaches is a place with no way out" % id,
 			"; ".join(found["trapped"]))
 
+	# The custom maps game-playground-maps delivers, linked in as `maps/custom`. Named rather
+	# than listed off the directory, so a checkout without the link fails here instead of
+	# surveying nothing and passing.
+	var data_script := load("res://maps/pg_data.gd") as GDScript
+	for id in CUSTOM_MAPS:
+		var path := "res://maps/custom/%s.json" % id
+		var map: Node3D = data_script.new()
+		var configured: DotResult = map.configure_doc(path)
+		_check(configured.ok, "%s: the document loads" % id, str(configured.error) if not configured.ok else "")
+		var spawns: Array[Vector3] = [map.fallback_spawn]
+		var declared: Array = map.survey_declared()
+		var started := Time.get_ticks_msec()
+		var found: Dictionary = PlaygroundMapSurvey.survey(map, DotTimerZoneSet.new(), spawns, declared)
+		map.free()
+		print("    %s: %d standable cells in %d regions, %d declared, %d falls into nothing, %d ms" % [
+			id, int(found["cells"]), int(found["regions"]), declared.size(),
+			int(found["void_falls"]), Time.get_ticks_msec() - started,
+		])
+		_check((found["spawnless"] as Array).is_empty(), "%s: the spawn stands on standable ground" % id,
+			", ".join(found["spawnless"]))
+		_check((found["slots"] as Array).is_empty(), "%s: no slot narrower than a player" % id,
+			"; ".join(found["slots"]))
+		_check((found["unreached"] as Array).is_empty(), "%s: nothing standable out of reach, but what it declares" % id,
+			"; ".join(found["unreached"]))
+		_check((found["trapped"] as Array).is_empty(), "%s: and no place with no way out" % id,
+			"; ".join(found["trapped"]))
+
 	_done()
+
+
+## game-playground-maps' documents this suite surveys. See `_test_the_maps_are_surveyed`.
+const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry"]
 
 
 ## A floor with one of everything on it: a 0.5 m slot between two walls, a platform 5 m

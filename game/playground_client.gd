@@ -235,6 +235,15 @@ func _ready() -> void:
 	playground.config_file = config_file
 	add_child(playground)
 
+	# Custom maps the server's game names as dependencies (game-playground-maps): fetched in
+	# the same content sync as this game, so mounted by now. Added before any map change can
+	# name one, which on a client is the HELLO still to come.
+	if link != null:
+		for key: Variant in link.get("content_extra") if link.get("content_extra") != null else []:
+			var parts := DotGameDescriptor.split_key(str(key))
+			var _added := playground.add_map_directory(
+				DotCloudClient.mount_prefix_for(StringName(parts[0]), parts[1]).path_join("maps"))
+
 	# The playground loads its own first map and this waits for it, rather than
 	# loading one here.
 	#

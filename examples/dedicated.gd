@@ -46,7 +46,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 27
-const CHECKS := 242
+const CHECKS := 243
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -578,6 +578,22 @@ func _test_map_commands() -> void:
 		"and `map <id>` changes it, through the game's own reset rather than the session",
 		String(game.maps.current.id)
 	)
+
+	# A custom map from game-playground-maps, through the same catalogue and the same command.
+	_run_command("map pgc_quarry")
+	for _i in range(10):
+		await get_tree().process_frame
+	var built: Node = game.maps.world
+	_check(
+		game.maps.current != null and game.maps.current.id == &"pgc_quarry"
+			and built != null and built.has_method("configure_doc") and str(built.get("doc").get("id", "")) == "pgc_quarry"
+			and built.get_child_count() > 20,
+		"a custom map loads through the catalogue, built from its document",
+		"%s, %d nodes" % [String(game.maps.current.id) if game.maps.current != null else "none", built.get_child_count() if built != null else -1]
+	)
+	_run_command("map pg_surf_intro")
+	for _i in range(10):
+		await get_tree().process_frame
 
 	var map_command: DotConCommand = server.console.find_command("map")
 	_check(map_command != null, "`map` is registered")
