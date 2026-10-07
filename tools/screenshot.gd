@@ -143,6 +143,12 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_islands_bridge", "from": Vector3(62.0, 9.7, 8.0), "at": Vector3(27.5, 13.0, 47.6)},
 			{"name": "pgc_islands_slide", "from": Vector3(22.0, 37.5, -56.0), "at": Vector3(52.0, 6.0, -6.0)},
 		]
+	if id == "pgc_site":
+		return [
+			{"name": "pgc_site", "from": Vector3(70.0, 45.0, 80.0), "at": Vector3(-5.0, 5.0, -10.0)},
+			{"name": "pgc_site_ramps", "from": Vector3(12.0, 8.0, -12.0), "at": Vector3(-8.0, 6.0, -28.0)},
+			{"name": "pgc_site_top", "from": Vector3(-36.0, 15.2, -14.0), "at": Vector3(-10.0, 12.0, -28.0)},
+		]
 	if id == "pgc_slopes":
 		return [
 			{"name": "pgc_slopes", "from": Vector3(95.0, 55.0, 85.0), "at": Vector3(10.0, 5.0, -10.0)},
