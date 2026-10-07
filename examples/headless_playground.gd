@@ -56,13 +56,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 780
+const CHECKS := 791
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 42
+const SECTIONS := 43
 
 var _passed := 0
 var _failed := 0
@@ -154,6 +154,7 @@ func _run() -> void:
 	await _test_the_float()
 	await _test_the_drop()
 	await _test_the_maps_are_surveyed()
+	await _test_a_maps_own_props()
 	await _test_the_client_boots()
 
 	print("")
@@ -6601,8 +6602,53 @@ func _test_the_maps_are_surveyed() -> void:
 	_done()
 
 
+## A map document's `props` and `wires` (2026-10-07): put down by the server on load, owned
+## by the map, furniture frozen and loose things loose, and the wires live.
+func _test_a_maps_own_props() -> void:
+	_section("a map's own props")
+
+	var changed: DotResult = await playground.change_map(&"pgc_town")
+	if not changed.ok:
+		_check(false, "pgc_town loads", changed.error.message)
+		_done()
+		return
+	await get_tree().physics_frame
+
+	var mine := playground.props.props_of(playground.MAP_OWNER)
+	var count := {}
+	for p: DotPropInstance in mine:
+		count[p.def.id] = int(count.get(p.def.id, 0)) + 1
+	_check(int(count.get(&"door", 0)) == 5 and int(count.get(&"button", 0)) == 10 and int(count.get(&"buggy", 0)) == 2,
+		"the map puts down its doors, buttons and cars", str(count))
+	var doors := mine.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"door")
+	var crates := mine.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"crate")
+	_check(doors.all(func(p: DotPropInstance) -> bool: return p.frozen) and crates.all(func(p: DotPropInstance) -> bool: return not p.frozen),
+		"furniture frozen, and the crates loose")
+
+	# The first house's outside button opens its door, through the wire the document names.
+	var buttons := mine.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"button")
+	var door: DotPropInstance = doors[0] if not doors.is_empty() else null
+	var button: DotPropInstance = buttons[0] if not buttons.is_empty() else null
+	if button != null:
+		var _pressed: Variant = playground.io.fire(button.instance_id, &"pressed")
+	for i in int(playground.DOOR_SECONDS * playground.tick_rate) + 16:
+		await get_tree().physics_frame
+	_check(door != null and playground.door_is_open(door.instance_id), "and a button opens the door it is wired to")
+	var turned := rad_to_deg((door.node as Node3D).global_basis.x.angle_to(Vector3.RIGHT)) if door != null else 0.0
+	_check(absf(turned - 90.0) < 3.0, "swinging a quarter turn from where the map stood it", "%.1f degrees" % turned)
+
+	# A document that names a prop this server lacks still loads, without it.
+	var entries := [{"id": "crate", "at": [0, 5, 0]}, {"id": "no_such_prop", "at": [2, 5, 0]}]
+	var placed := playground.spawn_map_props(entries, [])
+	_check(placed == 1, "and a prop the catalogue lacks is left out, not the map", "%d placed" % placed)
+
+	var back: DotResult = await playground.change_map(&"pg_lobby")
+	_check(back.ok and playground.props.props_of(playground.MAP_OWNER).is_empty(), "a map change takes its props with it")
+	_done()
+
+
 ## game-playground-maps' documents this suite surveys. See `_test_the_maps_are_surveyed`.
-const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry", "pgc_slopes"]
+const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry", "pgc_slopes", "pgc_town"]
 
 
 ## A floor with one of everything on it: a 0.5 m slot between two walls, a platform 5 m

@@ -1177,6 +1177,10 @@ What it does not model, on purpose, and each errs toward reporting: a jump is ju
 
 `maps/pg_data.gd` (scene `maps/pg_data.tscn`) builds a map from a JSON document: boxes (centre, size, colour, an optional turn), a spawn and yaw, and the areas the survey may find unreached. `Playground.map_catalogue()` adds every document in `maps/custom` (game-playground-maps' `maps/`, linked by dot-bootstrap) as a `DotMapDef` with `meta.doc`; `_on_map_changed` calls `configure_doc` before anybody is spawned, `pg_generated`'s pattern. **Documents, not scripts**, because a map delivered in its own pack is mounted at another prefix and a script there that extends this game's map base by path is right in only one of the two places it runs. Delivered, the pack is a `dependencies` entry (a client builds the map too): `PlaygroundModule._add_delivered_maps` adds `<mount>/maps` from the game manager's dependency keys, and `PlaygroundClient` adds the same from `DotClientLink.content_extra`, both through `Playground.add_map_directory`, which also rebuilds the rotation. An id already in the catalogue is never replaced. `headless_playground`'s survey section surveys `CUSTOM_MAPS` (5 checks each) and its boot check counts them; `dedicated`'s map commands load `pgc_quarry` with `map`; `tools/screenshot.sh pgc_plots` / `pgc_quarry` / `pgc_slopes` renders them. The deploy wiring (a `tmc/playground_maps` pack in dot-server-deploy and the `dependencies` line) is written down in game-playground-maps' CLAUDE.md and not done.
 
+### A map document can carry props (2026-10-07)
+
+`props` and `wires` are optional fields of the map document (`maps/pg_data.gd`; every older document still reads): catalogue ids with a position, a yaw, frozen (the default) or loose, and optional tint, scale and physics; wires join two of them by index through `DotPropIO`, as the tool gun's Wire mode does. `Playground.spawn_map_props` puts them down on the server in `_on_map_changed`, after `configure_doc` and before anybody spawns, owned by `Playground.MAP_OWNER` (`map`, never a player id, so no player's limits, undo or "remove mine" reach them; the remover still does where `touch_others_props` allows, which is what a sandbox map's props are for, and a map reload puts them back). The spawn rate limit is lifted for the load, because a map's props arrive in one frame. A door keeps the transform the map stood it at as its shut position. **An id this server's catalogue lacks is left out with a WARN, not the map**: a map is boxes first. A client gets them through the prop path like anything else. `headless_playground`'s *a map's own props* (6: pgc_town's doors, buttons and buggies, furniture frozen and crates loose, a button opening its wired door a quarter turn from where the map stood it, a missing id skipped, a map change clearing them); `tools/screenshot.gd` draws them from the real prop scene and catalogue.
+
 ## Maps are content, not projects
 
 Three maps, one game. See [dot-map's CLAUDE.md](../dot-map/CLAUDE.md) for why a
@@ -1223,7 +1227,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 780 checks, 42 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 791 checks, 43 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 335 checks, 38 sections

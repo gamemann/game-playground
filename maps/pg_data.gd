@@ -21,8 +21,19 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ##  "spawn": [0, 1, 0], "spawn_yaw": 0,
 ##  "boxes": [{"at": [x, y, z], "size": [x, y, z], "colour": "floor" | "#rrggbb",
 ##             "turn": [ax, ay, az, degrees]}],
-##  "declared": [{"min": [x, y, z], "max": [x, y, z], "why": "..."}]}
+##  "declared": [{"min": [x, y, z], "max": [x, y, z], "why": "..."}],
+##  "props": [{"id": "door", "at": [x, y, z], "yaw": 90, "frozen": true,
+##             "tint": "#rrggbb", "scale": 1.5,
+##             "physics": {"gravity": true, "weight": 1, "friction": 0.2, "bounce": 0}}],
+##  "wires": [{"from": 0, "out": "pressed", "to": 1, "in": "toggle"}]}
 ## [/codeblock]
+##
+## `props` and `wires` are optional (2026-10-07), so every older document still reads. A prop
+## is a catalogue id, put down by the SERVER when the map loads ([method map_props]) and owned
+## by nobody in particular (`Playground.MAP_OWNER`): a door with a button beside it, a stack
+## of barrels, planks at the top of a slope. Frozen unless it says otherwise, because map
+## furniture that falls over on load is not furniture. A wire joins two of them by index
+## through dot-props' DotPropIO, exactly as the tool gun's Wire mode does.
 ##
 ## A box is centred on `at` (the [method PlaygroundGeometry.box] convention) and turned
 ## about its own centre. `declared` is [method survey_declared]: ground only a noclip
@@ -43,6 +54,9 @@ const MAX_BOXES := 4000
 
 ## How far from the origin anything may be, in metres. The wire's own extent is larger.
 const MAX_EXTENT := 2000.0
+
+## The most props one map may put down. Each is a rigid body on every client.
+const MAX_PROPS := 300
 
 const NAMED_COLOURS := {
 	"floor": PlaygroundGeometry.COLOUR_FLOOR,
@@ -101,6 +115,15 @@ func survey_declared() -> Array:
 	return _declared
 
 
+## The props this map puts down when it loads. See the class note; spawned by [Playground].
+func map_props() -> Array:
+	return doc.get("props", [])
+
+
+func map_wires() -> Array:
+	return doc.get("wires", [])
+
+
 func _build_fallback() -> void:
 	PlaygroundGeometry.sun(self)
 	PlaygroundGeometry.box(self, Vector3(0.0, -0.5, 0.0), Vector3(40.0, 1.0, 40.0))
@@ -146,6 +169,25 @@ static func validate(d: Dictionary) -> DotResult:
 			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d is out of the world." % [id, i])
 		if b.has("turn") and not (b["turn"] is Array and (b["turn"] as Array).size() == 4):
 			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d's turn is [axis x, y, z, degrees]." % [id, i])
+	var props: Variant = d.get("props", [])
+	if not (props is Array) or (props as Array).size() > MAX_PROPS:
+		return DotResult.fail(DotError.CODE_INVALID, "Map %s: props is a list of at most %d." % [id, MAX_PROPS])
+	for i in (props as Array).size():
+		var p: Variant = props[i]
+		if not (p is Dictionary) or str(p.get("id", "")) == "" or not _is_vec(p.get("at")):
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: prop %d needs an id and at." % [id, i])
+		if _vec(p["at"]).length() > MAX_EXTENT:
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: prop %d is out of the world." % [id, i])
+	var wires: Variant = d.get("wires", [])
+	if not (wires is Array):
+		return DotResult.fail(DotError.CODE_INVALID, "Map %s: wires is a list." % id)
+	for i in (wires as Array).size():
+		var w: Variant = wires[i]
+		var count := (props as Array).size()
+		if not (w is Dictionary) or int(w.get("from", -1)) < 0 or int(w.get("from", -1)) >= count \
+				or int(w.get("to", -1)) < 0 or int(w.get("to", -1)) >= count \
+				or str(w.get("out", "")) == "" or str(w.get("in", "")) == "":
+			return DotResult.fail(DotError.CODE_INVALID, "Map %s: wire %d needs from, out, to and in, naming props." % [id, i])
 	return DotResult.success(d)
 
 

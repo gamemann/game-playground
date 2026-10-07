@@ -20,6 +20,7 @@ const PlaygroundVehicle := preload("playground_vehicle.gd")
 const PlaygroundVehicles := preload("playground_vehicles.gd")
 const PlaygroundWeaponDef := preload("weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("playground_weapons.gd")
+const ToolPhysprop := preload("tools/tool_physprop.gd")
 
 ## The playground: a sandbox with a surf map, a bhop map and a lobby, timed and
 ## ranked, with props you can spawn and a physics gun to move them with.
@@ -792,6 +793,77 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		DotPhysGun.set_frozen(prop, true)
 		reclassify_prop(prop.node, true, false)
 		_doors[prop.instance_id] = {"open": false, "t": 0.0, "base": (prop.node as Node3D).global_transform}
+
+
+## Who a map's own props belong to. Not a player id (one is `u<n>`), so no player's limits,
+## undo or "remove mine" reach them, and the map change that clears every prop clears them.
+const MAP_OWNER := &"map"
+
+
+## Puts down a map document's props and wires them (`maps/pg_data.gd`). An id this server's
+## catalogue lacks is skipped with a WARN rather than refusing the map: a map is boxes first,
+## and a missing barrel is not a reason to have no floor. Returns how many were placed.
+func spawn_map_props(entries: Array, wires: Array) -> int:
+	if props == null or entries.is_empty():
+		return 0
+
+	# The spawn rate limit is for players clicking; a map's props arrive in one frame.
+	var interval := props.limits.spawn_interval if props.limits != null else 0.0
+	if props.limits != null:
+		props.limits.spawn_interval = 0.0
+
+	var placed: Array = []
+	var missing: PackedStringArray = []
+
+	for entry: Dictionary in entries:
+		var at: Array = entry.get("at", [0, 0, 0])
+		var where := Vector3(float(at[0]), float(at[1]), float(at[2]))
+		var prop := props.spawn(StringName(str(entry.get("id", ""))), MAP_OWNER, where)
+		placed.append(prop)
+
+		if prop == null:
+			missing.append(str(entry.get("id", "")))
+			continue
+
+		var node := prop.node as Node3D
+		node.global_transform = Transform3D(Basis(Vector3.UP, deg_to_rad(float(entry.get("yaw", 0.0)))), where)
+
+		if node.has_method("set_size_scale") and entry.has("scale"):
+			var _s: float = node.call("set_size_scale", float(entry["scale"]))
+		if node.has_method("set_tint") and Color.html_is_valid(str(entry.get("tint", ""))):
+			node.call("set_tint", Color.html(str(entry["tint"])))
+		if entry.get("physics") is Dictionary and node is RigidBody3D and node.has_method("refresh_mass"):
+			var physics: Dictionary = entry["physics"]
+			ToolPhysprop._apply(node as RigidBody3D, bool(physics.get("gravity", true)),
+				clampf(float(physics.get("weight", 1.0)), 0.1, 10.0),
+				clampf(float(physics.get("friction", 1.0)), 0.0, 2.0),
+				clampf(float(physics.get("bounce", 0.0)), 0.0, 1.0))
+
+		if bool(entry.get("frozen", true)):
+			DotPhysGun.set_frozen(prop, true)
+			reclassify_prop(node, true, false)
+		elif node is RigidBody3D:
+			DotPhysGun.set_frozen(prop, false)
+			reclassify_prop(node, false, false)
+
+		# A door keeps its shut transform from where the map put it, not from the spawn point.
+		if _doors.has(prop.instance_id):
+			(_doors[prop.instance_id] as Dictionary)["base"] = node.global_transform
+
+	if props.limits != null:
+		props.limits.spawn_interval = interval
+
+	for wire: Dictionary in wires:
+		var from: DotPropInstance = placed[int(wire["from"])]
+		var to: DotPropInstance = placed[int(wire["to"])]
+		if from != null and to != null and io != null:
+			var _linked := io.link(from.instance_id, StringName(str(wire["out"])), to.instance_id, StringName(str(wire["in"])))
+
+	if not missing.is_empty():
+		DotLog.warn(CHANNEL, "a map named props this server does not have; left them out",
+			{"missing": ", ".join(missing)})
+
+	return placed.filter(func(p: Variant) -> bool: return p != null).size()
 
 
 ## Puts a spawned body on the layer that matches what it is.
@@ -2079,6 +2151,11 @@ func _on_map_changed(map: DotMapDef, loaded: Node) -> void:
 	# A map that is a document is told which one, for the same reason and in the same place.
 	if loaded != null and loaded.has_method("configure_doc"):
 		loaded.call("configure_doc", str(map.meta.get("doc", "")))
+
+	# Its props, once the boxes they stand on exist. The server's only: a client gets them
+	# through the prop path like anything else anybody spawned.
+	if authoritative and loaded != null and loaded.has_method("map_props"):
+		spawn_map_props(loaded.call("map_props"), loaded.call("map_wires"))
 
 	# A map that carries its own zones hands them over; one that ships a JSON file
 	# has already had it read by dot-map, into `maps.zones_json`. Both routes end

@@ -1,6 +1,7 @@
 extends SceneTree
 
 const PlaygroundPresentation := preload("../game/playground_presentation.gd")
+const PlaygroundSpawnables := preload("../game/playground_spawnables.gd")
 
 ## Renders a playground map to PNGs so a person can look at it.
 ##
@@ -57,6 +58,8 @@ func _initialize() -> void:
 	if not MAPS.has(id):
 		map_node.call("configure_doc", custom)
 	root.add_child(map_node)
+	if map_node.has_method("map_props"):
+		_draw_props(map_node.call("map_props"))
 
 	# The map builds its own sun, but not a sky or any ambient light — a server has no
 	# use for either. Without them every surface facing away from the sun is pure black,
@@ -86,6 +89,32 @@ func _initialize() -> void:
 	_shots = _shots_for(id)
 
 
+## A document map's props, drawn from the real prop scene and catalogue where the server
+## would put them, frozen: a picture of the map without its doors and cars is not the map.
+func _draw_props(entries: Array) -> void:
+	var catalogue := PlaygroundSpawnables.catalogue()
+	for entry: Dictionary in entries:
+		var def := catalogue.get_prop(StringName(str(entry.get("id", ""))))
+		if def == null:
+			continue
+		var scene := load(def.scene_path) as PackedScene
+		if scene == null:
+			continue
+		var body := scene.instantiate()
+		root.add_child(body)
+		if body.has_method("configure"):
+			body.call("configure", def)
+		if body is RigidBody3D:
+			(body as RigidBody3D).freeze = true
+		var at: Array = entry["at"]
+		(body as Node3D).position = Vector3(float(at[0]), float(at[1]), float(at[2]))
+		(body as Node3D).rotation = Vector3(0.0, deg_to_rad(float(entry.get("yaw", 0.0))), 0.0)
+		if entry.has("scale") and body.has_method("set_size_scale"):
+			var _s: float = body.call("set_size_scale", float(entry["scale"]))
+		if Color.html_is_valid(str(entry.get("tint", ""))) and body.has_method("set_tint"):
+			body.call("set_tint", Color.html(str(entry["tint"])))
+
+
 ## Angles per map, because a 200 m sandbox with two courses in opposite corners has
 ## nothing useful to say from one camera.
 func _shots_for(id: String) -> Array[Dictionary]:
@@ -98,6 +127,13 @@ func _shots_for(id: String) -> Array[Dictionary]:
 		return [
 			{"name": "pgc_quarry", "from": Vector3(55.0, 38.0, 85.0), "at": Vector3(0.0, -10.0, 0.0)},
 			{"name": "pgc_quarry_spawn", "from": Vector3(0.0, 1.7, 62.0), "at": Vector3(0.0, -10.0, 10.0)},
+		]
+	if id == "pgc_town":
+		return [
+			{"name": "pgc_town", "from": Vector3(-95.0, 60.0, 95.0), "at": Vector3(0.0, 0.0, 0.0)},
+			{"name": "pgc_town_street", "from": Vector3(-3.0, 1.7, 75.0), "at": Vector3(-30.0, 2.0, 35.0)},
+			{"name": "pgc_town_door", "from": Vector3(-45.0, 1.8, 12.0), "at": Vector3(-45.0, 1.5, 22.0)},
+			{"name": "pgc_town_plaza", "from": Vector3(25.0, 6.0, 20.0), "at": Vector3(45.0, 0.0, 45.0)},
 		]
 	if id == "pgc_slopes":
 		return [
