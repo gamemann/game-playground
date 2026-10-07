@@ -122,11 +122,13 @@ func _shots_for(id: String) -> Array[Dictionary]:
 		return [
 			{"name": "pgc_plots", "from": Vector3(0.0, 70.0, 95.0), "at": Vector3(0.0, 0.0, -5.0)},
 			{"name": "pgc_plots_deck", "from": Vector3(-66.0, 5.7, -66.0), "at": Vector3(0.0, 0.0, 0.0)},
+			{"name": "pgc_plots_depot", "from": Vector3(-2.0, 2.5, -6.0), "at": Vector3(7.0, 0.5, 0.0)},
 		]
 	if id == "pgc_quarry":
 		return [
 			{"name": "pgc_quarry", "from": Vector3(55.0, 38.0, 85.0), "at": Vector3(0.0, -10.0, 0.0)},
 			{"name": "pgc_quarry_spawn", "from": Vector3(0.0, 1.7, 62.0), "at": Vector3(0.0, -10.0, 10.0)},
+			{"name": "pgc_quarry_hut", "from": Vector3(-26.0, -3.0, 6.0), "at": Vector3(-40.0, -5.0, 0.0)},
 		]
 	if id == "pgc_town":
 		return [
@@ -134,6 +136,12 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_town_street", "from": Vector3(-3.0, 1.7, 75.0), "at": Vector3(-30.0, 2.0, 35.0)},
 			{"name": "pgc_town_door", "from": Vector3(-45.0, 1.8, 12.0), "at": Vector3(-45.0, 1.5, 22.0)},
 			{"name": "pgc_town_plaza", "from": Vector3(25.0, 6.0, 20.0), "at": Vector3(45.0, 0.0, 45.0)},
+		]
+	if id == "pgc_islands":
+		return [
+			{"name": "pgc_islands", "from": Vector3(0.0, 85.0, 110.0), "at": Vector3(0.0, 10.0, 0.0)},
+			{"name": "pgc_islands_bridge", "from": Vector3(62.0, 9.7, 8.0), "at": Vector3(27.5, 13.0, 47.6)},
+			{"name": "pgc_islands_slide", "from": Vector3(22.0, 37.5, -56.0), "at": Vector3(52.0, 6.0, -6.0)},
 		]
 	if id == "pgc_slopes":
 		return [
