@@ -46,7 +46,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 27
-const CHECKS := 240
+const CHECKS := 242
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -1926,6 +1926,14 @@ func _test_saved_builds() -> void:
 	_check(_said(said, "put down") and game.props.props_of(&"u81").size() == 2, "`pg_load tower` puts it back", " | ".join(said))
 	said = _run_as(session, "pg_load nothing")
 	_check(_said(said, "no build called"), "a build they never saved is refused by name", " | ".join(said))
+
+	# The Q menu's Builds tab asks over the wire; the module answers the same as the commands.
+	var summaries: Array = module.get("builds").call("summaries", PlaygroundPlatform.key_for_session(server, session))
+	_check(summaries.size() == 1 and summaries[0]["name"] == "tower" and int(summaries[0]["props"]) == 2,
+		"the Builds tab is sent what pg_builds lists", str(summaries))
+	game.props.clear_player(&"u81")
+	module.get("bridge").build_load_requested.emit(session.peer_id, "tower")
+	_check(game.props.props_of(&"u81").size() == 2, "and a click on it puts it down, as pg_load does")
 	said = _run_as(session, "pg_build_delete tower")
 	_check(_said(said, "deleted") and not _said(_run_as(session, "pg_builds"), "tower"), "and `pg_build_delete` takes it away", " | ".join(said))
 

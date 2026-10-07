@@ -56,7 +56,7 @@ game/
   playground_module.gd   the DotServer bridge: every console command
   playground_client.gd   one local player, a camera, a HUD, the keys. Not headless
   playground_player.gd   the bridge: movement, timer, style, tools
-  playground_spawn_menu.gd  the Q menu: three tabs, categories, search, icon cards
+  playground_spawn_menu.gd  the Q menu: five tabs (props, entities, weapons, tools, builds), categories, search, icon cards
   playground_icons.gd    icons drawn from a definition, because this ships no art
   playground_spawnables.gd  the catalogue, and what "kind" a definition is
   playground_prop.gd     one prop, built from its DotPropDef. One scene, fourteen props
@@ -1219,11 +1219,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 723 checks, 41 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 730 checks, 41 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 326 checks, 36 sections
-godot --headless --path . res://examples/dedicated.tscn             # 240 checks, 27 sections
+godot --headless --path . res://examples/headless_net.tscn          # 329 checks, 37 sections
+godot --headless --path . res://examples/dedicated.tscn             # 242 checks, 27 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
@@ -1791,7 +1791,9 @@ The **Machines** category (`PlaygroundSpawnables._machines`): a button (says `pr
 
 ## Saved builds (2026-10-06)
 
-`pg_save <name>`, `pg_load <name>`, `pg_builds` and `pg_build_delete <name>` (chat or console, as a player). `PlaygroundBuilds` captures everything the player owns relative to where they stand and the way they face, and puts a build down around whoever loads it, the way they face. **A document of catalogue ids**, because what it must survive is the catalogue changing: each prop's id, position and turn, frozen, the tool gun's size and paint; the welds, ropes and no-collides between them (a weld to the world as a point in the build's frame); and the wires between them. A build that names a prop the server lacks is refused, naming every missing id. **Whole or not at all**: the player's per-kind limits are asked first, so a build that will not fit puts nothing down, and a spawn the spawner refuses mid-way takes back what this load placed. At most 200 props. Kept as JSON in `user://builds/<statistics key>/<name>.json` (a name is letters, digits, `-`, `_`, up to 32; a key is made safe for a folder). `headless_playground`'s *saved builds* (10: capture, save, a path refused as a name, loaded back where they stood to the centimetre, painted/resized/frozen, the weld and the wire, loaded elsewhere and turned, a missing prop refused by name, a limit putting nothing down; armed by not re-making welds), `dedicated`'s *saved builds* (5, through a real console as a player). Not yet: a Q-menu tab of builds, and "custom props" (one welded group saved and listed in the menu); both want the menu, not the format.
+`pg_save <name>`, `pg_load <name>`, `pg_builds` and `pg_build_delete <name>` (chat or console, as a player). `PlaygroundBuilds` captures everything the player owns relative to where they stand and the way they face, and puts a build down around whoever loads it, the way they face. **A document of catalogue ids**, because what it must survive is the catalogue changing: each prop's id, position and turn, frozen, the tool gun's size and paint; the welds, ropes and no-collides between them (a weld to the world as a point in the build's frame); and the wires between them. A build that names a prop the server lacks is refused, naming every missing id. **Whole or not at all**: the player's per-kind limits are asked first, so a build that will not fit puts nothing down, and a spawn the spawner refuses mid-way takes back what this load placed. At most 200 props. Kept as JSON in `user://builds/<statistics key>/<name>.json` (a name is letters, digits, `-`, `_`, up to 32; a key is made safe for a folder). `headless_playground`'s *saved builds* (13: capture, save, a path refused as a name, loaded back where they stood to the centimetre, painted/resized/frozen, the weld and the wire, loaded elsewhere and turned, a missing prop refused by name, a limit putting nothing down, the summaries the menu is sent, custom-prop detection, the list's wire round trip; armed by not re-making welds), `dedicated`'s *saved builds* (7, through a real console as a player, plus the module answering the menu's ask).
+
+**The Q menu's Builds tab (2026-10-07).** Opening it asks the server (`ARM_PROP` sub-kind `ARM_BUILDS`; the Ask enum is full) and the server answers with `Kind.BUILDS` to that peer only: each build's name, size and whether it is a **custom prop** — `PlaygroundBuilds.is_custom_prop`, two or more props all welded into one piece (union-find over the welds) and nothing welded to the world. Asked every time the tab opens, so a build saved with `pg_save` a minute ago is there. A click sends `ARM_LOAD_BUILD` with the name and the module does exactly what `pg_load` does, answering with a HUD notice. Custom props are a category of their own on the tab ("Custom props"), loaded like any build. Builds are the server's, so offline the tab says to join one. `headless_playground`'s spawn-menu section (4 more: the tab asks, shows each build, a click asks by name, the custom-prop category), `headless_net`'s *saved builds over the wire* (3), `tools/screenshot_menus.sh` renders `menu_builds.png`. Cards have no icon yet: a build has no single shape to draw.
 
 ## Things deliberately not here
 

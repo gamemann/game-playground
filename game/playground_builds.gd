@@ -290,6 +290,56 @@ func names(key: String) -> PackedStringArray:
 	return out
 
 
+## Every build [param key] has, as `{name, props, custom}`, for the Q menu's Builds tab.
+## `custom` is a build that is ONE welded piece — see [method is_custom_prop]. A file that
+## no longer reads is left out rather than listed as something that cannot be loaded.
+func summaries(key: String) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for name in names(key):
+		var doc := load_build(key, name)
+		if not doc.ok:
+			continue
+		var props: Array = doc.value.get("props", [])
+		out.append({"name": name, "props": props.size(), "custom": is_custom_prop(doc.value)})
+	return out
+
+
+## Whether a build is a custom prop: two or more props, every one welded to the rest, and
+## nothing welded to the world. Such a build moves as one thing, so the menu offers it as a
+## thing to spawn rather than a place to rebuild; it is loaded exactly like any build.
+static func is_custom_prop(doc: Dictionary) -> bool:
+	var props: Array = doc.get("props", [])
+	var count := props.size()
+	if count < 2:
+		return false
+	var parent: Array[int] = []
+	for i in count:
+		parent.append(i)
+	# Union-find over the welds; `parent` is an Array, so the lambda shares it.
+	var find := func(i: int) -> int:
+		while parent[i] != i:
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		return i
+	for link: Variant in doc.get("links", []):
+		if not (link is Dictionary) or str(link.get("kind", "")) != "weld":
+			continue
+		var a := int(link.get("a", -1))
+		var b := int(link.get("b", -1))
+		if b < 0:
+			return false
+		if a < 0 or a >= count or b >= count:
+			continue
+		var ra: int = find.call(a)
+		var rb: int = find.call(b)
+		parent[ra] = rb
+	var root: int = find.call(0)
+	for i in count:
+		if find.call(i) != root:
+			return false
+	return true
+
+
 func delete(key: String, name: String) -> DotResult:
 	var checked := _checked_name(name)
 	if not checked.ok:

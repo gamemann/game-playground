@@ -56,9 +56,12 @@ enum Kind {
 	## ever to the owner's peer — see [PlaygroundInventoryNet]. Last, for the same reason.
 	INVENTORY,
 	## A grenade or a rocket: launched (everything a client needs to fly its own copy), or
-	## gone off (where, and how big). One kind with a sub-kind, [enum ProjectileTell]. Last,
-	## because a kind is its index on the wire; an older client refuses it as unknown.
+	## gone off (where, and how big). One kind with a sub-kind, [enum ProjectileTell].
 	PROJECTILE,
+	## The builds this player has saved, for the Q menu's Builds tab: a name, a size and
+	## whether it is one welded piece (a custom prop). Sent only to the player who asked.
+	## Last, because a kind is its index on the wire; an older client refuses it as unknown.
+	BUILDS,
 }
 
 ## What a [constant Kind.PROJECTILE] event says.
@@ -410,6 +413,10 @@ const ARM_TOOL := 1
 const ARM_NPC_WEAPON := 2
 ## Put this weapon on the ground in front of me: id is the weapon.
 const ARM_SPAWN_WEAPON := 3
+## Send me my saved builds (a [constant Kind.BUILDS] back). id is empty.
+const ARM_BUILDS := 4
+## Put my saved build down in front of me: id is its name.
+const ARM_LOAD_BUILD := 5
 
 ## The most a tool's settings may take on the wire. A tool has a handful of numbers.
 const TOOL_SETTINGS_BYTES := 512
@@ -961,3 +968,35 @@ static func read_detonate(r: DotNetReader) -> Dictionary:
 	var at := r.read_vector3_range(-WORLD_EXTENT, WORLD_EXTENT, POS_BITS)
 	var radius := r.read_float32()
 	return {"serial": serial, "position": at, "radius": radius, "ok": r.ok()}
+
+
+# --- BUILDS --------------------------------------------------------------------
+
+## The most builds one list carries. A player with more sees the first this many by name;
+## `pg_builds` in chat still lists all of them.
+const BUILDS_MAX := 64
+const BUILD_NAME_BYTES := 32
+
+
+## [param list] is [method PlaygroundBuilds.summaries]: `{name, props, custom}` each.
+static func write_builds(list: Array) -> PackedByteArray:
+	var w := _w()
+	var count := mini(list.size(), BUILDS_MAX)
+	w.write_uint(count, 7)
+	for i in count:
+		var entry: Dictionary = list[i]
+		w.write_string(str(entry.get("name", "")), BUILD_NAME_BYTES)
+		w.write_uint(clampi(int(entry.get("props", 0)), 0, 255), 8)
+		w.write_bool(bool(entry.get("custom", false)))
+	return w.to_bytes()
+
+
+static func read_builds(r: DotNetReader) -> Dictionary:
+	var out: Array[Dictionary] = []
+	var count := mini(r.read_uint(7), BUILDS_MAX)
+	for i in count:
+		var name := r.read_string(BUILD_NAME_BYTES)
+		var props := r.read_uint(8)
+		var custom := r.read_bool()
+		out.append({"name": name, "props": props, "custom": custom})
+	return {"builds": out, "ok": r.ok()}

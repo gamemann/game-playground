@@ -55,7 +55,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 723
+const CHECKS := 730
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -696,6 +696,21 @@ func _test_saved_builds() -> void:
 	_check(not too_big.ok and playground.props.props_of(&"builder").is_empty(), "a build past the player's limit puts nothing down",
 		too_big.error.message if not too_big.ok else "")
 	playground.props.limits.group_limits = old_limits
+
+	# What the Q menu's Builds tab is sent: a name, a size, and whether it is a custom prop.
+	var listed := store.summaries("key:1")
+	_check(listed.size() == 1 and listed[0]["name"] == "bridge" and int(listed[0]["props"]) == 6
+		and not bool(listed[0]["custom"]), "a player's builds list with their sizes", str(listed))
+	var two_welded := {"props": [{"id": "plank"}, {"id": "plank"}], "links": [{"kind": "weld", "a": 0, "b": 1}]}
+	var to_world := {"props": [{"id": "plank"}, {"id": "plank"}], "links": [{"kind": "weld", "a": 0, "b": 1}, {"kind": "weld", "a": 1, "b": -1}]}
+	var roped := {"props": [{"id": "plank"}, {"id": "plank"}], "links": [{"kind": "rope", "a": 0, "b": 1}]}
+	_check(PlaygroundBuilds.is_custom_prop(two_welded) and not PlaygroundBuilds.is_custom_prop(to_world)
+		and not PlaygroundBuilds.is_custom_prop(roped) and not PlaygroundBuilds.is_custom_prop({"props": [{"id": "plank"}]}),
+		"a custom prop is two or more props welded into one piece, and nothing welded to the world")
+	var wire := PlaygroundEvents.write_builds([{"name": "bridge", "props": 6, "custom": false}, {"name": "car", "props": 9, "custom": true}])
+	var back := PlaygroundEvents.read_builds(DotNetReader.new(wire))
+	_check(bool(back["ok"]) and (back["builds"] as Array).size() == 2 and back["builds"][1]["name"] == "car"
+		and bool(back["builds"][1]["custom"]) and int(back["builds"][0]["props"]) == 6, "and the list crosses the wire whole", str(back))
 
 	DotPaths.remove_tree(store.directory)
 	playground.props.clear_player(&"builder")
@@ -3418,6 +3433,24 @@ func _test_spawn_menu() -> void:
 		menu.shown().size() == prop_count,
 		"and going back to props shows all of them again"
 	)
+
+	# The Builds tab asks the server when it opens, and a click asks for that build.
+	var opened := [0]
+	var picked: Array[String] = []
+	menu.builds_opened.connect(func() -> void: opened[0] += 1)
+	menu.build_chosen.connect(func(build_name: String) -> void: picked.append(build_name))
+	menu.show_tab(PlaygroundSpawnMenu.Tab.BUILDS)
+	await get_tree().process_frame
+	_check(opened[0] == 1 and menu.shown().is_empty(), "the Builds tab asks for the player's builds, and shows none until they come")
+	menu.set_builds([{"name": "bridge", "props": 6, "custom": false}, {"name": "car", "props": 9, "custom": true}])
+	await get_tree().process_frame
+	_check(str(menu.shown()) == str([&"bridge", &"car"]), "then shows each one", str(menu.shown()))
+	menu.card_for(&"car").pressed.emit()
+	_check(str(picked) == str(["car"]), "and clicking one asks for it by name")
+	_check(menu._categories_for_tab() == PackedStringArray(["builds", "custom props"]),
+		"with a welded build filed as a custom prop")
+	menu.show_tab(PlaygroundSpawnMenu.Tab.PROPS)
+	await get_tree().process_frame
 
 	_check(
 		PlaygroundSpawnMenu.name_of_tool(&"phys") == "physics gun"

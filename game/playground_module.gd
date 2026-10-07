@@ -495,6 +495,8 @@ func _build_extras() -> DotResult:
 	bridge.voice_requested.connect(_on_voice_requested)
 	bridge.vote_requested.connect(_on_vote_requested)
 	bridge.loadout_requested.connect(_on_loadout_requested)
+	bridge.builds_requested.connect(_on_builds_requested)
+	bridge.build_load_requested.connect(_on_build_load_requested)
 	bridge.peer_admitted.connect(_on_peer_admitted)
 	services.command_entered.connect(_on_chat_command)
 	services.chat.message_accepted.connect(_on_chat_accepted)
@@ -1816,6 +1818,35 @@ var builds := PlaygroundBuilds.new()
 
 func _build_key(ctx: DotCmdContext) -> String:
 	return PlaygroundPlatform.key_for_session(server, ctx.session) if server != null and ctx.session != null else ""
+
+
+## The Q menu's Builds tab opened: send this player what they have saved.
+func _on_builds_requested(peer_id: int) -> void:
+	var session := server.session_of(peer_id) if server != null else null
+	if session == null:
+		return
+	bridge.send_builds(peer_id, builds.summaries(PlaygroundPlatform.key_for_session(server, session)))
+
+
+## A card on the Builds tab was clicked: the same as `pg_load <name>`, asked over the wire.
+func _on_build_load_requested(peer_id: int, build_name: String) -> void:
+	var session := server.session_of(peer_id) if server != null else null
+	if session == null:
+		return
+	var found: Variant = game.players.get(StringName("u%d" % session.userid))
+	if not (found is PlaygroundPlayer):
+		return
+	var player: PlaygroundPlayer = found
+	var doc := builds.load_build(PlaygroundPlatform.key_for_session(server, session), build_name)
+	if not doc.ok:
+		bridge.tell_notice(peer_id, doc.error.message)
+		return
+	var state := player.controller.state
+	var placed := builds.place(game, player.player_id, doc.value, state.position, state.yaw)
+	if not placed.ok:
+		bridge.tell_notice(peer_id, placed.error.message)
+		return
+	bridge.tell_notice(peer_id, "Put down \"%s\": %d props." % [build_name, int(placed.value)])
 
 
 func _cmd_save(ctx: DotCmdContext) -> void:

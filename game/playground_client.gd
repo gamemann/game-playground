@@ -421,6 +421,10 @@ func _build_netcode() -> DotResult:
 	# wire instead; connecting both would draw a line twice on a server running the old
 	# path and once on one running the new.
 	bridge.chat_received.connect(_on_chat_wire)
+	bridge.builds_received.connect(func(list: Array) -> void:
+		if menu != null:
+			menu.set_builds(list)
+	)
 	bridge.combat_received.connect(_on_combat)
 	bridge.match_received.connect(_on_match)
 	bridge.progress_received.connect(_on_progress)
@@ -809,6 +813,8 @@ func _build_screens() -> void:
 	menu.tool_mode_chosen.connect(_on_tool_mode_chosen)
 	menu.npc_weapon_chosen.connect(_on_npc_weapon_chosen)
 	menu.weapon_spawn_requested.connect(_on_weapon_spawn_requested)
+	menu.builds_opened.connect(_on_builds_opened)
+	menu.build_chosen.connect(_on_build_chosen)
 
 	var registered := screens.register(menu)
 	DotLog.result(CHANNEL, "registering the spawn menu", registered)
@@ -1787,6 +1793,20 @@ func _on_weapon_spawn_requested(weapon_id: StringName) -> void:
 
 	var at := player.eye_position() + player.aim_direction() * SPAWN_REACH
 	playground.props.spawn(Playground.pickup_id_of(weapon_id), player_id, at)
+
+
+## The Builds tab opened. Builds are the server's, so offline there are none to show.
+func _on_builds_opened() -> void:
+	menu.builds_available = bridge != null
+	if bridge != null:
+		bridge.ask_builds()
+	else:
+		menu.set_builds([])
+
+
+func _on_build_chosen(build_name: String) -> void:
+	if bridge != null:
+		bridge.ask_load_build(build_name)
 
 
 func _on_menu_action(action: StringName) -> void:

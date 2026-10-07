@@ -84,6 +84,12 @@ signal say_requested(peer_id: int, channel_id: StringName, text: String)
 ## Somebody typed a vote command, or published a loadout. Server side.
 signal vote_requested(peer_id: int, token: String)
 signal loadout_requested(peer_id: int, pairs: Array)
+## A player asked for their saved builds, or to put one down. Server side; the module owns
+## the builds and answers with [method send_builds].
+signal builds_requested(peer_id: int)
+signal build_load_requested(peer_id: int, name: String)
+## This player's saved builds arrived, for the Q menu. Client side.
+signal builds_received(builds: Array)
 
 ## A voice frame arrived. Server side; the payload is unparsed and must not be trusted —
 ## [method DotVoiceRouter.relay] is what stamps the speaker.
@@ -1200,6 +1206,10 @@ func _on_request(message: DotNetMessage) -> void:
 					var weapon_id := arm["id"] as StringName
 					if game.weapon_def(weapon_id) != null:
 						_spawn_for(id, Playground.pickup_id_of(weapon_id))
+				PlaygroundEvents.ARM_BUILDS:
+					builds_requested.emit(peer_id)
+				PlaygroundEvents.ARM_LOAD_BUILD:
+					build_load_requested.emit(peer_id, String(arm["id"]))
 				_:
 					var prop_id := arm["id"] as StringName
 					if game.props.catalogue != null and game.props.catalogue.get_prop(prop_id) != null:
@@ -1464,6 +1474,31 @@ func ask_spawn_weapon(weapon_id: StringName) -> void:
 	))
 
 
+## Asks for this player's saved builds; [signal builds_received] answers. Client side.
+func ask_builds() -> void:
+	_ask(PlaygroundEvents.Ask.ARM_PROP, PlaygroundEvents.write_arm(
+		PlaygroundEvents.ARM_BUILDS, &""
+	))
+
+
+## Puts one of this player's saved builds down in front of them. Client side.
+func ask_load_build(build_name: String) -> void:
+	_ask(PlaygroundEvents.Ask.ARM_PROP, PlaygroundEvents.write_arm(
+		PlaygroundEvents.ARM_LOAD_BUILD, StringName(build_name)
+	))
+
+
+## A player's saved builds, to that player. Server side.
+func send_builds(peer_id: int, list: Array) -> void:
+	_tell(peer_id, PlaygroundEvents.Kind.BUILDS, PlaygroundEvents.write_builds(list))
+
+
+## A line on one player's HUD. Server side.
+func tell_notice(peer_id: int, text: String) -> void:
+	_tell(peer_id, PlaygroundEvents.Kind.NOTICE,
+		PlaygroundEvents.write_notice(player_for_peer(peer_id), text))
+
+
 func _drop_toy(session_id: int) -> void:
 	var toy: PlaygroundWeapon = _toy_of.get(session_id)
 	if toy != null:
@@ -1624,6 +1659,10 @@ func _on_event(message: DotNetMessage) -> void:
 				inventory_net.on_tell(reader)
 		PlaygroundEvents.Kind.PROJECTILE:
 			_apply_projectile(reader)
+		PlaygroundEvents.Kind.BUILDS:
+			var listed := PlaygroundEvents.read_builds(reader)
+			if bool(listed["ok"]):
+				builds_received.emit(listed["builds"])
 
 
 # --- Projectiles ---------------------------------------------------------------

@@ -57,6 +57,7 @@ enum Tab {
 	ENTITIES,
 	WEAPONS,
 	TOOLS,
+	BUILDS,
 }
 
 ## A prop or an entity was clicked. The client turns this into a spawn request.
@@ -82,8 +83,21 @@ signal npc_weapon_chosen(weapon_id: StringName)
 ## Right click on a weapon: put one on the ground rather than in hand.
 signal weapon_spawn_requested(weapon_id: StringName)
 
+## The Builds tab opened: ask the server for this player's builds, then [method set_builds].
+signal builds_opened()
+
+## A saved build was clicked: put it down in front of the player.
+signal build_chosen(build_name: String)
+
 ## What the props and entities tabs are built from. Set before the first push.
 var catalogue: DotPropCatalogue = null
+
+## This player's saved builds, `{name, props, custom}` each — what the server last sent.
+## Kept by the server, never by the client: a build outlives the machine it was made on.
+var builds: Array = []
+
+## Whether anything can answer for builds. Off with no server (offline play keeps none).
+var builds_available: bool = true
 
 ## What the weapons tab is built from.
 var weapons: Array[PlaygroundWeaponDef] = []
@@ -204,6 +218,7 @@ func _build_header() -> Control:
 	_tabs.add_tab("Entities")
 	_tabs.add_tab("Weapons")
 	_tabs.add_tab("Tools")
+	_tabs.add_tab("Builds")
 	_tabs.tab_changed.connect(_on_tab_changed)
 	header.add_child(_tabs)
 
@@ -429,7 +444,19 @@ func _on_tab_changed(index: int) -> void:
 	if _search_box != null:
 		_search_box.text = ""
 
+	# Asked every time the tab opens rather than once: a build saved a minute ago with
+	# `pg_save` should be on the tab the next time it is looked at.
+	if _tab == Tab.BUILDS:
+		builds_opened.emit()
+
 	refresh()
+
+
+## What the server says this player has saved. Redraws the tab when it is open.
+func set_builds(list: Array) -> void:
+	builds = list
+	if _tab == Tab.BUILDS and _grid != null:
+		refresh()
 
 
 func _rebuild_categories() -> void:
@@ -451,6 +478,15 @@ func _categories_for_tab() -> PackedStringArray:
 
 	if _tab == Tab.TOOLS:
 		return PackedStringArray()
+
+	if _tab == Tab.BUILDS:
+		var kinds := PackedStringArray()
+		for entry: Dictionary in builds:
+			var category := String(_category_of(entry))
+			if not kinds.has(category):
+				kinds.append(category)
+		kinds.sort()
+		return kinds
 
 	var seen := {}
 
@@ -498,6 +534,8 @@ func _rebuild_grid() -> void:
 
 		if _tab == Tab.WEAPONS:
 			card = _weapon_card(entry as PlaygroundWeaponDef)
+		elif _tab == Tab.BUILDS:
+			card = _build_card(entry as Dictionary)
 		elif _tab == Tab.TOOLS:
 			card = _tool_card(entry as Object)
 		else:
@@ -511,7 +549,9 @@ func _rebuild_grid() -> void:
 	if _empty != null:
 		_empty.visible = visible_now.is_empty()
 		_empty.text = (
-			"Nothing matches '%s'." % _search if _search != "" else "Nothing here."
+			"Nothing matches '%s'." % _search if _search != ""
+			else _builds_empty_text() if _tab == Tab.BUILDS
+			else "Nothing here."
 		)
 
 
@@ -586,6 +626,28 @@ func _weapon_card(def: PlaygroundWeaponDef) -> Button:
 		)
 
 	return card
+
+
+## A saved build. A custom prop (one welded piece) reads as a thing; a build as a place.
+func _build_card(entry: Dictionary) -> Button:
+	var build_name := str(entry.get("name", ""))
+	var custom := bool(entry.get("custom", false))
+	var card := _card(
+		null,
+		build_name,
+		"%s\n%s · %d props\nClick to put it down in front of you." % [
+			build_name, "Custom prop, welded as one" if custom else "Saved build", int(entry.get("props", 0)),
+		]
+	)
+	card.pressed.connect(func() -> void: build_chosen.emit(build_name))
+	card.set_meta(&"entry", StringName(build_name))
+	return card
+
+
+func _builds_empty_text() -> String:
+	if not builds_available:
+		return "Builds are kept by a server. Join one to save and load them."
+	return "No saved builds yet. Build something, then type pg_save <name> in chat."
 
 
 func _tool_card(mode: Object) -> Button:
@@ -736,6 +798,9 @@ func _all_in_tab() -> Array:
 	if _tab == Tab.WEAPONS:
 		return weapons
 
+	if _tab == Tab.BUILDS:
+		return builds
+
 	if _tab == Tab.TOOLS:
 		return _tools()
 
@@ -770,6 +835,8 @@ func _count_in_category(category: StringName) -> int:
 
 
 func _category_of(entry: Variant) -> StringName:
+	if entry is Dictionary:
+		return &"custom props" if bool((entry as Dictionary).get("custom", false)) else &"builds"
 	if entry is Object and not (entry is PlaygroundWeaponDef) and not (entry is DotPropDef):
 		return &"tools"
 	return (
@@ -780,6 +847,8 @@ func _category_of(entry: Variant) -> StringName:
 
 
 func _name_of(entry: Variant) -> String:
+	if entry is Dictionary:
+		return str((entry as Dictionary).get("name", ""))
 	if entry is Object and not (entry is PlaygroundWeaponDef) and not (entry is DotPropDef):
 		return str((entry as Object).get("display_name"))
 	return (
@@ -790,6 +859,8 @@ func _name_of(entry: Variant) -> String:
 
 
 func _id_of(entry: Variant) -> StringName:
+	if entry is Dictionary:
+		return StringName(str((entry as Dictionary).get("name", "")))
 	if entry is Object and not (entry is PlaygroundWeaponDef) and not (entry is DotPropDef):
 		return (entry as Object).get("id")
 	return (
@@ -922,6 +993,8 @@ func _rebuild_footer() -> void:
 			verb = "Click to equip, right click to drop one"
 		Tab.TOOLS:
 			verb = "Click a tool, then use it with the tool gun"
+		Tab.BUILDS:
+			verb = "Click to put a build down in front of you"
 
 	_footer.text = "   ·   ".join(PackedStringArray([
 		verb,

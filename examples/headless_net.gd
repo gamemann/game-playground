@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 326
+const CHECKS := 329
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 36
+const SECTIONS := 37
 
 var _passed := 0
 var _failed := 0
@@ -168,6 +168,7 @@ func _run() -> void:
 		# Spawns a platform and takes it out again; nothing after it but the leave.
 		await _test_riding_over_the_wire()
 		await _test_button_over_the_wire()
+		await _test_builds_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -783,6 +784,44 @@ func _exchange() -> void:
 ##
 ## That is this family's own "a test that passes for the wrong reason", reached by the
 ## one route a sandbox has and a shooter does not.
+## The Q menu's Builds tab: the list is asked for and sent back, and a click asks for one
+## build by name. The module answers both (dedicated's saved builds); this is the wire.
+func _test_builds_over_the_wire() -> void:
+	_section("saved builds over the wire")
+
+	var asked: Array = []
+	var loads: Array = []
+	var on_asked := func(peer_id: int) -> void: asked.append(peer_id)
+	var on_load := func(peer_id: int, build_name: String) -> void: loads.append([peer_id, build_name])
+	var got: Array = []
+	var on_list := func(list: Array) -> void: got.append(list)
+	_server_bridge.builds_requested.connect(on_asked)
+	_server_bridge.build_load_requested.connect(on_load)
+	_client_bridge.builds_received.connect(on_list)
+
+	_client_bridge.ask_builds()
+	_exchange()
+	await _steps(2)
+	_check(asked == [CLIENT_PEER], "the client's Builds tab asks the server", str(asked))
+
+	_server_bridge.send_builds(CLIENT_PEER, [{"name": "bridge", "props": 6, "custom": false}, {"name": "car", "props": 9, "custom": true}])
+	_exchange()
+	await _steps(2)
+	var list: Array = got[0] if not got.is_empty() else []
+	_check(list.size() == 2 and list[1]["name"] == "car" and bool(list[1]["custom"]),
+		"and the list it sends back arrives whole", str(got))
+
+	_client_bridge.ask_load_build("car")
+	_exchange()
+	await _steps(2)
+	_check(loads == [[CLIENT_PEER, "car"]], "a click asks for that build by name", str(loads))
+
+	_server_bridge.builds_requested.disconnect(on_asked)
+	_server_bridge.build_load_requested.disconnect(on_load)
+	_client_bridge.builds_received.disconnect(on_list)
+	_done()
+
+
 func _step(command: DotFpsCommand = null) -> void:
 	_tick += 1
 	_client_net.clock.advance(1.0 / float(maxi(_client_game.tick_rate, 1)))

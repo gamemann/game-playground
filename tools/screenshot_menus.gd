@@ -69,6 +69,12 @@ func _initialize() -> void:
 		# all three kinds of control — two sliders and a row of colour swatches.
 		{"id": &"spawn_menu", "file": "menu_tools.png", "tab": PlaygroundSpawnMenu.Tab.TOOLS, "mode": &"balloon"},
 		{"id": &"spawn_menu", "file": "menu_entities.png", "tab": PlaygroundSpawnMenu.Tab.ENTITIES},
+		# The Builds tab with a list as a server would send it: two builds and a custom prop.
+		{"id": &"spawn_menu", "file": "menu_builds.png", "tab": PlaygroundSpawnMenu.Tab.BUILDS, "builds": [
+			{"name": "bridge", "props": 6, "custom": false},
+			{"name": "watchtower", "props": 41, "custom": false},
+			{"name": "go_kart", "props": 9, "custom": true},
+		]},
 		{"id": &"pause", "file": "menu_pause.png"},
 		{"id": &"settings", "file": "menu_settings.png"},
 	]
@@ -100,6 +106,8 @@ func _process(_delta: float) -> bool:
 		if shot.has("tab") and _menu != null:
 			if shot.has("mode"):
 				_menu.tool_mode = shot["mode"]
+			if shot.has("builds"):
+				_menu.builds = shot["builds"]
 			_menu.show_tab(shot["tab"])
 
 	if _wait > 0:
