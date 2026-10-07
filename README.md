@@ -21,12 +21,13 @@ Hold **Q** to open the spawn menu. Clicking something in it spawns it, and the m
 | **Props** | Planks, panels, beams and pillars to build with; crates and barrels; balls from a beach ball to a boulder; and buttons, levers and doors |
 | **Entities** | NPCs. One wanders, one chases you, one hops, one spins, a hunter, and soldiers and rebels that carry weapons. Soldiers fight players and rebels; rebels fight soldiers and follow you |
 | **Weapons** | A launcher that fires props, a remover, an impulse gun, and the twenty-seven weapons of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons). Right click a weapon in the menu to drop it on the ground |
-| **Tools** | The tool gun: inflate, colour, remove, weld, no-collide, rope, balloon, physical properties, wire, and giving an NPC a weapon |
+| **Tools** | The tool gun: inflate, colour, remove, weld, no-collide, rope, balloon, physical properties, wire, giving an NPC a weapon, and editing a selected prop |
 
 Some of what you can do:
 
 - **Pick props up** with the physics gun and freeze them in place, or punt them with the gravity gun. You can pick other players up too (`pg_pickup`).
 - **Ride props.** Stand on a moving prop and it carries you.
+- **Edit a prop.** Pick the tool gun's *Edit properties* mode and click a prop. It gets an outline, and the Tools tab shows its size, colour, freeze, gravity, weight, friction and bounce. Change any of them and the prop changes as you drag. Right click lets go; **R** puts it back as it was spawned.
 - **Wire things up.** Use the tool gun's wire mode to connect a button or lever to a door, then press it with **F**.
 - **Save what you built** with `pg_save <name>` and load it again later with `pg_load <name>`.
 - **Break things** when the server has `pg_destruction 1`: crates and planks break apart and barrels explode.

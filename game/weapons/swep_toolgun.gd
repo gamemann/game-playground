@@ -1,7 +1,8 @@
 extends "playground_weapon.gd"
 
 ## The tool gun: one weapon, many modes — inflate and deflate, paint, remove, weld, rope,
-## no-collide, balloons, physical properties, arming an NPC.
+## no-collide, balloons, physical properties, arming an NPC, wiring, and editing a
+## selected prop.
 ##
 ## [b]The gun does the parts every mode shares, once.[/b] It traces where the player is
 ## pointing, decides whether they may touch what they hit, and hands the mode a hit. A mode
@@ -27,12 +28,13 @@ const ToolBalloon := preload("../tools/tool_balloon.gd")
 const ToolPhysprop := preload("../tools/tool_physprop.gd")
 const ToolNpcWeapon := preload("../tools/tool_npc_weapon.gd")
 const ToolWire := preload("../tools/tool_wire.gd")
+const ToolEdit := preload("../tools/tool_edit.gd")
 const PlaygroundLimits := preload("../playground_limits.gd")
 
 ## Every mode, in the order the menu shows them.
 const MODES := [
 	ToolResize, ToolColour, ToolRemover, ToolWeld, ToolNocollide, ToolRope,
-	ToolBalloon, ToolPhysprop, ToolNpcWeapon, ToolWire,
+	ToolBalloon, ToolPhysprop, ToolNpcWeapon, ToolWire, ToolEdit,
 ]
 
 ## The balloon this gun ties on. Hidden from the menu: a balloon is the tool's, not a prop.

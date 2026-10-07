@@ -4,6 +4,7 @@ const Playground := preload("../game/playground.gd")
 const PlaygroundConfig := preload("../game/playground_config.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
 const PlaygroundHud := preload("../game/playground_hud.gd")
+const PlaygroundClient := preload("../game/playground_client.gd")
 
 ## Renders the sandbox in first person and in third, so a person can look at both.
 ##
@@ -116,6 +117,9 @@ func _process(_delta: float) -> bool:
 			{"name": "admin_beacon_wall", "third": false, "beacon": true, "wall": true},
 			{"name": "admin_blind", "third": false, "blind": true},
 			{"name": "hud_creative", "third": false, "creative": true},
+			# The tool gun's edit mode: three crates ahead, the middle one selected, painted and
+			# half again as big, with the box the client draws round a selection.
+			{"name": "edit_selection", "third": false, "edit": true},
 			{"name": "body_standing", "third": false, "other": true},
 			{"name": "rider_seated", "third": false, "other": true, "seated": true},
 		]
@@ -157,6 +161,8 @@ func _process(_delta: float) -> bool:
 			(_player.get_node("Camera") as Camera3D).make_current()
 
 		_arrange_admin(shot)
+		if bool(shot.get("edit", false)):
+			_arrange_edit()
 		_player.creative = bool(shot.get("creative", false))
 		_hud.visible = shot.has("clock") or shot.has("beacon") or shot.has("blind") or shot.has("creative")
 		if shot.has("clock"):
@@ -218,6 +224,38 @@ func _arrange_admin(shot: Dictionary) -> void:
 			_wall = null
 
 	_player.blinded = bool(shot.get("blind", false))
+
+
+## Three crates in a row ahead of the camera, the middle one selected by the edit mode.
+func _arrange_edit() -> void:
+	if _other != null:
+		_other.teleport(_player.controller.state.position + Vector3(0, 0, 60), 0.0)
+	var flat := _player.aim_direction()
+	flat.y = 0.0
+	flat = flat.normalized() if flat.length() > 0.01 else Vector3.FORWARD
+	var side := flat.cross(Vector3.UP)
+	var ahead := _player.controller.state.position + flat * 5.0 + Vector3.UP * 0.6
+	var picked: Node3D = null
+	var reasons: Array = []
+	var on_refused := func(_p: StringName, _id: StringName, reason: String) -> void: reasons.append(reason)
+	_game.props.refused.connect(on_refused)
+	for i in 3:
+		# One owner each: the spawner's rate limit refuses a second spawn by one player in the
+		# same frame ("Slow down."), which no player clicking can reach.
+		var crate := _game.props.spawn(&"crate", StringName("builder%d" % i), ahead + side * (float(i) - 1.0) * 2.4)
+		if crate == null:
+			print("[views] crate %d refused: %s" % [i, str(reasons)])
+			continue
+		DotPhysGun.set_frozen(crate, true)
+		if i == 1:
+			picked = crate.node as Node3D
+			picked.call("set_size_scale", 1.5)
+			picked.call("set_tint", Color.html("e05252"))
+			picked.global_position += Vector3.UP * 0.25
+	if picked != null:
+		var box := PlaygroundClient.selection_box()
+		picked.add_child(box)
+		PlaygroundClient.fit_selection_box(box, picked)
 
 
 func _capture(shot_name: String) -> void:

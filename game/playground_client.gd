@@ -52,6 +52,8 @@ const LINK_SERVICE := &"dot_client_link"
 const TOOL_PHYS := &"phys"
 const TOOL_GRAV := &"grav"
 const TOOLGUN := &"toolgun"
+## The tool gun mode that edits a selected prop (`game/tools/tool_edit.gd`).
+const EDIT_MODE := &"edit"
 
 ## How long Q may be held before releasing it closes the menu.
 ##
@@ -141,6 +143,11 @@ var selected_prop: StringName = &"crate"
 ## The tool gun mode and its settings, as last picked on the Q menu's tools tab.
 var tool_mode: StringName = &"resize"
 var tool_mode_settings: Dictionary = {}
+
+## The prop the tool gun's edit mode has selected — this client's own copy of it, the mirror
+## when connected — or null. Highlighted by [member _selection_box].
+var edit_target: Node3D = null
+var _selection_box: MeshInstance3D = null
 
 ## Which tool is in hand: [constant TOOL_PHYS], [constant TOOL_GRAV], or a weapon id.
 var tool: StringName = TOOL_PHYS
@@ -433,6 +440,10 @@ func _build_netcode() -> DotResult:
 	bridge.builds_received.connect(func(list: Array) -> void:
 		if menu != null:
 			menu.set_builds(list)
+	)
+	bridge.selection_received.connect(func(state: Dictionary) -> void:
+		_adopt_selection(bridge.mirror_of(int(state["net_id"])), str(state["name"]),
+			state["settings"], str(state["refused"]))
 	)
 	bridge.combat_received.connect(_on_combat)
 	bridge.match_received.connect(_on_match)
@@ -924,6 +935,7 @@ func _process(_delta: float) -> void:
 		_present_tool_beam(eye, forward)
 
 	var _bodies := present_frame(net, playground)
+	_fit_selection_box()
 
 	# After the interpolation, so a remote player's marker is placed where this frame
 	# draws them rather than where the last frame did.
@@ -1568,7 +1580,100 @@ func _secondary_up() -> void:
 ## An empty message is a refusal the player has already been told about through
 ## another route — `DotPropSpawner.refused`, which the HUD is listening to — and
 ## printing it again would put the same line on screen twice.
+## The tool gun's edit mode picked [param node] (null: nothing), and these are its properties.
+## They go into the Q menu as the edit mode's settings, so the next slider moved starts from
+## what the prop is rather than from whatever the menu last held.
+func _adopt_selection(node: Node3D, prop_name: String, settings: Dictionary, refused: String) -> void:
+	var before: Node3D = edit_target
+
+	if menu != null and not settings.is_empty():
+		menu.set_tool_settings(EDIT_MODE, settings)
+	if tool_mode == EDIT_MODE and not settings.is_empty():
+		tool_mode_settings = settings.duplicate()
+
+	edit_target = node if node != null and is_instance_valid(node) else null
+
+	if edit_target != before or _selection_box == null:
+		_clear_selection_box()
+	if menu != null:
+		menu.set_edit_target(prop_name if edit_target != null else "")
+
+	if edit_target != null and _selection_box == null:
+		_selection_box = selection_box()
+		edit_target.add_child(_selection_box)
+		_fit_selection_box()
+
+	if hud == null:
+		return
+	if refused != "":
+		hud.notice(refused)
+	elif edit_target != null and edit_target != before:
+		hud.notice("Editing %s. Hold Q: its properties are on the Tools tab." % (prop_name if prop_name != "" else "a prop"))
+	elif edit_target == null and before != null:
+		hud.notice("Nothing selected.")
+
+
+## An outline round the selected prop, so a player can tell which of twenty identical crates
+## the sliders are moving.
+##
+## [b]An outline, not a see-through box over it.[/b] The first version was a translucent fill
+## drawn over the prop, and its render showed a crate painted red reading as pink — in the one
+## mode whose sliders include the colour. Here only the back faces of a slightly larger box are
+## drawn, so the rim shows round the silhouette and the prop's own faces are left alone.
+static func selection_box() -> MeshInstance3D:
+	var box := MeshInstance3D.new()
+	box.name = "EditSelection"
+	box.mesh = BoxMesh.new()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(0.35, 0.85, 1.0)
+	material.cull_mode = BaseMaterial3D.CULL_FRONT
+	box.material_override = material
+	box.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return box
+
+
+## Sized to the prop's mesh every frame, because a resize rebuilds that mesh — on a client,
+## when the snapshot carrying the new size arrives, which is after the selection did.
+func _fit_selection_box() -> void:
+	if _selection_box == null:
+		return
+	if not is_instance_valid(_selection_box) or edit_target == null or not is_instance_valid(edit_target):
+		_selection_box = null
+		edit_target = null
+		return
+	if tool != TOOLGUN or tool_mode != EDIT_MODE:
+		_clear_selection_box()
+		return
+	fit_selection_box(_selection_box, edit_target)
+
+
+## Sizes [param box], a child of [param target], to the target's drawn mesh. Static so a
+## render tool draws exactly what the game does.
+static func fit_selection_box(box: MeshInstance3D, target: Node3D) -> void:
+	var mesh := target.get_node_or_null("Mesh") as MeshInstance3D
+	if mesh == null or mesh.mesh == null:
+		return
+	var bounds := mesh.get_aabb()
+	(box.mesh as BoxMesh).size = bounds.size * 1.08 + Vector3.ONE * 0.08
+	box.transform = Transform3D(Basis(), mesh.transform * bounds.get_center())
+
+
+func _clear_selection_box() -> void:
+	if _selection_box != null and is_instance_valid(_selection_box):
+		_selection_box.queue_free()
+	_selection_box = null
+
+
 func _report(result: DotResult) -> void:
+	# The edit mode answers a click with what it selected. Offline that is the prop's own
+	# node; connected the same report arrives as a SELECTION event instead.
+	if result.ok and result.value is Dictionary and (result.value as Dictionary).has("settings"):
+		var report: Dictionary = result.value
+		_adopt_selection(report.get("node") as Node3D, str(report.get("name", "")),
+			report.get("settings", {}), str(report.get("refused", "")))
+		return
+
 	if result.ok or hud == null or result.error.message == "":
 		return
 
@@ -1764,6 +1869,7 @@ func _on_tool_chosen(tool_id: StringName) -> void:
 ## it is not already in hand, and is told the mode — this client's own offline, the
 ## server's otherwise (which keeps the choice for the next tool gun it hands out too).
 func _on_tool_mode_chosen(mode: StringName, settings: Dictionary) -> void:
+	var switched := mode != tool_mode or tool != TOOLGUN
 	tool_mode = mode
 	tool_mode_settings = settings
 
@@ -1774,12 +1880,22 @@ func _on_tool_mode_chosen(mode: StringName, settings: Dictionary) -> void:
 		bridge.ask_tool_mode(mode, settings)
 	elif weapon != null and weapon.has_method("set_mode"):
 		_report(weapon.call("set_mode", mode, settings))
+		# Offline the edit lands here and now; what the prop became goes back to the menu.
+		var current: Object = weapon.call("current") if weapon.has_method("current") else null
+		if current != null and current.has_method("selection_report"):
+			var report: Dictionary = current.call("selection_report")
+			_adopt_selection(report.get("node") as Node3D, str(report.get("name", "")),
+				report.get("settings", {}), str(report.get("refused", "")))
+
+	if switched:
+		_clear_selection_box()
 
 	_sync_hud()
 
-	# What the three buttons now do. Said once, on the change: a tool gun whose left click
-	# means something different from a minute ago is a tool gun nobody can use blind.
-	if hud != null and menu != null:
+	# What the three buttons now do. Said once, on the change rather than on every setting:
+	# a tool gun whose left click means something different from a minute ago is a tool gun
+	# nobody can use blind, and a slider dragged across the edit panel is not a new tool.
+	if switched and hud != null and menu != null:
 		for each in menu.call("_tools"):
 			if each.get("id") == mode:
 				hud.notice("%s   %s" % [str(each.get("display_name")), "   ".join(each.call("help_lines"))])

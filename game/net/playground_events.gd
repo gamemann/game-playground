@@ -62,6 +62,10 @@ enum Kind {
 	## whether it is one welded piece (a custom prop). Sent only to the player who asked.
 	## Last, because a kind is its index on the wire; an older client refuses it as unknown.
 	BUILDS,
+	## The prop this player's tool gun has selected to edit, and its properties as the edit
+	## mode's settings, so the Q menu shows what the prop IS. Net id 0 is "nothing selected".
+	## Sent only to the player whose gun it is. Last, for the same reason.
+	SELECTION,
 }
 
 ## What a [constant Kind.PROJECTILE] event says.
@@ -1000,3 +1004,32 @@ static func read_builds(r: DotNetReader) -> Dictionary:
 		var custom := r.read_bool()
 		out.append({"name": name, "props": props, "custom": custom})
 	return {"builds": out, "ok": r.ok()}
+
+
+# --- SELECTION -----------------------------------------------------------------
+
+## The settings travel as JSON, for the reason a tool's settings do on the way in: they are
+## one mode's schema, and a field-by-field encoding is a second copy of that schema.
+const SELECTION_SETTINGS_BYTES := 512
+
+
+static func write_selection(net_id: int, prop_name: String, settings: Dictionary, refused: String) -> PackedByteArray:
+	var w := _w()
+	w.write_varint(maxi(net_id, 0))
+	w.write_string(prop_name, NAME_BYTES)
+	w.write_string(JSON.stringify(settings), SELECTION_SETTINGS_BYTES)
+	w.write_string(refused, TEXT_BYTES)
+	return w.to_bytes()
+
+
+static func read_selection(r: DotNetReader) -> Dictionary:
+	var net_id := r.read_varint()
+	var prop_name := r.read_string(NAME_BYTES)
+	var text := r.read_string(SELECTION_SETTINGS_BYTES)
+	var refused := r.read_string(TEXT_BYTES)
+	if not r.ok():
+		return {"ok": false}
+	var parsed: Variant = JSON.parse_string(text) if text != "" else {}
+	if not (parsed is Dictionary):
+		return {"ok": false}
+	return {"net_id": net_id, "name": prop_name, "settings": parsed, "refused": refused, "ok": true}

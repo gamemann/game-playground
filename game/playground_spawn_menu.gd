@@ -112,6 +112,11 @@ var tool: StringName = &""
 var tool_mode: StringName = &"resize"
 var tool_settings: Dictionary = {}
 
+## What the tool gun's edit mode has selected, by name, or empty for nothing. Shown above the
+## edit mode's settings: a panel of sliders with no prop behind it moves nothing, and has to
+## say so.
+var edit_target_name: String = ""
+
 ## The NPC weapon picked on the entities tab: empty for each NPC's own.
 var npc_weapon: StringName = &""
 
@@ -698,6 +703,13 @@ func _rebuild_settings() -> void:
 	help.modulate = Color(1, 1, 1, 0.7)
 	_settings_box.add_child(help)
 
+	if tool_mode == &"edit":
+		var target := Label.new()
+		target.text = ("Selected: %s" % edit_target_name) if edit_target_name != "" \
+			else "Nothing selected. Click a prop with the tool gun."
+		target.modulate = Color(0.55, 0.85, 1.0) if edit_target_name != "" else Color(1, 1, 1, 0.55)
+		_settings_box.add_child(target)
+
 	var values: Dictionary = tool_settings.get(tool_mode, {})
 
 	for field in mode.call("schema"):
@@ -782,6 +794,37 @@ func _setting_row(field: Dictionary, values: Dictionary) -> Control:
 			row.add_child(list)
 
 	return row
+
+
+## Puts [param values] in as tool [param id]'s settings without sending them anywhere: what the
+## server says a selected prop IS, for the edit mode. The panel is redrawn only when something
+## differs from what it shows, because the server answers every change a slider makes and a
+## redraw mid-drag would take the slider out from under the mouse.
+## Says which prop the edit mode has selected (empty: none), redrawing the panel if it is up.
+func set_edit_target(prop_name: String) -> void:
+	if prop_name == edit_target_name:
+		return
+	edit_target_name = prop_name
+	if tool_mode == &"edit":
+		_rebuild_settings()
+
+
+func set_tool_settings(id: StringName, values: Dictionary) -> void:
+	var had: Dictionary = tool_settings.get(id, {})
+	var differs := false
+
+	for key in values:
+		var a: Variant = had.get(key)
+		var b: Variant = values[key]
+		if (a is float or a is int) and (b is float or b is int):
+			differs = differs or not is_equal_approx(float(a), float(b))
+		else:
+			differs = differs or str(a) != str(b)
+
+	tool_settings[id] = values.duplicate()
+
+	if differs and id == tool_mode:
+		_rebuild_settings()
 
 
 func _set_setting(key: String, value: Variant) -> void:

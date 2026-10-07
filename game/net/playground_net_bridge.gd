@@ -91,6 +91,10 @@ signal build_load_requested(peer_id: int, name: String)
 ## This player's saved builds arrived, for the Q menu. Client side.
 signal builds_received(builds: Array)
 
+## The tool gun's edit mode picked a prop, or let go of one: `{net_id, name, settings,
+## refused}`, net id 0 for nothing. Client side, to this player only.
+signal selection_received(state: Dictionary)
+
 ## A voice frame arrived. Server side; the payload is unparsed and must not be trusted —
 ## [method DotVoiceRouter.relay] is what stamps the speaker.
 signal voice_requested(peer_id: int, payload: PackedByteArray)
@@ -1437,6 +1441,29 @@ func _set_tool_mode(session_id: int, mode: StringName, payload: String) -> void:
 		if not set.ok:
 			_tell(peer_for_player(session_id), PlaygroundEvents.Kind.NOTICE,
 				PlaygroundEvents.write_notice(session_id, set.error.message))
+			return
+		# An edit lands on the selected prop as it arrives; the answer is what the prop now
+		# is, so a value clamped or refused (a freeze over the limit) springs back in the menu.
+		var tool: Object = toy.call("current") if toy.has_method("current") else null
+		if tool != null and tool.has_method("selection_report"):
+			var report: Dictionary = tool.call("selection_report")
+			if report.get("node") != null or str(report.get("refused", "")) != "":
+				_tell_selection(session_id, report)
+
+
+## Tells one player what their tool gun has selected. The prop is named by the net id it
+## replicates under, so the client can find its own mirror of it.
+func _tell_selection(session_id: int, report: Dictionary) -> void:
+	var node: Variant = report.get("node")
+	var net_id := net_id_of_node(node) if node is Node else 0
+	_tell(peer_for_player(session_id), PlaygroundEvents.Kind.SELECTION, PlaygroundEvents.write_selection(
+		net_id, str(report.get("name", "")), report.get("settings", {}), str(report.get("refused", ""))
+	))
+
+
+## The body a client draws for [param net_id], or null. Client side.
+func mirror_of(net_id: int) -> Node3D:
+	return _mirror_node(net_id)
 
 
 func _restore_tool_mode(session_id: int, toy: PlaygroundWeapon) -> void:
@@ -1515,6 +1542,10 @@ func _toy_result(session_id: int, id: StringName, toy: PlaygroundWeapon, res: Do
 		if res.error != null and res.error.message != "":
 			_tell(peer_for_player(session_id), PlaygroundEvents.Kind.NOTICE,
 				PlaygroundEvents.write_notice(session_id, res.error.message))
+		return
+	# The tool gun's edit mode answers with what it selected.
+	if res.value is Dictionary and (res.value as Dictionary).has("settings"):
+		_tell_selection(session_id, res.value)
 		return
 	# The remover answers with a count, the launcher with what it spawned.
 	if not (res.value is DotPropInstance):
@@ -1663,6 +1694,10 @@ func _on_event(message: DotNetMessage) -> void:
 			var listed := PlaygroundEvents.read_builds(reader)
 			if bool(listed["ok"]):
 				builds_received.emit(listed["builds"])
+		PlaygroundEvents.Kind.SELECTION:
+			var picked := PlaygroundEvents.read_selection(reader)
+			if bool(picked["ok"]):
+				selection_received.emit(picked)
 
 
 # --- Projectiles ---------------------------------------------------------------

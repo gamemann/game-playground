@@ -24,6 +24,8 @@ extends RefCounted
 
 const CHANNEL := "playground.builds"
 
+const ToolPhysprop := preload("tools/tool_physprop.gd")
+
 const FORMAT := 1
 
 ## The most props one build may hold. Past this a save is refused: a whole server's worth of
@@ -72,6 +74,9 @@ func capture(game: Node, owner_id: StringName, origin: Vector3, yaw: float) -> D
 		var tint: Variant = prop.node.get("tint")
 		if tint is Color and (tint as Color).a > 0.0:
 			entry["tint"] = (tint as Color).to_html(true)
+		var physics := _physics_of(prop.node as RigidBody3D)
+		if not physics.is_empty():
+			entry["physics"] = physics
 		props.append(entry)
 
 	var links: Array = []
@@ -191,6 +196,13 @@ func place(game: Node, owner_id: StringName, doc: Dictionary, origin: Vector3, y
 			var _s: float = prop.node.call("set_size_scale", float(entry["scale"]))
 		if prop.node.has_method("set_tint") and entry.has("tint") and Color.html_is_valid(str(entry["tint"])):
 			prop.node.call("set_tint", Color.html(str(entry["tint"])))
+		# After the size: the weight is a multiple of the mass the size gives.
+		if entry.get("physics") is Dictionary and prop.node is RigidBody3D and prop.node.has_method("refresh_mass"):
+			var physics: Dictionary = entry["physics"]
+			ToolPhysprop._apply(prop.node as RigidBody3D, bool(physics.get("gravity", true)),
+				clampf(float(physics.get("weight", 1.0)), 0.1, 10.0),
+				clampf(float(physics.get("friction", 1.0)), 0.0, 2.0),
+				clampf(float(physics.get("bounce", 0.0)), 0.0, 1.0))
 		if bool(entry.get("frozen", false)) or prop.frozen:
 			DotPhysGun.set_frozen(prop, true)
 			if game.has_method("reclassify_prop"):
@@ -365,3 +377,22 @@ static func _safe_key(key: String) -> String:
 	for c in key:
 		out += c if (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "-" or c == "_" else "_"
 	return out if out != "" else "_"
+
+
+## What the physical-properties and edit modes changed on [param body], or `{}` when it is
+## as catalogued: gravity, weight, friction, bounce. Only written when something differs, so
+## a build of untouched props reads exactly as it did before this field existed.
+static func _physics_of(body: RigidBody3D) -> Dictionary:
+	if body == null or not body.has_method("refresh_mass"):
+		return {}
+	var material := body.physics_material_override
+	var out := {
+		"gravity": body.gravity_scale != 0.0,
+		"weight": float(body.get("mass_multiplier")),
+		"friction": material.friction if material != null else 1.0,
+		"bounce": material.bounce if material != null else 0.0,
+	}
+	if bool(out["gravity"]) and is_equal_approx(float(out["weight"]), 1.0) \
+			and is_equal_approx(float(out["friction"]), 1.0) and is_equal_approx(float(out["bounce"]), 0.0):
+		return {}
+	return out

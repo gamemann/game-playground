@@ -68,6 +68,10 @@ func _initialize() -> void:
 		# The tools tab with a tool picked, so its settings panel is drawn: the balloon has
 		# all three kinds of control — two sliders and a row of colour swatches.
 		{"id": &"spawn_menu", "file": "menu_tools.png", "tab": PlaygroundSpawnMenu.Tab.TOOLS, "mode": &"balloon"},
+		# The edit mode with a prop selected: the panel holds what that prop IS, as the server
+		# sends it — a painted crate, half again as big, frozen, a little heavier.
+		{"id": &"spawn_menu", "file": "menu_tool_edit.png", "tab": PlaygroundSpawnMenu.Tab.TOOLS, "mode": &"edit",
+			"settings": {"size": 1.5, "colour": "e05252", "frozen": true, "gravity": true, "weight": 2.0, "friction": 0.6, "bounce": 0.25}},
 		{"id": &"spawn_menu", "file": "menu_entities.png", "tab": PlaygroundSpawnMenu.Tab.ENTITIES},
 		# The Builds tab with a list as a server would send it: two builds and a custom prop.
 		{"id": &"spawn_menu", "file": "menu_builds.png", "tab": PlaygroundSpawnMenu.Tab.BUILDS, "builds": [
@@ -106,9 +110,16 @@ func _process(_delta: float) -> bool:
 		if shot.has("tab") and _menu != null:
 			if shot.has("mode"):
 				_menu.tool_mode = shot["mode"]
+			if shot.has("settings"):
+				_menu.set_tool_settings(StringName(shot["mode"]), shot["settings"])
+				_menu.set_edit_target("Crate")
 			if shot.has("builds"):
 				_menu.builds = shot["builds"]
 			_menu.show_tab(shot["tab"])
+			# The grid too: two frames on one tab do not change tab, and the card picked for
+			# the last frame would stay lit.
+			_menu.call("_rebuild_grid")
+			_menu.call("_rebuild_settings")
 
 	if _wait > 0:
 		_wait -= 1

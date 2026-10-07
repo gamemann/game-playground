@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 329
+const CHECKS := 335
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 37
+const SECTIONS := 38
 
 var _passed := 0
 var _failed := 0
@@ -169,6 +169,7 @@ func _run() -> void:
 		await _test_riding_over_the_wire()
 		await _test_button_over_the_wire()
 		await _test_builds_over_the_wire()
+		await _test_edit_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -819,6 +820,79 @@ func _test_builds_over_the_wire() -> void:
 	_server_bridge.builds_requested.disconnect(on_asked)
 	_server_bridge.build_load_requested.disconnect(on_load)
 	_client_bridge.builds_received.disconnect(on_list)
+	_done()
+
+
+## The tool gun's edit mode over the wire: the server selects, tells only the asker what the
+## prop IS (named by the net id its mirror has), and an edit from the menu lands on the
+## server's prop and comes back to the mirror.
+func _test_edit_over_the_wire() -> void:
+	_section("editing a selected prop over the wire")
+
+	var theirs := _server_player()
+	var id: StringName = theirs.player_id if theirs != null else &""
+	_server_game.props.clear_player(id)
+	await _steps(4)
+	var crate := _server_game.props.spawn(&"crate", id, theirs.eye_position() + theirs.aim_direction() * 2.5)
+	if crate == null:
+		_check(false, "a crate in front of the player")
+		_done()
+		return
+	DotPhysGun.set_frozen(crate, true)
+	(crate.node as Node3D).call("set_tint", Color.html("e05252"))
+
+	var got: Array = []
+	var on_selection := func(state: Dictionary) -> void: got.append(state)
+	_client_bridge.selection_received.connect(on_selection)
+
+	_client_bridge.ask_weapon(&"toolgun")
+	_client_bridge.ask_tool_mode(&"edit", {})
+	_exchange()
+	await _steps(4)
+	_exchange()
+	await _steps(4)
+
+	var fire := DotFpsCommand.new()
+	fire.set_button(DotFpsCommand.BUTTON_USER_0, true)
+	await _steps(2, fire)
+	_exchange()
+	await _steps(6)
+
+	var server_net: PlaygroundPropNet = _server_bridge._prop_nets.get(crate.instance_id)
+	var net_id: int = server_net.identity.net_id if server_net != null and server_net.identity != null else -1
+	var first: Dictionary = got[0] if not got.is_empty() else {}
+	_check(not got.is_empty() and int(first.get("net_id", 0)) == net_id,
+		"a click selects the crate on the server, and this client is told which, by net id",
+		"%s, net id %d" % [str(first), net_id])
+	var mirror := _client_bridge.mirror_of(net_id)
+	_check(mirror != null and mirror.global_position.distance_to((crate.node as Node3D).global_position) < 0.1,
+		"which is this client's own copy of it")
+	var read: Dictionary = first.get("settings", {})
+	_check(bool(read.get("frozen", false)) and str(read.get("colour", "")) == "e05252",
+		"with what it is: frozen, painted", str(read))
+
+	var bigger := read.duplicate()
+	bigger["size"] = 2.0
+	_client_bridge.ask_tool_mode(&"edit", bigger)
+	_exchange()
+	await _steps(4)
+	_check(is_equal_approx(float((crate.node as Node3D).get("size_scale")), 2.0),
+		"a slider moved in the menu resizes the server's crate", "%.2f" % float((crate.node as Node3D).get("size_scale")))
+	var last: Dictionary = got[got.size() - 1] if not got.is_empty() else {}
+	_check(got.size() >= 2 and is_equal_approx(float((last.get("settings", {}) as Dictionary).get("size", 0.0)), 2.0),
+		"and the answer says what it now is", str(last))
+	for i in 128:
+		await _steps(1)
+		if mirror != null and absf(float(mirror.get("size_scale")) - 2.0) < 0.02:
+			break
+	_check(mirror != null and absf(float(mirror.get("size_scale")) - 2.0) < 0.02,
+		"and the mirror is rebuilt at that size")
+
+	_client_bridge.selection_received.disconnect(on_selection)
+	_client_bridge.ask_tool(&"phys")
+	var _gone := _server_game.props.remove(crate.instance_id)
+	_exchange()
+	await _steps(4)
 	_done()
 
 

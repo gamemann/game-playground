@@ -21,6 +21,7 @@ const PlaygroundWeapons := preload("../game/playground_weapons.gd")
 const PlaygroundZee := preload("../game/playground_zee.gd")
 const PlaygroundProjectiles := preload("../game/playground_projectiles.gd")
 const PlaygroundEvents := preload("../game/net/playground_events.gd")
+const ToolPhysprop := preload("../game/tools/tool_physprop.gd")
 const PlaygroundLimits := preload("../game/playground_limits.gd")
 const PlaygroundNpcNet := preload("../game/net/playground_npc_net.gd")
 
@@ -55,13 +56,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 740
+const CHECKS := 775
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 41
+const SECTIONS := 42
 
 var _passed := 0
 var _failed := 0
@@ -138,6 +139,7 @@ func _run() -> void:
 	await _test_breaking_props()
 	await _test_buttons_and_doors()
 	await _test_saved_builds()
+	await _test_editing_a_selected_prop()
 	await _test_the_narrows()
 	await _test_the_plunge()
 	await _test_the_jump_course()
@@ -630,6 +632,8 @@ func _test_saved_builds() -> void:
 	var _w: DotResult = playground.constraints.weld(&"builder", a.node as RigidBody3D, b.node as RigidBody3D, a.position())
 	(crate.node as PlaygroundProp).set_tint(Color(0.2, 0.4, 0.9))
 	var _grown := (big.node as PlaygroundProp).set_size_scale(1.5)
+	# Physics the edit mode changed: no gravity, twice as heavy, slippery and bouncy.
+	ToolPhysprop._apply(big.node as RigidBody3D, false, 2.0, 0.3, 0.6)
 	var _wire := playground.io.link(button.instance_id, &"pressed", door.instance_id, &"toggle")
 	var before := {}
 	for p in playground.props.props_of(&"builder"):
@@ -668,6 +672,16 @@ func _test_saved_builds() -> void:
 	_check(paint_off < 0.02 and not grown.is_empty() and is_equal_approx((grown[0].node as PlaygroundProp).size_scale, 1.5) and grown[0].frozen,
 		"painted, resized and frozen as they were", "paint %s, scale %s, frozen %s" % [paint,
 			(grown[0].node as PlaygroundProp).size_scale if not grown.is_empty() else -1.0, grown[0].frozen if not grown.is_empty() else false])
+	var big_body: RigidBody3D = grown[0].node as RigidBody3D if not grown.is_empty() else null
+	_check(big_body != null and big_body.gravity_scale == 0.0
+		and is_equal_approx(big_body.mass, big.def.mass * pow(1.5, 3.0) * 2.0)
+		and big_body.physics_material_override != null
+		and is_equal_approx(big_body.physics_material_override.friction, 0.3)
+		and is_equal_approx(big_body.physics_material_override.bounce, 0.6),
+		"and with the gravity, weight, friction and bounce it was edited to",
+		"gravity %.1f, %.1f kg" % [big_body.gravity_scale, big_body.mass] if big_body != null else "none")
+	_check(not (doc.value["props"] as Array).any(func(e: Dictionary) -> bool: return e.has("physics") and str(e["id"]) == "crate"),
+		"and a prop nobody edited writes no physics at all")
 	var new_button: DotPropInstance = again.filter(func(p: DotPropInstance) -> bool: return p.def.id == &"button")[0]
 	_check(playground.constraints.count_owned(&"builder") >= 1 and playground.io.links_from(new_button.instance_id).size() == 1,
 		"with the weld and the wire made again")
@@ -2480,6 +2494,162 @@ func _test_the_tool_gun() -> void:
 
 	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
 	_check(playground.constraints.size() == 0, "and every constraint goes with its props")
+	_done()
+
+
+## The tool gun's edit mode: click a prop, and the settings ARE that prop.
+func _test_editing_a_selected_prop() -> void:
+	_section("editing a selected prop with the tool gun")
+	await _sandbox_floor()
+
+	var def := playground.weapon_def(&"toolgun")
+	var gun := PlaygroundWeapons.make(def) if def != null else null
+	if gun == null:
+		_check(false, "a tool gun to edit with")
+		_done()
+		return
+	gun.equip(playground, def)
+	gun.wielder = &"bot"
+	_check(gun.call("set_mode", &"edit", {}).ok, "the tool gun has an edit mode")
+	var mode: Object = gun.call("current")
+
+	# A crate that is already not as catalogued, so reading it back says something.
+	var crate := playground.props.spawn(&"crate", &"bot", Vector3(0, 0.6, 0))
+	var other := playground.props.spawn(&"crate", &"bot", Vector3(5, 0.6, 0))
+	await get_tree().physics_frame
+	var body := crate.node as RigidBody3D
+	var other_body := other.node as RigidBody3D
+	body.call("set_size_scale", 1.5)
+	body.call("set_tint", Color.html("e05252"))
+	await get_tree().physics_frame
+
+	# --- Selecting reads the prop -----------------------------------------------------
+	var picked: DotResult = await _tool_at(gun, body, &"primary")
+	var report: Dictionary = picked.value if picked.ok and picked.value is Dictionary else {}
+	_check(report.get("node") == body, "left click selects the prop under the crosshair")
+	var read: Dictionary = report.get("settings", {})
+	_check(is_equal_approx(float(read.get("size", 0.0)), 1.5) and str(read.get("colour", "")) == "e05252",
+		"and answers with what it IS: its size and its paint", str(read))
+	_check(bool(read.get("gravity", false)) and not bool(read.get("frozen", true))
+		and is_equal_approx(float(read.get("weight", 0.0)), 1.0),
+		"its gravity, its freeze and its weight", str(read))
+	_check(str(report.get("name", "")) != "", "and its name, for the HUD")
+
+	# --- A change lands on it as it arrives ------------------------------------------
+	var changed := read.duplicate()
+	changed["size"] = 2.0
+	changed["colour"] = "6fbf5a"
+	changed["gravity"] = false
+	changed["weight"] = 3.0
+	changed["friction"] = 0.2
+	changed["bounce"] = 0.5
+	_check(gun.call("set_mode", &"edit", changed).ok, "a settings change is taken")
+	await get_tree().physics_frame
+	_check(is_equal_approx(float(body.get("size_scale")), 2.0), "and resizes the selected prop",
+		"%.2f" % float(body.get("size_scale")))
+	_check((body.get("tint") as Color).is_equal_approx(Color.html("6fbf5a")), "repaints it")
+	_check(body.gravity_scale == 0.0 and is_equal_approx(body.mass, crate.def.mass * 8.0 * 3.0),
+		"switches its gravity off and makes it heavier, with the size", "%.1f kg" % body.mass)
+	_check(body.physics_material_override != null and is_equal_approx(body.physics_material_override.friction, 0.2)
+		and is_equal_approx(body.physics_material_override.bounce, 0.5), "and changes its friction and bounce")
+	_check(is_equal_approx(float(other_body.get("size_scale")), 1.0) and (other_body.get("tint") as Color).a == 0.0,
+		"and nothing else")
+
+	# --- The second prop's settings are its own, not the first's ------------------------
+	var second: DotResult = await _tool_at(gun, other_body, &"primary")
+	var second_read: Dictionary = (second.value as Dictionary).get("settings", {}) if second.ok else {}
+	_check(is_equal_approx(float(second_read.get("size", 0.0)), 1.0) and bool(second_read.get("gravity", false)),
+		"selecting a second prop reads ITS properties, not the last one's", str(second_read))
+	var only_colour := second_read.duplicate()
+	only_colour["colour"] = "5276e0"
+	var _c: Variant = gun.call("set_mode", &"edit", only_colour)
+	_check(is_equal_approx(float(other_body.get("size_scale")), 1.0) and other_body.gravity_scale == 1.0
+		and (other_body.get("tint") as Color).is_equal_approx(Color.html("5276e0")),
+		"so a menu sending every setting back changes only the one that moved")
+	_check(is_equal_approx(float(body.get("size_scale")), 2.0), "and the first prop is left alone")
+
+	# --- Its own colour takes the paint off -----------------------------------------------
+	var own := only_colour.duplicate()
+	own["colour"] = PlaygroundProp.colour_of(other.def).to_html(false)
+	var _o: Variant = gun.call("set_mode", &"edit", own)
+	_check((other_body.get("tint") as Color).a == 0.0, "choosing the catalogue's own colour takes the paint off")
+
+	# --- Freezing asks the freeze limit, unfreezing does not ------------------------------
+	var freeze := own.duplicate()
+	freeze["frozen"] = true
+	var _f: Variant = gun.call("set_mode", &"edit", freeze)
+	_check(other.frozen and other_body.freeze, "it freezes the prop")
+	var reselect: DotResult = await _tool_at(gun, body, &"primary")
+	var was_frozen_cap := playground.props.limits.per_player_frozen
+	playground.props.limits.per_player_frozen = 1
+	var freeze_first := ((reselect.value as Dictionary).get("settings", {}) as Dictionary).duplicate()
+	freeze_first["frozen"] = true
+	var _ff: Variant = gun.call("set_mode", &"edit", freeze_first)
+	var after_refusal: Dictionary = mode.call("selection_report")
+	_check(not crate.frozen and not bool((after_refusal.get("settings", {}) as Dictionary).get("frozen", true)),
+		"a freeze past the limit is refused and the setting springs back", str(after_refusal.get("settings")))
+	_check(str(after_refusal.get("refused", "")).contains("frozen"), "and the report says why",
+		str(after_refusal.get("refused")))
+	playground.props.limits.per_player_frozen = was_frozen_cap
+
+	# --- Reload puts it back --------------------------------------------------------------
+	var _back: DotResult = await _tool_at(gun, body, &"reload")
+	_check(is_equal_approx(float(body.get("size_scale")), 1.0) and (body.get("tint") as Color).a == 0.0
+		and body.gravity_scale == 1.0 and is_equal_approx(body.mass, crate.def.mass),
+		"reload puts size, paint, gravity and weight back to the catalogue's", "%.1f kg" % body.mass)
+	var re_other: DotResult = await _tool_at(gun, other_body, &"reload")
+	_check(re_other.ok and other.frozen, "and leaves a frozen prop frozen")
+
+	# --- Letting go -----------------------------------------------------------------------
+	var gone: DotResult = await _tool_at(gun, body, &"secondary")
+	_check(gone.ok and (gone.value as Dictionary).get("node") == null, "right click lets go of it")
+	var after := (mode.get("settings") as Dictionary).duplicate()
+	after["size"] = 3.0
+	var _a: Variant = gun.call("set_mode", &"edit", after)
+	_check(is_equal_approx(float(body.get("size_scale")), 1.0), "and a change with nothing selected changes nothing")
+
+	var _p: DotResult = await _tool_at(gun, body, &"primary")
+	var _sw: Variant = gun.call("set_mode", &"resize", {})
+	var stale := after.duplicate()
+	var _e: Variant = gun.call("set_mode", &"edit", stale)
+	_check(is_equal_approx(float(body.get("size_scale")), 1.0),
+		"switching to another tool lets go too, so switching back never lands old settings on it")
+
+	# --- Ownership is asked again on every change -------------------------------------------
+	var theirs := playground.props.spawn(&"crate", &"someone", Vector3(-5, 0.6, 0))
+	await get_tree().physics_frame
+	var was_touch := playground.config.touch_others_props
+	playground.config.touch_others_props = true
+	var theirs_pick: DotResult = await _tool_at(gun, theirs.node as Node3D, &"primary")
+	_check(theirs_pick.ok, "on a server that allows it, somebody else's prop can be selected")
+	playground.config.touch_others_props = false
+	var grow := ((theirs_pick.value as Dictionary).get("settings", {}) as Dictionary).duplicate() if theirs_pick.ok else {}
+	grow["size"] = 2.5
+	var _g: Variant = gun.call("set_mode", &"edit", grow)
+	var refused: Dictionary = mode.call("selection_report")
+	_check(is_equal_approx(float((theirs.node as Node3D).get("size_scale")), 1.0) and refused.get("node") == null,
+		"and once the server stops allowing it, the next change is refused and the selection dropped",
+		str(refused.get("refused")))
+	playground.config.touch_others_props = was_touch
+
+	# --- A selected prop that is removed ------------------------------------------------------
+	var doomed := playground.props.spawn(&"crate", &"bot", Vector3(0, 0.6, 6))
+	await get_tree().physics_frame
+	var _d: DotResult = await _tool_at(gun, doomed.node as Node3D, &"primary")
+	var _rm := playground.props.remove(doomed.instance_id)
+	await get_tree().physics_frame
+	var _x: Variant = gun.call("set_mode", &"edit", grow)
+	_check((mode.call("selection_report") as Dictionary).get("node") == null,
+		"a selected prop that is removed is simply no longer selected")
+
+	# --- The wire ---------------------------------------------------------------------------------
+	var bytes := PlaygroundEvents.write_selection(42, "Wooden crate", {"size": 2.0, "frozen": true}, "")
+	var back := PlaygroundEvents.read_selection(DotNetReader.new(bytes))
+	_check(bool(back["ok"]) and int(back["net_id"]) == 42 and str(back["name"]) == "Wooden crate"
+		and is_equal_approx(float((back["settings"] as Dictionary)["size"]), 2.0) and bool((back["settings"] as Dictionary)["frozen"]),
+		"a selection survives the wire", str(back))
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
 	_done()
 
 
@@ -6895,6 +7065,38 @@ func _test_the_client_boots() -> void:
 		client.player.zee_rig == null and client.zee_view == null and client.player.zee_world == null,
 		"and the physics gun takes it back out of their hands"
 	)
+
+	# The tool gun's edit mode, through the client's own buttons and menu.
+	var eye := client.player.eye_position()
+	var edited := client.playground.props.spawn(&"crate", client.player.player_id,
+		eye + client.player.aim_direction() * 2.5)
+	if edited != null:
+		DotPhysGun.set_frozen(edited, true)
+		(edited.node as Node3D).call("set_tint", Color.html("e05252"))
+	client._on_tool_mode_chosen(&"edit", {})
+	client.menu.tool_mode = &"edit"
+	await get_tree().physics_frame
+	client._primary_down()
+	client._primary_up()
+	await get_tree().process_frame
+	var box: Node = (edited.node as Node).get_node_or_null("EditSelection") if edited != null else null
+	_check(edited != null and client.edit_target == edited.node and box is MeshInstance3D,
+		"the edit mode selects what the client points at, and draws a box round it")
+	_check(str((client.menu.tool_settings.get(&"edit", {}) as Dictionary).get("colour", "")) == "e05252",
+		"and the Q menu's edit settings become that prop's own", str(client.menu.tool_settings.get(&"edit")))
+	client.menu._set_setting("size", 2.0)
+	await get_tree().process_frame
+	_check(edited != null and is_equal_approx(float((edited.node as Node3D).get("size_scale")), 2.0),
+		"a slider in the menu resizes it")
+	_check(box is MeshInstance3D and is_instance_valid(box) and ((box as MeshInstance3D).mesh as BoxMesh).size.x > 1.9,
+		"and the box grows with it",
+		str(((box as MeshInstance3D).mesh as BoxMesh).size) if box is MeshInstance3D and is_instance_valid(box) else "no box")
+	client._secondary_down()
+	client._secondary_up()
+	await get_tree().process_frame
+	_check(client.edit_target == null and (edited == null or (edited.node as Node).get_node_or_null("EditSelection") == null),
+		"right click lets go, and the box goes with it")
+	client._set_tool(&"phys")
 
 	client.queue_free()
 
