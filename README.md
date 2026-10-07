@@ -13,154 +13,164 @@ This project, along with every asset it is built on, was built initially with **
 
 I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
 
-## A Sandbox, and Where the Movement Half Meets
-**A Godot 4 sandbox in the classic physics-sandbox shape.** Hold Q, pick a prop, an NPC or a weapon, click it and it is yours; pick props up with a physics gun, freeze them, throw them, undo them. Plus map support, and a timer that is not only for surf and bunny-hop maps.
-
-It is two things at once: a game you can play, and the only place the movement half of the `dot-*` family runs together.
-
-## What it uses
-
-| | |
-| --- | --- |
-| [dot-player-controller](https://github.com/modcommunity/dot-player-controller) | Classic strafe movement: air-strafing, surf, bunny-hopping, styles |
-| [dot-timer](https://github.com/modcommunity/dot-timer) | Zones, tracks, stages, styles, records, replays |
-| [dot-map](https://github.com/modcommunity/dot-map) | Three maps in one game, with a rotation |
-| [dot-props](https://github.com/modcommunity/dot-props) | Spawnable props, a physics gun, a gravity gun |
-| [dot-leaderboard](https://github.com/modcommunity/dot-leaderboard) | Boards, ranking points, player statistics |
-| [dot-server](https://github.com/modcommunity/dot-server) | A dedicated server: console, RCON, permissions, modules |
-| [dot-net](https://github.com/modcommunity/dot-net) | Replication, prediction and the wire every networked system here rides on |
-| [dot-inventory](https://github.com/modcommunity/dot-inventory) | The bag: what a player has bought and not yet placed, validated by the server |
-| [dot-core](https://github.com/modcommunity/dot-core) | The foundation all of them share |
-
-## Playing it
-
-```bash
-godot --path .
-```
-
-| | |
-| --- | --- |
-| **Q** | The spawn menu. **Hold** it to browse and release to close; **tap** it to pin it open |
-| **Mouse 1** | The tool's primary: grab and hold with the physics gun, punt with the gravity gun |
-| **Mouse 2** | The tool's secondary: freeze what is held, or pull and carry |
-| **Wheel** | How far out the physics gun holds a prop |
-| **Shift + mouse** | Turn the prop the physics gun is holding |
-| **1** / **2** / **3** | Physics gun / gravity gun / cycle the weapons you have |
-| **E** | Spawn the prop the menu last armed, again |
-| **R** | Unfreeze everything you have frozen — or, with a gun or the tool gun in hand, reload / the tool's third action |
-| **Z** | Undo your last spawn |
-| **WASD** | Move, including while the menu is open |
-| **Space** | Jump (hold it; auto-hop is on) |
-| **Ctrl** | Crouch |
-| **T** | Switch track: the sandbox, or the course in the corner of it |
-| **Tab** | Cycle style: normal, sideways, half-sideways, backwards, low gravity, prebhop |
-| **M** | Next map |
-| **C** / **V** | Save a practice checkpoint / go back to one |
-| **X** / **B** | Cycle which checkpoint / forget them all |
-| **Esc** | Close the menu, or release the mouse |
-
-**Clicking a prop in the menu spawns it**, rather than arming a separate spawn key, and the menu stays open, so a wall is nine clicks rather than nine open-and-closes. Four tabs, `/` to search, and icons drawn from each definition because this project ships no art:
+## How it plays
+Hold **Q** to open the spawn menu. Clicking something in it spawns it, and the menu stays open so you can keep building. There are four tabs, and `/` searches:
 
 | Tab | |
 | --- | --- |
-| **Props** | Fourteen, in three categories. Planks, panels, beams and pillars to build with; crates and barrels; balls from a 2 kg beach ball to a 900 kg boulder |
-| **Entities** | NPCs with scripts: one wanders, one chases you, one hops, one spins and shoves whatever comes near, a hunter that decides — and **soldiers and rebels that carry weapons**. Soldiers fight players and rebels; rebels fight soldiers and follow you. Pick what they carry with **NPCs carry** in the sidebar. They are props too, so you can pick one up with the physics gun and punt it |
-| **Weapons** | A launcher that fires whatever you have armed, a remover, and an impulse gun that shoves everything nearby — plus the twenty-seven weapons of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), from fists to a minigun. With the arena off a shot shoves the prop it hits; with `pg_arena 1` it hurts. **R** reloads while one is in hand **Right click** a weapon to drop one on the ground for anybody to walk over. Shots hurt NPCs whether or not the arena is on |
-| **Tools** | The **tool gun**'s modes: inflate/deflate, colour, remover, weld, no-collide, rope, balloon, physical properties, and giving an NPC a weapon. Pick one and its settings appear underneath; left click, right click and **R** each do something per tool, and the HUD says what |
+| **Props** | Planks, panels, beams and pillars to build with; crates and barrels; balls from a beach ball to a boulder; and buttons, levers and doors |
+| **Entities** | NPCs. One wanders, one chases you, one hops, one spins, a hunter, and soldiers and rebels that carry weapons. Soldiers fight players and rebels; rebels fight soldiers and follow you |
+| **Weapons** | A launcher that fires props, a remover, an impulse gun, and the twenty-seven weapons of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons). Right click a weapon in the menu to drop it on the ground |
+| **Tools** | The tool gun: inflate, colour, remove, weld, no-collide, rope, balloon, physical properties, wire, and giving an NPC a weapon |
 
-Entities and weapons are **scripts named by path in the catalogue**, which is what lets a downloaded content pack ship its own, because a mounted `.pck` cannot use `class_name`. See [`CLAUDE.md`](CLAUDE.md).
+Some of what you can do:
 
-Saving a checkpoint is free. *Restoring* one costs you the run, and the HUD says **PRACTICE** once it has, which is much better than finding out at the finish line.
+- **Pick props up** with the physics gun and freeze them in place, or punt them with the gravity gun. You can pick other players up too (`pg_pickup`).
+- **Ride props.** Stand on a moving prop and it carries you.
+- **Wire things up.** Use the tool gun's wire mode to connect a button or lever to a door, then press it with **F**.
+- **Save what you built** with `pg_save <name>` and load it again later with `pg_load <name>`.
+- **Break things** when the server has `pg_destruction 1`: crates and planks break apart and barrels explode.
+- **Creative mode.** Type `!creative` and nobody can touch you or your props, and you can't hurt anybody.
+- **Fight.** `pg_arena 1` turns on damage between players, and `pg_waves` sends waves of armed NPCs.
 
-## The maps
+There are four maps:
 
-- **pg_lobby** is the sandbox. A 200-metre plate to build on, a staircase, a walkable ramp and one steep enough to learn to surf on, and out in one corner a twelve-platform jump course with a start line, two splits and a finish. The course is on **bonus 1**, a spiral tower is on **bonus 2**, a driving circuit round the plate is on **bonus 3** and the main track has no timer at all, so building is never timed and the minigame is one **T** away. It is also what says the timer is not a surf-and-bhop thing: nothing about a jump course is a movement genre.
-- **pg_surf_intro** is two ramps meeting in a valley. Drop in, hold a strafe, keep your speed to the bottom. Bonus 1, the plunge, is one 52-degree face you slide down; bonus 2, the cascade, is eleven jumps down a slalom of blocks.
-- **pg_bhop_intro** is blocks with gaps that widen. The later ones need the speed you kept from the earlier ones. **The narrows** on bonus 1 keeps the gap and takes the blocks away sideways; **the switchback** on bonus 2 climbs a hillside in three legs joined by two turning blocks, so every leg ends in a quarter turn you have to jump out of; **the ascent** on bonus 3 climbs 8 m in four sections of a jump onto a block and a walk up a ramp too tall to jump, each ramp steeper than the last, from 16 degrees to 40. **The ladder** on bonus 4 is eleven jumps up a line of columns, every one a metre higher than the last — as high as a jump is allowed to climb — so the only place to take off from is the lip.
+- **pg_lobby** is the sandbox: a 200-metre plate to build on. Its main track has no timer, so building is never timed. In one corner there is a jump course (bonus 1), a spiral tower (bonus 2) and a driving circuit round the plate (bonus 3). Press **T** to switch to one.
+- **pg_surf_intro** is two surf ramps meeting in a valley, with a steep slide and a slalom of blocks as bonuses.
+- **pg_bhop_intro** is bunny-hop blocks with widening gaps, plus six bonus courses.
+- **pg_generated** is built from a seed each time it loads: rooms joined by corridors, with props scattered through them. Start with `--pg-map-seed=<n>` to pick the seed, so you can share a layout.
 
-## Setting up
+## Controls
 
-Every `dot-*` addon is its own repository. For local development, symlink them:
+| Key | Action |
+| --- | --- |
+| **Q** | Spawn menu. Hold it to browse; tap it to pin it open |
+| **Mouse 1** | Primary: grab with the physics gun, punt with the gravity gun, fire a weapon |
+| **Mouse 2** | Secondary: freeze what you are holding, or pull with the gravity gun |
+| **Wheel** | Move a held prop nearer or further |
+| **Shift** + mouse | Turn a held prop |
+| **1** / **2** / **3** | Physics gun / gravity gun / your weapons |
+| **E** | Spawn the last prop again |
+| **F** | Use: press a button, pull a lever, get in or out of a vehicle |
+| **R** | Unfreeze everything you froze, or reload, or the tool gun's third action |
+| **Z** | Undo your last spawn |
+| **WASD** / **Space** / **Ctrl** | Move / jump (hold to keep hopping) / crouch |
+| **F5** | First or third person |
+| **T** | Switch track (the sandbox or one of the courses) |
+| **Tab** | Change movement style |
+| **C** / **V** | Save a checkpoint / go back to it |
+| **X** / **B** | Pick a checkpoint / forget them all |
+| **Y** / **U** | Chat / chat with nearby players |
+| **M** | Next map |
+| **Esc** | Close the menu, or release the mouse |
+
+## Getting started
+You need [Godot 4.7](https://godotengine.org/download). The game is built from many Dot addons, each in its own repository, so the easiest way to get everything is [dot-bootstrap](https://github.com/modcommunity/dot-bootstrap). It clones every project and links the addons into each one:
 
 ```bash
-for pair in dot_core:dot-core dot_player_controller:dot-player-controller \
-            dot_timer:dot-timer dot_map:dot-map dot_props:dot-props \
-            dot_leaderboard:dot-leaderboard dot_ui:dot-ui dot_server:dot-server; do
-  ln -s "../../${pair##*:}/addons/${pair%%:*}" "addons/${pair%%:*}"
-done
+git clone https://github.com/modcommunity/dot-bootstrap.git
+cd dot-bootstrap
+./bootstrap.sh
+cd projects/game-playground
+./game.sh
 ```
 
-A shipped build copies them in instead.
+On Windows, run `bootstrap.ps1` instead and open the project in Godot.
 
-## Running it as a dedicated server
+`game.sh` does everything else:
 
-```bash
-godot --headless --path . res://examples/dedicated.tscn
+| Command | What it does |
+| --- | --- |
+| `./game.sh` | Play offline, in a window |
+| `./game.sh online` | Start a local server and the browser client, and print the link to open |
+| `./game.sh online down` | Stop them |
+| `./game.sh server` | Start a local dedicated server only |
+| `./game.sh test` | Check every script and run every test suite |
+| `./game.sh shot` | Save a screenshot to `screenshots/` |
+| `./game.sh help` | All of the options |
+
+`online` and `server` use [dot-server-deploy](https://github.com/modcommunity/dot-server-deploy), which bootstrap clones next to this one. Run its `./setup.sh` once first.
+
+## Running a server
+Settings are cvars. Set them in the server's config, on the command line, or live from the console. `cvarlist pg_` lists them all.
+
+```
+pg_map_seconds 1800          // how long a map runs before the vote (0 = forever)
+pg_creative 1                // players may turn on creative mode
+pg_prop_surf 1               // moving props carry the players standing on them
+pg_destruction 0             // props can break, and barrels explode
+pg_pickup 1                  // the physics gun can pick players up
+pg_pickup_immune "admin"     // roles nobody may pick up
+pg_pickup_override "root"    // roles that may pick anybody up
 ```
 
-`server.cfg`:
+### Limits
+Each player has a limit for each kind of thing: `pg_max_props`, `pg_max_npcs`, `pg_max_entities`, `pg_max_vehicles`, `pg_max_balloons`, `pg_max_weapons` and `pg_max_constraints` (welds, ropes and no-collides). 0 is no limit. A role (an admin group, or `admin` / `root`) can get more:
 
 ```
-sv_tickrate 100
-hostname "surf | playground"
-pg_map_seconds 1800
+pg_max_npcs 10
+pg_limit_roles "admin: npcs=40 props=600; vip: props=300 balloons=60"
+pg_limits u3                 // what player u3 is using against their limits
 ```
 
-The tick rate is the server's, and it reaches the timer and every record filed. See [`CLAUDE.md`](CLAUDE.md). Once connected, an admin draws zones on a map whose author never used this engine the way they always have:
+### Console commands
+
+| Command | |
+| --- | --- |
+| `pg_status` | What the server is doing |
+| `pg_map <id>`, `pg_nextmap`, `pg_rtv` | Change the map, see what is next, rock the vote |
+| `pg_arena [0\|1]` | Damage between players on or off |
+| `pg_waves` | Waves of armed NPCs |
+| `pg_props_clear` | Remove every prop |
+| `pg_save <name>`, `pg_load <name>`, `pg_builds`, `pg_build_delete <name>` | Saved builds |
+| `pg_shop [0\|1]` | Prices for spawning, paid from a bag |
+| `pg_give <player> <prop> [count]`, `pg_inv <player>` | Put things in a player's bag, or read it |
+| `pg_zone`, `pg_zone_mark`, `pg_zone_save` | Draw timer zones (see below) |
+
+### Drawing timer zones
+Any map can get a timed course. Stand in the map and draw the zones from the console:
 
 ```
-pg_zone start          // pick a kind
+pg_zone start          // the kind of zone to draw
 pg_zone_mark           // stand on one corner
-pg_zone_mark           // and the other
-pg_zone_save
+pg_zone_mark           // then the other
+pg_zone_save           // write them to disk
 ```
 
-## Configuring the map vote
+### Admin commands
+These come from [dot-moderation](https://github.com/modcommunity/dot-moderation): `!noclip`, `!freeze`, `!slay`, `!bring` and the rest. `blind <player>` blacks out that player's screen, and `beacon <player>` puts a ring and a ping on them for everybody to see.
 
-The vote for the next map is [dot-vote](https://github.com/modcommunity/dot-vote), and the rules in `game/playground_vote.gd` are only this game's defaults. A server owner overrides any of dot-vote's settings without touching code, in `user://cfg/playground_vote.json`, then `DOT_VOTE_*`, then `--vote-*` — later wins — or, on a TMC server, under `metadata: map_vote:` in the game's `game.yml`. A file that does not validate is refused whole and the defaults stand, with the reason in the log.
-
-The end-of-map vote and the option to extend the current map:
+### The map vote
+The vote for the next map is [dot-vote](https://github.com/modcommunity/dot-vote). The defaults are in `game/playground_vote.gd`. To change them, put a file at `user://cfg/playground_vote.json` (or use `DOT_VOTE_*` environment variables, or `--vote-*` arguments):
 
 ```json
 { "end_vote": true, "vote_lead_sec": 120, "include_extend": true, "extend_seconds": 900, "max_extends": 4 }
 ```
 
-`end_vote: false` turns the end-of-map ballot off (the map still ends, on the rotation); `include_extend: false` takes "extend" off the ballot; `extend_seconds` is how much one extension adds and `max_extends` how many there may be. Every setting is in dot-vote's README, and its `docs/parity.md` maps the long-standing community map-chooser plugins' settings onto them.
+`end_vote: false` turns the end-of-map vote off, and `include_extend: false` takes "extend" off the ballot. dot-vote's README lists every setting.
 
-## Limits
+### The bag and the shop
+With `pg_shop 1`, spawning costs money. A player's bag is a 10 x 6 grid with a 400 kg limit: buying puts things in it, and spawning something you carry is free. There is no screen for the bag yet.
 
-Each player has a limit per kind of thing, the way a sandbox server needs: `pg_max_props`, `pg_max_npcs`, `pg_max_entities`, `pg_max_vehicles`, `pg_max_balloons`, `pg_max_weapons` and `pg_max_constraints` (welds, ropes and no-collides). 0 is no limit. Roles get more with one cvar — a role is an admin group from the admin file, or `admin` / `root`, and the most generous role a player holds wins:
-
-```
-pg_max_npcs 10
-pg_limit_roles "admin: npcs=40 props=600; vip: props=300 balloons=60"
-pg_limits u3        // what u3 has against their limits
-```
-
-## What you carry
-
-With `pg_shop 1` on, a server has prices, and the bag is what sits between the spawn menu and the shop: a 10 × 6 grid with a 400 kg limit, one cell per small prop. Buying into it charges once; spawning something you carry is free and takes it out; a purchase that would not fit, by weight or by room, is refused before anybody is charged. Spawning something you do not carry is charged only once it exists, so a spawn the prop limit refuses costs nothing. An admin can put things in it with `pg_give <player> <prop> [count]` and read it with `pg_inv <player>`.
-
-It is networked the way every inventory should be and few are: the client moves things in its own bag at once, sends each move as an op with a sequence number, and the server says yes or no. A no springs that move back and keeps every move made after it; a move the network lost is rolled back too, and a client with an answer overdue asks for the whole bag. What the server changes — a purchase, a spawn, an admin's give — arrives as the whole bag, to the owner and nobody else. A player who reconnects gets it back whole, when the server has an identity stack to recognise them by. [`CLAUDE.md`](CLAUDE.md) says why each piece is shaped the way it is.
-
-**There is no screen for it yet**, and no key that buys into it: the wire, the server's rules and the client's copy are all in place and checked over a real socket, and dot-inventory's `DotInvPanel` is the grid that would sit on top.
-
-## Validating
+## Testing
 
 ```bash
-godot --headless --path . --import
-godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 432 checks
-godot --headless --path . res://examples/headless_net.tscn          # 271 checks over 28 sections
-godot --headless --path . res://examples/dedicated.tscn             # 217 checks over 24 sections
-godot --headless --path . res://examples/headless_presentation.tscn #  99 checks
-godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
+./game.sh test                         # every script parses, then every suite runs
+./game.sh test headless_playground     # one suite
 ```
 
-An administrator's `blind <player> [on|off|seconds]` blacks out that player's own screen and nobody else's, and `beacon <player> [on|off]` puts a pulsing ring, a column through walls and a ping on every screen until it is turned off. Both outlive a respawn. `tools/screenshot_views.sh` renders both.
+| Suite | What it covers |
+| --- | --- |
+| `headless_playground` | The whole game: props, NPCs, weapons, every tool, limits, the menu, the courses and map changes |
+| `headless_net` | A server and a client in one process, over the network code |
+| `headless_presentation` | What a client draws and plays |
+| `headless_stack` | The whole stack of addons together |
+| `dedicated` | A real server: boots, loads the game, runs its commands |
 
-The headless suite boots the whole game, drives a bot down the surf map, finishes and files a run, ranks it, spawns props and builds their bodies from their definitions, spawns NPCs and watches one walk toward the player, fires a weapon loaded from a script path, opens the spawn menu on a real screen stack and clicks through its tabs, enforces the per-kind limits and the roles over them, uses every tool gun mode on real props (ropes holding, balloons lifting), has armed NPCs fight each other, die, and drop weapons a player picks up, runs the sandbox's course, falls off it, and changes the map underneath all of it. It has found nine real bugs, three of them in other repositories; a screenshot found three more that no assertion could have. See [`CLAUDE.md`](CLAUDE.md).
+[`CLAUDE.md`](CLAUDE.md) has the design decisions and the reasoning behind them.
 
-## Licence
+## Credits
+The weapons are from [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), which credits its own art. The props and the menu icons are drawn from their definitions, so the game ships no art of its own.
 
+## License
 MIT. See [LICENSE](LICENSE).
