@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 335
+const CHECKS := 339
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 38
+const SECTIONS := 39
 
 var _passed := 0
 var _failed := 0
@@ -170,6 +170,7 @@ func _run() -> void:
 		await _test_button_over_the_wire()
 		await _test_builds_over_the_wire()
 		await _test_edit_over_the_wire()
+		await _test_map_props_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -893,6 +894,50 @@ func _test_edit_over_the_wire() -> void:
 	var _gone := _server_game.props.remove(crate.instance_id)
 	_exchange()
 	await _steps(4)
+	_done()
+
+
+## A map document's props over the wire: the server puts them down, a client draws the
+## server's and spawns none of its own, and changing back takes them away on both ends.
+##
+## [b]"None of its own" is held by dot-props, not by Playground's own guard.[/b] Armed by
+## dropping `authoritative` from `spawn_map_props`'s call, every check still passed: a
+## non-authoritative spawner refuses every spawn. The guard stays because without it each
+## client would log that the map names props this server lacks, once per map, falsely.
+func _test_map_props_over_the_wire() -> void:
+	_section("a map's own props over the wire")
+
+	var before: StringName = _server_game.maps.current.id
+	var _changed: DotResult = await _server_game.change_map(&"pgc_town")
+	for i in 240:
+		_exchange()
+		await _steps(1)
+		if _client_game.maps.current != null and _client_game.maps.current.id == &"pgc_town":
+			break
+	await _exchange_steps(32)
+
+	var server_count := _server_game.props.props_of(_server_game.MAP_OWNER).size()
+	var doors := 0
+	var mirrors := 0
+	for behaviour: Variant in _client_bridge._prop_nets.values():
+		var node: Variant = behaviour.get("prop")
+		if node is Node and is_instance_valid(node) and node.get("def") is DotPropDef:
+			mirrors += 1
+			if (node.get("def") as DotPropDef).id == &"door":
+				doors += 1
+	_check(_client_game.maps.current != null and _client_game.maps.current.id == &"pgc_town", "the client follows the server to pgc_town")
+	_check(server_count == 44 and mirrors >= server_count, "and draws every prop the map put down on the server",
+		"%d on the server, %d mirrored" % [server_count, mirrors])
+	_check(doors == 5, "its five doors among them", "%d doors" % doors)
+	_check(_client_game.props.props_of(_client_game.MAP_OWNER).is_empty(), "and spawned none of its own")
+
+	var _back: DotResult = await _server_game.change_map(before)
+	for i in 240:
+		_exchange()
+		await _steps(1)
+		if _client_game.maps.current != null and _client_game.maps.current.id == before:
+			break
+	await _exchange_steps(16)
 	_done()
 
 
