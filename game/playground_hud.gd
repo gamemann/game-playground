@@ -343,17 +343,22 @@ func _refresh_comparison() -> void:
 	if map == null:
 		return
 
-	var mine := playground.timers.store.best_for(
+	# Awaited: the store may be a database (DotTimerStoreSql), and every store's reads
+	# are coroutines in shape. Against the memory and file stores this returns at once.
+	var mine: DotResult = await playground.timers.store.best_for(
 		map.id, player.timer.track, player.timer.style.id if player.timer.style else &"normal",
 		player_id
 	)
-	var top := playground.timers.store.top(
+	var top: DotResult = await playground.timers.store.top(
 		map.id, player.timer.track,
 		player.timer.style.id if player.timer.style else &"normal", 1
 	)
 
 	var personal := 0.0
 	var record := 0.0
+
+	if not is_instance_valid(self) or not playground.players.has(player_id):
+		return
 
 	if mine.ok and mine.value is DotTimerRecord:
 		personal = (mine.value as DotTimerRecord).time
