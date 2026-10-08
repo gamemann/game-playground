@@ -1185,6 +1185,21 @@ What it does not model, on purpose, and each errs toward reporting: a jump is ju
 
 A map document's box may name a `material` (`game/playground_materials.gd`): one of dot-physics' fifteen standard surfaces — concrete, metal, wood, glass, dirt, grass, sand, snow, ice, flesh, water, rock, mud, rubber, lava. **The numbers are dot-physics'**, read once: the solver's friction and bounce go on the box (`to_physics_material`), and the player's movement comes from the same entry through dot-player-controller's `DotFpsSurface.from_physics`, set as every player's `controller.surfaces` and found from the box's `dot_fps_surface` metadata, which a client and a server both build from the one document (so the prediction agrees). The only thing this game adds is each material's look (`LOOKS`; alpha under 1 is see-through, and `PlaygroundGeometry._material` draws those both sides). **A liquid (water, lava) has no collider at all**: it is a see-through volume the map records (`liquid_volumes()`, axis-aligned, a turned liquid is refused), and `Playground.liquids` holds them. Lava, on the authority (`_liquid_tick`): a player whose feet are in it is hurt through `hazard_hurt` (the arena's `hurt`, set by the module) and sent back to the spawn when that does nothing (the arena off), and a prop in it for `MELT_SECONDS` (1) is removed. Water has no behaviour yet beyond being entered (floating and swimming are next). `headless_playground`'s *map materials* on pgc_nature (7, measured and printed): an ice box is ice to feet and solver; the liquids recorded; speed kept 24 ticks after letting go 34% on grass, 91% on ice; top speed 6.68 m/s on grass, 2.30 in mud; jump 1.12 m on grass, 3.68 m off rubber; lava sends a player to the spawn and melts a crate; a crate dropped on the pond sinks to its bed. **Writing it found the suite's own mistake twice**: a jump pressed on one tick of a player still falling from a teleport measured nothing, and a crate dropped onto the lava pit's bridge did not melt.
 
+### Glass breaks (2026-10-07)
+
+A map box whose material has dot-physics' `break_health` (glass, 25) is a **pane**: `Playground.panes` (box index -> node, health, material), rebuilt per map by `_index_panes`, with `broken_panes` the ones gone. `hurt_pane` is the one door, as `hurt_prop` is for props. Three things call it:
+- **shots**: a player's zee shot and an armed NPC's, in `player_shots_fired` / `npc_shots_fired`;
+- **blasts**: `hurt_panes_in`, from `PlaygroundProjectiles._detonate`, because the blast's shape query returns no world geometry;
+- **fast impacts** (`_pane_impacts`): a prop or a player moving into a pane faster than `PANE_IMPACT_SPEED` (6 m/s) **along its normal**, read from last tick's velocity because the contact has already stopped the body. Running ALONG a greenhouse wall is not running into it; running into the end of one is.
+
+`break_pane` removes the box and emits `pane_broken`. On the authority it also throws shards: `debris` props in the pane's colour that expire like a broken prop's. The bridge broadcasts `Kind.PANE` (last) with the index, and tells a joiner every broken one. A client's `break_pane` removes its own copy and emits the same signal, which `PlaygroundClient` plays `glass_break` from. `pg_breakable_glass` (`PlaygroundConfig.breakable_glass`, on) is separate from `pg_destruction`, because glass in a map is put there to be broken.
+
+The checks:
+- `headless_playground`'s *glass breaks* on pgc_nature's greenhouse (11): the six panes; a sprint alongside one breaking nothing; off breaking nothing; a real pistol shooting one out with shards and one signal and no collider left; a blast; a crate nudged into one leaving it and one thrown into it breaking it; a map change putting them back. Armed by dropping the shot branch: four fail.
+- `headless_net`'s *glass broken on the server is gone on the client* (4).
+
+**Writing it found three mistakes in the suite, none in the game.** A settle drive's empty command turned the bot to yaw 0 and put the pistol's shots into the north wall. The first sprint path ran into the north wall's END and broke it, correctly. And firing a tick at a time with no frame between hands the rig one tick, which fires once.
+
 ## Maps are content, not projects
 
 Three maps, one game. See [dot-map's CLAUDE.md](../dot-map/CLAUDE.md) for why a
@@ -1231,10 +1246,10 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 839 checks, 44 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 850 checks, 45 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 343 checks, 40 sections
+godot --headless --path . res://examples/headless_net.tscn          # 347 checks, 41 sections
 godot --headless --path . res://examples/dedicated.tscn             # 243 checks, 27 sections
 ```
 

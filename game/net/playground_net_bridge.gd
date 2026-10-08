@@ -283,6 +283,7 @@ func attach(p_game: Playground, p_net: DotNetManager, link_parent: Node) -> DotR
 		game.vehicles.ride.exited.connect(_on_ride_exited)
 		game.pickup.changed.connect(_on_pickup_changed)
 		game.held_changed.connect(_on_held_changed)
+		game.pane_broken.connect(_on_pane_broken)
 		game.timers.player_started.connect(_on_run_changed)
 		game.timers.player_stopped.connect(_on_run_stopped)
 		game.run_filed.connect(_on_run_filed)
@@ -703,6 +704,14 @@ func _on_held_changed(id: StringName, prop: DotPropInstance, held: bool) -> void
 	_broadcast(PlaygroundEvents.Kind.HELD, PlaygroundEvents.write_held(session, net_id, prop.frozen if prop != null else false))
 
 
+## A pane broke on the server: everybody removes their own copy of it. The shards are props
+## and travel as props; this is only the box, which every client built itself.
+func _on_pane_broken(index: int, _at: Vector3, _material: StringName) -> void:
+	if net == null or not net.is_server:
+		return
+	_broadcast(PlaygroundEvents.Kind.PANE, PlaygroundEvents.write_pane(index))
+
+
 ## Client: every player holding something, as `[{player, prop}]` with this client's own
 ## nodes (the player's mirror and the prop's), skipping any it has not built yet.
 func holders() -> Array:
@@ -1036,6 +1045,9 @@ func _admit(peer_id: int) -> void:
 		_tell(peer_id, PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(
 			int(other), _tool_of[other]
 		))
+	# And every pane broken on this map, so the joiner's copy of the map has the same holes.
+	for index: int in game.broken_panes:
+		_tell(peer_id, PlaygroundEvents.Kind.PANE, PlaygroundEvents.write_pane(index))
 	# And what everybody is holding, for the same reason: HELD is sent when it changes.
 	for holder in held_props.keys():
 		_tell(peer_id, PlaygroundEvents.Kind.HELD, PlaygroundEvents.write_held(int(holder), int(held_props[holder]), false))
@@ -1675,6 +1687,10 @@ func _on_event(message: DotNetMessage) -> void:
 				weapon_changed.emit(
 					int(held["player_id"]), held["weapon_id"] as StringName
 				)
+		PlaygroundEvents.Kind.PANE:
+			var pane := PlaygroundEvents.read_pane(reader)
+			if bool(pane["ok"]):
+				game.break_pane(int(pane["index"]))
 		PlaygroundEvents.Kind.HELD:
 			var holding := PlaygroundEvents.read_held(reader)
 			if bool(holding["ok"]):

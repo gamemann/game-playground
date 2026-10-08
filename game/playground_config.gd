@@ -111,6 +111,11 @@ extends DotConfig
 ## it (`pg_destruction`). Creative mode protects a builder's props either way.
 @export var destruction: bool = false
 
+## Whether a map's breakable boxes (glass) break from shots, blasts and fast impacts. On by
+## default and separate from [member destruction], which is about props: glass in a map is
+## put there to be broken (`pg_breakable_glass`).
+@export var breakable_glass: bool = true
+
 ## Pieces a broken prop leaves, and how long they lie there.
 @export_range(0, 12) var debris_pieces: int = 4
 @export_range(0.5, 60.0, 0.5) var debris_seconds: float = 6.0

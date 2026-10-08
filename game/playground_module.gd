@@ -2046,6 +2046,15 @@ func _bind_props_feel() -> void:
 		game.config.destruction = value.to_int() != 0
 	)
 
+	game.panes_break = game.config.breakable_glass
+	var glass := add_cvar("pg_breakable_glass", "1" if game.config.breakable_glass else "0",
+		"1 lets shots, blasts and fast impacts break a map's glass; 0 makes it as hard as the walls.",
+		DotConVar.FLAG_NOTIFY)
+	glass.changed.connect(func(_old: String, value: String) -> void:
+		game.config.breakable_glass = value.to_int() != 0
+		game.panes_break = game.config.breakable_glass
+	)
+
 	var surf := add_cvar("pg_prop_surf", "1" if game.config.prop_surfing else "0",
 		"1 lets a moving prop carry whoever stands on it; 0 leaves props still under your feet.",
 		DotConVar.FLAG_NOTIFY)

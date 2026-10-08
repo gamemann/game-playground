@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 343
+const CHECKS := 347
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 40
+const SECTIONS := 41
 
 var _passed := 0
 var _failed := 0
@@ -172,6 +172,7 @@ func _run() -> void:
 		await _test_edit_over_the_wire()
 		await _test_map_props_over_the_wire()
 		await _test_held_over_the_wire()
+		await _test_glass_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -983,6 +984,50 @@ func _test_held_over_the_wire() -> void:
 	var _gone := _server_game.props.remove(crate.instance_id)
 	await _exchange_steps(4)
 	_check(_client_bridge.mirror_of(net_id) == null, "and the crate goes", str(_client_bridge.mirror_of(net_id)))
+	_done()
+
+
+## A pane of glass broken on the server is gone from every client's own copy of the map,
+## which each built from the document: the shards are props and travel as props, the hole
+## travels as `Kind.PANE`.
+func _test_glass_over_the_wire() -> void:
+	_section("glass broken on the server is gone on the client")
+
+	var before: StringName = _server_game.maps.current.id
+	var _changed: DotResult = await _server_game.change_map(&"pgc_nature")
+	for i in 240:
+		_exchange()
+		await _steps(1)
+		if _client_game.maps.current != null and _client_game.maps.current.id == &"pgc_nature":
+			break
+	await _exchange_steps(16)
+
+	var index: int = _server_game.panes.keys()[0] if not _server_game.panes.is_empty() else -1
+	_check(index >= 0 and _client_game.panes.has(index), "both ends know the map's panes", "%d" % index)
+	var client_node: Variant = (_client_game.panes[index] as Dictionary)["node"] if _client_game.panes.has(index) else null
+	var heard: Array = []
+	var on_broken := func(i: int, _at: Vector3, _m: StringName) -> void: heard.append(i)
+	_client_game.pane_broken.connect(on_broken)
+
+	var server_node: Node = (_server_game.panes[index] as Dictionary)["node"] if index >= 0 else null
+	var _broke := _server_game.hurt_pane(server_node, 1000.0, &"u%d" % SESSION)
+	await _exchange_steps(8)
+	_check(not _server_game.panes.has(index) and not _client_game.panes.has(index) and _client_game.broken_panes.has(index),
+		"a pane the server breaks is broken on the client too")
+	var gone := not is_instance_valid(client_node) or not (client_node as Node).is_inside_tree() \
+		or (client_node as Node).is_queued_for_deletion()
+	_check(gone, "and gone from the client's world",
+		"valid %s" % is_instance_valid(client_node))
+	_check(heard == [index], "with the signal its sound plays from", str(heard))
+
+	_client_game.pane_broken.disconnect(on_broken)
+	var _back: DotResult = await _server_game.change_map(before)
+	for i in 240:
+		_exchange()
+		await _steps(1)
+		if _client_game.maps.current != null and _client_game.maps.current.id == before:
+			break
+	await _exchange_steps(16)
 	_done()
 
 

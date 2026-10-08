@@ -236,6 +236,21 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	land.priority = 30
 	c.add(land)
 
+	# A pane of glass going: loud, far, and never more than two at once, because a blast
+	# through a greenhouse breaks a dozen panes in one tick.
+	var glass := DotAudioDef.new()
+	glass.id = &"glass_break"
+	glass.path = "%s/glass_break.ogg" % SOUND_DIR
+	glass.kind = DotAudioDef.Kind.POSITIONAL_3D
+	glass.bus = &"SFX"
+	glass.max_distance = 70.0
+	glass.max_concurrent = 2
+	glass.cooldown_ms = 60
+	glass.priority = 50
+	glass.pitch_min = 1.3
+	glass.pitch_max = 1.7
+	c.add(glass)
+
 	var grab := DotAudioDef.new()
 	grab.id = &"tool_grab"
 	grab.path = "%s/tool_grab.ogg" % SOUND_DIR
@@ -327,6 +342,7 @@ static func sound_recipes() -> Dictionary:
 	return {
 		&"prop_spawn": DotAudioSynth.Voice.SPAWN,
 		&"prop_land": DotAudioSynth.Voice.IMPACT,
+		&"glass_break": DotAudioSynth.Voice.SHOT_TIGHT,
 		&"tool_grab": DotAudioSynth.Voice.CLICK,
 		&"tool_punt": DotAudioSynth.Voice.SHOT,
 		&"buy": DotAudioSynth.Voice.PICKUP,
@@ -668,6 +684,10 @@ func on_tool_beam(eye: Vector3, aim: Vector3, to: Vector3, key: int = 0) -> Node
 	beam = fx.spawn(&"tool_beam", at) as Node3D
 	_beams[key] = beam
 	return beam
+
+
+func on_pane_broken(at: Vector3) -> void:
+	audio.play_at(&"glass_break", at)
 
 
 func on_prop_landed(at: Vector3) -> void:

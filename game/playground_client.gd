@@ -364,6 +364,11 @@ func _wire_presentation() -> void:
 	playground.maps.changed.connect(
 		func(_map: DotMapDef, _loaded: Node) -> void: presentation.on_map_changed()
 	)
+	# Glass breaking is heard on both ends: offline the game breaks it, connected the server's
+	# PANE event does, and either way the signal is this end's.
+	playground.pane_broken.connect(func(_index: int, at: Vector3, _material: StringName) -> void:
+		presentation.on_pane_broken(at)
+	)
 
 	if bridge != null:
 		bridge.prop_arrived.connect(func(at: Vector3, owner_session: int) -> void:

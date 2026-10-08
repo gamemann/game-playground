@@ -66,6 +66,9 @@ enum Kind {
 	## mode's settings, so the Q menu shows what the prop IS. Net id 0 is "nothing selected".
 	## Sent only to the player whose gun it is. Last, for the same reason.
 	SELECTION,
+	## A breakable map box broke (glass): its index in the map document. To everybody, and
+	## every one broken so far to a joiner. Last, for the same reason as the others.
+	PANE,
 }
 
 ## What a [constant Kind.PROJECTILE] event says.
@@ -1033,3 +1036,16 @@ static func read_selection(r: DotNetReader) -> Dictionary:
 	if not (parsed is Dictionary):
 		return {"ok": false}
 	return {"net_id": net_id, "name": prop_name, "settings": parsed, "refused": refused, "ok": true}
+
+
+# --- PANE ----------------------------------------------------------------------
+
+static func write_pane(index: int) -> PackedByteArray:
+	var w := _w()
+	w.write_varint(maxi(index, 0))
+	return w.to_bytes()
+
+
+static func read_pane(r: DotNetReader) -> Dictionary:
+	var index := r.read_varint()
+	return {"index": index, "ok": r.ok()}

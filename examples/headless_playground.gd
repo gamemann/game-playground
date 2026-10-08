@@ -57,13 +57,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 839
+const CHECKS := 850
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 44
+const SECTIONS := 45
 
 var _passed := 0
 var _failed := 0
@@ -157,6 +157,7 @@ func _run() -> void:
 	await _test_the_maps_are_surveyed()
 	await _test_a_maps_own_props()
 	await _test_map_materials()
+	await _test_glass()
 	await _test_the_client_boots()
 
 	print("")
@@ -6763,6 +6764,107 @@ func _jump_height(player: PlaygroundPlayer, at: Vector3) -> float:
 		elif airborne > 2:
 			break
 	return top - floor_y
+
+
+## Glass in a map breaks (pgc_nature's greenhouse): a real pistol through the game's shot
+## handling, a blast, a crate thrown into it; not a crate nudged into it, not a player running
+## alongside it, and nothing at all with `pg_breakable_glass` off. Shards fly and the
+## signal every client's sound hangs off fires.
+func _test_glass() -> void:
+	_section("glass breaks")
+
+	var changed: DotResult = await playground.change_map(&"pgc_nature")
+	if not changed.ok:
+		_check(false, "pgc_nature loads", changed.error.message)
+		_done()
+		return
+	playground.props.limits.spawn_interval = 0.0
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	var player: PlaygroundPlayer = playground.players[&"bot"]
+
+	var pane_at := func(centre: Vector3) -> int:
+		for index: int in playground.panes.keys():
+			var node := (playground.panes[index] as Dictionary)["node"] as Node3D
+			if Playground._pane_bounds(node).get_center().distance_to(centre) < 1.0:
+				return index
+		return -1
+	_check(playground.panes.size() == 6, "the greenhouse's six glass boxes are breakable, and nothing else is", str(playground.panes.size()))
+	var west: int = pane_at.call(Vector3(-7.95, 1.75, 50.0))
+	var east: int = pane_at.call(Vector3(7.95, 1.75, 50.0))
+	var north: int = pane_at.call(Vector3(0.0, 1.75, 45.05))
+
+	var heard: Array = []
+	var on_broken := func(index: int, _at: Vector3, material: StringName) -> void: heard.append([index, material])
+	playground.pane_broken.connect(on_broken)
+
+	# --- Running alongside a pane at full speed is not running into it ---------------------
+	# Starting past the north wall's end: the first version started south of it, ran into
+	# that wall's edge at full speed, and broke it, which is right and was not the question.
+	player.teleport(Vector3(8.6, 1.0, 45.8), 180.0)
+	var facing_south := DotFpsCommand.new()
+	facing_south.yaw = 180.0
+	await _drive(&"bot", facing_south, 64)
+	var run := DotFpsCommand.new()
+	run.move = Vector2(0.0, 1.0)
+	run.yaw = 180.0
+	await _drive(&"bot", run, 100)
+	_check(playground.panes.has(east) and heard.is_empty(), "a player running alongside a pane does not break it",
+		"%.2f m/s, at %s" % [player.controller.state.velocity.length(), str(player.controller.state.position)])
+
+	# --- Off, nothing breaks it -----------------------------------------------------------------
+	player.teleport(Vector3(-14.0, 1.0, 50.0), -90.0)
+	# Facing the pane while it settles: a command carries absolute angles, so an empty one
+	# turns the bot to yaw 0, which put the first version's shots into the north wall.
+	var facing_west_pane := DotFpsCommand.new()
+	facing_west_pane.yaw = -90.0
+	await _drive(&"bot", facing_west_pane, 64)
+	var rig := PlaygroundZee.arm(player, playground.weapon_def(&"zee_pistol"), ZeeWeaponRig.Role.SERVER, true,
+		playground.tick_rate, playground.current_tick())
+	playground.panes_break = false
+	var _off := _fire_at_crates(rig, player, 160)
+	_check(playground.panes.has(west), "with pg_breakable_glass off, shots break no glass")
+	playground.panes_break = true
+
+	# --- A pistol breaks it ------------------------------------------------------------------------
+	var before := playground.props.all_props().size()
+	# One burst: the helper counts ticks itself, and calling it a tick at a time with no frame
+	# between hands the rig the same tick each time, which fires once.
+	var _shots := _fire_at_crates(rig, player, 240)
+	PlaygroundZee.disarm(player)
+	await get_tree().physics_frame
+	var shards := playground.props.all_props().filter(func(p: DotPropInstance) -> bool: return p.def.id == &"debris")
+	_check(not playground.panes.has(west) and playground.broken_panes.has(west), "a pistol shoots a pane out")
+	_check(shards.size() >= 3 and playground.props.all_props().size() > before, "and it leaves shards", "%d shards" % shards.size())
+	_check(heard.size() == 1 and heard[0][0] == west and heard[0][1] == &"glass", "and says so, once, for the sound", str(heard))
+	await get_tree().physics_frame
+	var through := playground.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(
+		Vector3(-14.0, 1.7, 50.0), Vector3(-2.0, 1.7, 50.0)))
+	_check(through.is_empty() or not ((through["collider"] as Node).get_meta(&"pg_box", -1) == west),
+		"and nothing is left where it stood")
+
+	# --- A blast ---------------------------------------------------------------------------------
+	var standing := playground.panes.has(north)
+	playground.hurt_panes_in(Vector3(0.0, 1.75, 43.0), 4.0, 100.0, &"bot")
+	_check(standing and not playground.panes.has(north), "a blast beside a pane breaks it")
+
+	# --- A crate thrown into it, and one nudged into it -----------------------------------------------
+	var nudged := playground.props.spawn(&"crate", &"bot", Vector3(10.5, 0.6, 52.0))
+	await get_tree().physics_frame
+	(nudged.node as RigidBody3D).linear_velocity = Vector3(-2.0, 0.0, 0.0)
+	await _drive(&"bot", DotFpsCommand.new(), 128)
+	_check(playground.panes.has(east), "a crate nudged into a pane leaves it standing")
+	var thrown := playground.props.spawn(&"crate", &"bot", Vector3(11.0, 1.2, 48.0))
+	await get_tree().physics_frame
+	(thrown.node as RigidBody3D).linear_velocity = Vector3(-12.0, 0.0, 0.0)
+	await _drive(&"bot", DotFpsCommand.new(), 64)
+	_check(not playground.panes.has(east), "and one thrown into it breaks it")
+
+	playground.pane_broken.disconnect(on_broken)
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	var back: DotResult = await playground.change_map(&"pgc_nature")
+	_check(back.ok and playground.panes.size() == 6 and playground.broken_panes.is_empty(), "a map change puts every pane back")
+	var _lobby: DotResult = await playground.change_map(&"pg_lobby")
+	_done()
 
 
 ## game-playground-maps' documents this suite surveys. See `_test_the_maps_are_surveyed`.

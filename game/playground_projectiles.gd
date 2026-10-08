@@ -369,6 +369,9 @@ func _detonate(f: Flying, at: Vector3) -> void:
 	if space != null and radius > 0.0:
 		for collider in _in_blast(space, at, radius):
 			_blast(space, f, at, radius, collider)
+		# Map panes too (glass), which the blast's shape query does not return: they are world.
+		if game != null and game.has_method("hurt_panes_in"):
+			game.call("hurt_panes_in", at, radius, f.spawn.splash_damage, f.owner_id)
 
 	_hear(DotNpcAiSounds.Kind.COMBAT, at, BLAST_HEARD, 0.5, f.owner_id)
 	_undraw(f)
