@@ -122,6 +122,10 @@ static func load_script(def: DotPropDef) -> GDScript:
 ## `grab_mass_limit` is checked against and what a gravity gun's punt is divided by, so
 ## a beach ball that is bigger than a boulder and a fortieth of its weight is the one
 ## entry that proves both tools read it.
+## Kilograms per cubic metre for the props that must sink: rock and concrete.
+const DENSE := {&"boulder": 2600.0, &"slab": 2400.0, &"pillar": 2400.0, &"die": 1200.0}
+
+
 static func catalogue() -> DotPropCatalogue:
 	var out := DotPropCatalogue.new()
 
@@ -174,6 +178,11 @@ static func catalogue() -> DotPropCatalogue:
 			"extent": [row[4].x, row[4].y, row[4].z],
 			"colour": row[5],
 		}
+		# Densities the solver's masses do not give: these are tuned for a physics gun, and by
+		# them a 3 m boulder is lighter than water. What a liquid floats or sinks is asked of
+		# this when it is there (Playground._float_props).
+		if DENSE.has(row[0]):
+			prop.meta["density"] = DENSE[row[0]]
 		if row[0] == &"barrel":
 			# Shot open, it goes up: the arena's damage on whoever is beside it, and a
 			# shove for everything loose.

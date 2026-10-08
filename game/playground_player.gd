@@ -151,6 +151,19 @@ var tick_rate: int = 128:
 			controller.tick_rate = value
 
 
+## This player's swimming mode (dot-player-controller's DotFpsSwimMode). Its water is the
+## map's, set by [method set_water].
+var swim: DotFpsSwimMode = DotFpsSwimMode.new()
+
+
+## The water this player can swim in: the map's water boxes, world space.
+func set_water(boxes: Array[AABB]) -> void:
+	swim.volumes = boxes
+	if controller != null and controller.motor != null and controller.state != null \
+			and controller.state.mode == swim.mode_id and boxes.is_empty():
+		controller.motor.set_mode(controller.state, DotFpsState.Mode.AIR)
+
+
 func _ready() -> void:
 	controller = DotFpsController.new()
 	controller.name = "Controller"
@@ -178,6 +191,10 @@ func _ready() -> void:
 	# Node3D the movement drives. `DotNodeRef.of_self()` looks equivalent and is not:
 	# it resolves to the CONTROLLER, which is a plain Node, and setup() then refuses
 	# with "the player body must be a Node3D" and the whole player never simulates.
+	# Swimming: one mode per player, registered on every setup (a style rebuilds the motor),
+	# the same on every machine because its id is on the wire. The water comes from the map.
+	controller.extra_modes = [swim]
+
 	add_child(controller)
 
 	controller.simulated.connect(_on_simulated)
@@ -605,6 +622,11 @@ func simulate(tick: int, delta: float) -> void:
 ## tick and, worse, shifts it by a different amount at each tickrate.
 func _on_simulated(_tick: int, state: DotFpsState) -> void:
 	global_position = state.position
+
+	# Into the water once the waist is in it. Here because this runs on every simulated tick,
+	# a prediction replay's included, so a client and the server enter on the same tick.
+	if not riding and controller.motor != null:
+		swim.update(controller.motor, state)
 
 	if timer == null:
 		return

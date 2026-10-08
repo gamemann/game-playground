@@ -57,13 +57,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 850
+const CHECKS := 858
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 45
+const SECTIONS := 46
 
 var _passed := 0
 var _failed := 0
@@ -158,6 +158,7 @@ func _run() -> void:
 	await _test_a_maps_own_props()
 	await _test_map_materials()
 	await _test_glass()
+	await _test_water()
 	await _test_the_client_boots()
 
 	print("")
@@ -6711,11 +6712,16 @@ func _test_map_materials() -> void:
 	await _drive(&"bot", DotFpsCommand.new(), int(playground.tick_rate * 2.0))
 	_check(crate != null and not crate.is_alive(), "and a crate that falls in melts")
 
-	# --- Water is a volume, not a floor --------------------------------------------------
+	# --- Water is a volume, not a floor: a crate floats on it ------------------------------
 	var floater := playground.props.spawn(&"crate", &"bot", Vector3(60.0, 3.0, 50.0))
-	await _drive(&"bot", DotFpsCommand.new(), int(playground.tick_rate * 1.5))
+	await _drive(&"bot", DotFpsCommand.new(), int(playground.tick_rate * 3.0))
 	var settled: float = (floater.node as Node3D).global_position.y if floater != null and floater.is_alive() else INF
-	_check(settled < 1.0, "a crate dropped on the pond goes in it, to the bed", "y %.2f" % settled)
+	var pond_top := 0.0
+	for liquid: Dictionary in playground.liquids:
+		if liquid["material"] == &"water":
+			pond_top = (liquid["box"] as AABB).end.y
+	_check(absf(settled - (pond_top + 0.5)) < 0.3, "a crate dropped on the pond floats on it",
+		"y %.2f, surface %.2f" % [settled, pond_top])
 
 	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
 	var _back: DotResult = await playground.change_map(&"pg_lobby")
@@ -6864,6 +6870,61 @@ func _test_glass() -> void:
 	var back: DotResult = await playground.change_map(&"pgc_nature")
 	_check(back.ok and playground.panes.size() == 6 and playground.broken_panes.is_empty(), "a map change puts every pane back")
 	var _lobby: DotResult = await playground.change_map(&"pg_lobby")
+	_done()
+
+
+## Water (pgc_harbour's basin): a player in it swims, floats with the head out, swims
+## forward at swim speed; a crate and a barrel float, a boulder sinks to the bed.
+func _test_water() -> void:
+	_section("water: swimming and floating")
+
+	var changed: DotResult = await playground.change_map(&"pgc_harbour")
+	if not changed.ok:
+		_check(false, "pgc_harbour loads", changed.error.message)
+		_done()
+		return
+	playground.props.limits.spawn_interval = 0.0
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	var player: PlaygroundPlayer = playground.players[&"bot"]
+	var boxes := playground.water_boxes()
+	_check(boxes.size() == 1 and player.swim.volumes.size() == 1, "the basin is water, and the player is told", str(boxes))
+	var surface: float = boxes[0].end.y if not boxes.is_empty() else 0.0
+
+	# Into the basin, clear of the piers.
+	player.teleport(Vector3(-70.0, -1.0, -60.0), 0.0)
+	var idle := DotFpsCommand.new()
+	await _drive(&"bot", idle, 384)
+	var head := player.controller.state.position.y + player.swim.float_depth
+	print("    floating: feet %.2f, head %.2f, surface %.2f" % [player.controller.state.position.y, head, surface])
+	_check(player.controller.state.mode == player.swim.mode_id, "a player who falls in swims")
+	_check(absf(head - surface) < 0.3, "and floats with the head at the surface", "head %.2f, surface %.2f" % [head, surface])
+
+	var forward := DotFpsCommand.new()
+	forward.move = Vector2(0.0, 1.0)
+	await _drive(&"bot", forward, 256)
+	var flat := Vector2(player.controller.state.velocity.x, player.controller.state.velocity.z).length()
+	print("    swimming: %.2f m/s" % flat)
+	_check(flat > 2.5 and flat <= player.swim.swim_speed + 0.01, "and swims forward, slower than a run", "%.2f m/s" % flat)
+
+	# Props: two that float, one that sinks.
+	var crate := playground.props.spawn(&"crate", &"bot", Vector3(-40.0, 1.0, -70.0))
+	var barrel := playground.props.spawn(&"barrel", &"bot", Vector3(-35.0, 1.0, -70.0))
+	var boulder := playground.props.spawn(&"boulder", &"bot", Vector3(-25.0, 1.0, -70.0))
+	await _drive(&"bot", idle, 128 * 5)
+	var y_crate: float = (crate.node as Node3D).global_position.y
+	var y_barrel: float = (barrel.node as Node3D).global_position.y
+	var y_boulder: float = (boulder.node as Node3D).global_position.y
+	var bed := boxes[0].position.y if not boxes.is_empty() else -4.0
+	print("    after 5 s: crate %.2f, barrel %.2f, boulder %.2f (surface %.2f, bed %.2f)" % [y_crate, y_barrel, y_boulder, surface, bed])
+	_check(absf(y_crate - surface) < 0.6 and absf(y_barrel - surface) < 0.8, "a crate and a barrel float at the surface")
+	_check(y_boulder < bed + 2.0, "and a boulder sinks to the bed", "%.2f" % y_boulder)
+	_check(absf((crate.node as RigidBody3D).linear_velocity.y) < 0.5, "and what floats has settled, not bobbing for ever",
+		"%.2f m/s" % (crate.node as RigidBody3D).linear_velocity.y)
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	var _lobby: DotResult = await playground.change_map(&"pg_lobby")
+	_check(player.swim.volumes.is_empty() and player.controller.state.mode != player.swim.mode_id,
+		"a map with no water leaves nobody swimming")
 	_done()
 
 

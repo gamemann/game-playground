@@ -701,6 +701,15 @@ func _build_extras() -> DotResult:
 		return voted.wrap("The vote could not be set up")
 
 	vote.change_due.connect(_on_vote_change_due)
+
+	# Both map clocks follow the server's hibernation: they wait while nobody is here and start
+	# again from the top when somebody joins. With it off (`sv_hibernate_when_empty 0`),
+	# dot-vote's `empty_choice` changes the map when the limit runs out on nobody. This module
+	# is not on DotGameModule, which does it itself.
+	if vote.director != null:
+		vote.director.follow_hibernation(server)
+	if game.maps != null:
+		game.maps.follow_hibernation(server)
 	vote.announced.connect(_on_vote_announced)
 
 	# The cues and the countdown, to every client. The ballot goes out as chat through

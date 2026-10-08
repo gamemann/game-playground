@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 347
+const CHECKS := 351
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 41
+const SECTIONS := 42
 
 var _passed := 0
 var _failed := 0
@@ -173,6 +173,7 @@ func _run() -> void:
 		await _test_map_props_over_the_wire()
 		await _test_held_over_the_wire()
 		await _test_glass_over_the_wire()
+		await _test_swimming_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -1021,6 +1022,67 @@ func _test_glass_over_the_wire() -> void:
 	_check(heard == [index], "with the signal its sound plays from", str(heard))
 
 	_client_game.pane_broken.disconnect(on_broken)
+	var _back: DotResult = await _server_game.change_map(before)
+	for i in 240:
+		_exchange()
+		await _steps(1)
+		if _client_game.maps.current != null and _client_game.maps.current.id == before:
+			break
+	await _exchange_steps(16)
+	_done()
+
+
+## A connected client predicts its own player swimming (pgc_harbour's basin): the swim mode
+## is entered from `PlaygroundPlayer._on_simulated`, which a prediction replay runs too, and
+## its water is a list of boxes both ends built from the one map document. Measured: what a
+## swim costs in corrections, and where the two ends end up.
+##
+## [b]What this cannot see:[/b] armed by entering the mode on the server only, it still
+## passes. The mode travels in the snapshot, and on this suite's short link the server's
+## snapshot puts the client in the water before its prediction has drifted past a correction.
+## The client's own entry is what keeps a real round trip from showing the player walking on
+## the bed for 100 ms; this asserts the swim agrees, not that.
+func _test_swimming_over_the_wire() -> void:
+	_section("swimming, predicted by a connected client")
+
+	var before: StringName = _server_game.maps.current.id
+	var _changed: DotResult = await _server_game.change_map(&"pgc_harbour")
+	for i in 240:
+		_exchange()
+		await _steps(1)
+		if _client_game.maps.current != null and _client_game.maps.current.id == &"pgc_harbour":
+			break
+	await _exchange_steps(16)
+
+	var mine := _client_player()
+	var theirs := _server_player()
+	_check(mine.swim.volumes.size() == 1 and theirs.swim.volumes.size() == 1, "both ends have the basin's water")
+	theirs.teleport(Vector3(-70.0, -1.0, -60.0), 0.0)
+	await _steps(320)
+	_check(theirs.controller.state.mode == theirs.swim.mode_id and mine.controller.state.mode == mine.swim.mode_id,
+		"the server's player and the client's prediction of it are both swimming",
+		"server %d, client %d" % [theirs.controller.state.mode, mine.controller.state.mode])
+
+	# Getting IN is the moment the client's own entry matters: the mode is in the snapshot, so
+	# a client that never entered by itself is corrected into the water a round trip late.
+	# Walked in, as a player would: down the west slipway from the quay, into the basin.
+	theirs.teleport(Vector3(-80.0, 0.3, 14.0), 0.0)
+	await _steps(160)
+	var c := _forward()
+	c.yaw = 0.0
+	var corrections_before := _corrections_and_snaps()
+	var entered_at := -1
+	for i in 320:
+		await _step(c)
+		if entered_at < 0 and theirs.controller.state.mode == theirs.swim.mode_id:
+			entered_at = i
+	var corrections := _corrections_and_snaps() - corrections_before
+	await _steps(32)
+	var gap := mine.controller.state.position.distance_to(theirs.controller.state.position)
+	print("    walked down the slipway into the water (in at tick %d) and swam: %d corrections, ends %.3f m apart" % [entered_at, corrections, gap])
+	_check(entered_at > 0 and corrections == 0, "walking in and swimming costs the prediction nothing", "%d corrections" % corrections)
+	_check(gap < 0.1, "and the client ends where the server does", "%.3f m" % gap)
+
 	var _back: DotResult = await _server_game.change_map(before)
 	for i in 240:
 		_exchange()

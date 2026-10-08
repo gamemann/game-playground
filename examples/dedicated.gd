@@ -46,7 +46,7 @@ const PlaygroundWaves := preload("../game/playground_waves.gd")
 ## its last line; an early `return` after a failed check skips it deliberately, because a
 ## section that stopped early did not do what it says.
 const SECTIONS := 27
-const CHECKS := 243
+const CHECKS := 244
 
 ## Everything this run writes, and it is deleted on the way in and on the way out.
 ##
@@ -1410,6 +1410,12 @@ func _test_vote() -> void:
 
 	var options := vote.director.build_options(2)
 	_check(options.size() > 0, "a ballot has something on it (%d)" % options.size())
+
+	# Hibernation: both map clocks wait while the server is empty and restart on a join.
+	var game_for_clocks: Playground = _module().get("game")
+	_check(server.hibernation_changed.is_connected(vote.director.set_hibernating)
+		and game_for_clocks != null and server.hibernation_changed.is_connected(game_for_clocks.maps.set_hibernating),
+		"the vote's clock and the map's follow the server's hibernation")
 
 	var next := vote.next_in_rotation()
 	_check(next != &"", "something is next in the rotation (%s)" % String(next))

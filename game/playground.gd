@@ -806,12 +806,23 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		_doors[prop.instance_id] = {"open": false, "t": 0.0, "base": (prop.node as Node3D).global_transform}
 
 
+## The current map's water, as the boxes a player's swim mode is given.
+func water_boxes() -> Array[AABB]:
+	var out: Array[AABB] = []
+	for liquid: Dictionary in liquids:
+		if liquid["material"] == &"water":
+			out.append(liquid["box"] as AABB)
+	return out
+
+
 ## What the liquids do, on the authority: lava burns a player (through [member hazard_hurt],
 ## or back to the spawn) and melts a prop that stays in it. Water's own behaviour, floating
 ## and swimming, is not here.
 func _liquid_tick(step: float) -> void:
 	if not authoritative or liquids.is_empty():
 		return
+
+	_float_props(step)
 
 	var burning: Array = []
 	for liquid: Dictionary in liquids:
@@ -834,13 +845,23 @@ func _liquid_tick(step: float) -> void:
 				spawn_player(id)
 			break
 
+	# Once a prop has touched lava it is burning, and goes MELT_SECONDS later whether or not it
+	# bounced clear in between: a timer reset by every bounce let a light crate ride a lava lake.
 	var still: Dictionary = {}
 	for prop: DotPropInstance in props.all_props():
 		var node := prop.node as Node3D
 		if node == null or not prop.is_alive():
 			continue
+		if _melting.has(prop.instance_id):
+			still[prop.instance_id] = float(_melting[prop.instance_id]) + step
+			continue
+		# Its underside in the lava, not its centre: a crate floats on lava (it is denser than
+		# wood), and a centre test let a floating crate ride a lava lake for ever.
+		# A light one floats in it by millimetres, so the bottom is asked of the lava grown a
+		# little: resting on the surface is touching it.
+		var underside := node.global_position - Vector3.UP * _half_height_of(prop)
 		for each: Array in burning:
-			if (each[0] as AABB).has_point(node.global_position):
+			if (each[0] as AABB).grow(0.1).has_point(underside):
 				still[prop.instance_id] = float(_melting.get(prop.instance_id, 0.0)) + step
 				break
 	_melting = still
@@ -1032,6 +1053,77 @@ static func _reach_of(body: Node3D) -> float:
 		if child is CollisionShape3D and (child as CollisionShape3D).shape != null:
 			return (child as CollisionShape3D).shape.get_debug_mesh().get_aabb().size.length() * 0.5
 	return 0.5
+
+
+## Buoyancy and drag on every loose prop in a liquid, on the authority (props are not
+## predicted). A body lighter than the liquid for its volume floats, sitting as deep as its
+## density says; a heavier one sinks, slowed. Its density is the catalogue's `density` when
+## the definition gives one (rock, concrete: the catalogue's masses are tuned for a physics
+## gun, and a 900 kg, 3 m boulder works out lighter than water) and its mass over its volume
+## otherwise.
+func _float_props(step: float) -> void:
+	var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+	for prop: DotPropInstance in props.all_props():
+		var body := prop.node as RigidBody3D
+		if body == null or body.freeze or not body.is_inside_tree() or prop.held_by != &"":
+			continue
+		var at := body.global_position
+		for liquid: Dictionary in liquids:
+			var box: AABB = liquid["box"]
+			if not box.grow(2.0).has_point(at):
+				continue
+			var s := PlaygroundMaterials.surface(String(liquid["material"]))
+			if s == null:
+				continue
+			var volume := _volume_of(prop)
+			var half := _half_height_of(prop)
+			var submerged := clampf((box.end.y - (at.y - half)) / maxf(half * 2.0, 0.01), 0.0, 1.0)
+			if submerged <= 0.0 or at.x < box.position.x or at.x > box.end.x or at.z < box.position.z or at.z > box.end.z:
+				continue
+			var density := float(prop.def.meta.get("density", body.mass / maxf(volume, 0.001))) if prop.def != null else body.mass / maxf(volume, 0.001)
+			# Up by the liquid's weight displaced; the engine already pulls down by the body's.
+			var lift := s.density * volume * submerged * gravity
+			# A dense body is heavier than its mass says: pull the difference down too, so a
+			# boulder whose catalogue mass makes it a balloon still sinks like rock.
+			var extra := maxf(density * volume - body.mass, 0.0) * gravity * submerged
+			body.apply_central_impulse(Vector3.UP * (lift - extra) * step)
+			# Drag, never more than the velocity it is taking off.
+			var drag := clampf(s.dampening * submerged * step, 0.0, 1.0)
+			body.apply_central_impulse(-body.linear_velocity * body.mass * drag)
+			body.angular_velocity *= 1.0 - drag
+			# And the bob damped critically. Buoyancy is a spring whose stiffness is the
+			# liquid's density over the body's: a crate the catalogue makes fifty times lighter
+			# than water is a very stiff one, and the first version shot crates a metre out of
+			# the pond and let them bounce for ever. Damping at 2 sqrt(k) settles it in a bob.
+			var ratio := clampf(s.density / maxf(density, 1.0), 0.0, 60.0)
+			var critical := 2.0 * sqrt(gravity * ratio / maxf(half * 2.0, 0.1))
+			# Whenever it touches, not scaled by how deep: a body that floats rides almost
+			# entirely out of the liquid, and damping scaled by that depth let a crate bounce on
+			# lava half a metre high indefinitely.
+			var settle := clampf(critical * step, 0.0, 1.0)
+			body.apply_central_impulse(Vector3.DOWN * body.linear_velocity.y * body.mass * settle)
+			break
+
+
+static func _volume_of(prop: DotPropInstance) -> float:
+	if prop.def == null:
+		return 1.0
+	var e := PlaygroundProp.extent_of(prop.def)
+	var scale := float(prop.node.get("size_scale")) if prop.node != null and prop.node.get("size_scale") != null else 1.0
+	var box := e.x * e.y * e.z * pow(scale, 3.0)
+	match PlaygroundProp.shape_of(prop.def):
+		PlaygroundProp.Shape.SPHERE:
+			return box * PI / 6.0
+		PlaygroundProp.Shape.CYLINDER:
+			return box * PI / 4.0
+	return box
+
+
+static func _half_height_of(prop: DotPropInstance) -> float:
+	if prop.def == null:
+		return 0.5
+	var scale := float(prop.node.get("size_scale")) if prop.node != null and prop.node.get("size_scale") != null else 1.0
+	return PlaygroundProp.extent_of(prop.def).y * 0.5 * scale
 
 
 ## Who a map's own props belong to. Not a player id (one is `u<n>`), so no player's limits,
@@ -1943,6 +2035,7 @@ func add_player(id: StringName, display_name: String) -> PlaygroundPlayer:
 
 
 	players[id] = player
+	player.set_water(water_boxes())
 	_samples[id] = DotTimerSample.new()
 
 	spawn_player(id)
@@ -2413,6 +2506,8 @@ func _on_map_changed(map: DotMapDef, loaded: Node) -> void:
 		loaded.call("configure_doc", str(map.meta.get("doc", "")))
 	liquids = loaded.call("liquid_volumes") if loaded != null and loaded.has_method("liquid_volumes") else []
 	_melting.clear()
+	for id in players:
+		(players[id] as PlaygroundPlayer).set_water(water_boxes())
 	_index_panes(loaded)
 	if config != null:
 		panes_break = config.breakable_glass

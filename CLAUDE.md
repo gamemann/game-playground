@@ -1183,7 +1183,7 @@ What it does not model, on purpose, and each errs toward reporting: a jump is ju
 
 ### Map materials: what a box is made of (2026-10-07)
 
-A map document's box may name a `material` (`game/playground_materials.gd`): one of dot-physics' fifteen standard surfaces — concrete, metal, wood, glass, dirt, grass, sand, snow, ice, flesh, water, rock, mud, rubber, lava. **The numbers are dot-physics'**, read once: the solver's friction and bounce go on the box (`to_physics_material`), and the player's movement comes from the same entry through dot-player-controller's `DotFpsSurface.from_physics`, set as every player's `controller.surfaces` and found from the box's `dot_fps_surface` metadata, which a client and a server both build from the one document (so the prediction agrees). The only thing this game adds is each material's look (`LOOKS`; alpha under 1 is see-through, and `PlaygroundGeometry._material` draws those both sides). **A liquid (water, lava) has no collider at all**: it is a see-through volume the map records (`liquid_volumes()`, axis-aligned, a turned liquid is refused), and `Playground.liquids` holds them. Lava, on the authority (`_liquid_tick`): a player whose feet are in it is hurt through `hazard_hurt` (the arena's `hurt`, set by the module) and sent back to the spawn when that does nothing (the arena off), and a prop in it for `MELT_SECONDS` (1) is removed. Water has no behaviour yet beyond being entered (floating and swimming are next). `headless_playground`'s *map materials* on pgc_nature (7, measured and printed): an ice box is ice to feet and solver; the liquids recorded; speed kept 24 ticks after letting go 34% on grass, 91% on ice; top speed 6.68 m/s on grass, 2.30 in mud; jump 1.12 m on grass, 3.68 m off rubber; lava sends a player to the spawn and melts a crate; a crate dropped on the pond sinks to its bed. **Writing it found the suite's own mistake twice**: a jump pressed on one tick of a player still falling from a teleport measured nothing, and a crate dropped onto the lava pit's bridge did not melt.
+A map document's box may name a `material` (`game/playground_materials.gd`): one of dot-physics' fifteen standard surfaces — concrete, metal, wood, glass, dirt, grass, sand, snow, ice, flesh, water, rock, mud, rubber, lava. **The numbers are dot-physics'**, read once: the solver's friction and bounce go on the box (`to_physics_material`), and the player's movement comes from the same entry through dot-player-controller's `DotFpsSurface.from_physics`, set as every player's `controller.surfaces` and found from the box's `dot_fps_surface` metadata, which a client and a server both build from the one document (so the prediction agrees). The only thing this game adds is each material's look (`LOOKS`; alpha under 1 is see-through, and `PlaygroundGeometry._material` draws those both sides). **A liquid (water, lava) has no collider at all**: it is a see-through volume the map records (`liquid_volumes()`, axis-aligned, a turned liquid is refused), and `Playground.liquids` holds them. Lava, on the authority (`_liquid_tick`): a player whose feet are in it is hurt through `hazard_hurt` (the arena's `hurt`, set by the module) and sent back to the spawn when that does nothing (the arena off), and a prop in it for `MELT_SECONDS` (1) is removed. **Water is swum in and floated on** (next section). `headless_playground`'s *map materials* on pgc_nature (7, measured and printed): an ice box is ice to feet and solver; the liquids recorded; speed kept 24 ticks after letting go 34% on grass, 91% on ice; top speed 6.68 m/s on grass, 2.30 in mud; jump 1.12 m on grass, 3.68 m off rubber; lava sends a player to the spawn and melts a crate; a crate dropped on the pond sinks to its bed. **Writing it found the suite's own mistake twice**: a jump pressed on one tick of a player still falling from a teleport measured nothing, and a crate dropped onto the lava pit's bridge did not melt.
 
 ### Glass breaks (2026-10-07)
 
@@ -1199,6 +1199,24 @@ The checks:
 - `headless_net`'s *glass broken on the server is gone on the client* (4).
 
 **Writing it found three mistakes in the suite, none in the game.** A settle drive's empty command turned the bot to yaw 0 and put the pistol's shots into the north wall. The first sprint path ran into the north wall's END and broke it, correctly. And firing a tick at a time with no frame between hands the rig one tick, which fires once.
+
+### Water: swimming and floating (2026-10-07)
+
+**Players swim** through dot-player-controller's `DotFpsSwimMode`. It is one per player, in `controller.extra_modes` so a style's rebuilt motor keeps it under the same id on every machine. Its water comes from `Playground.water_boxes()` (the map's water liquids), set on every map change and on joining (`PlaygroundPlayer.set_water`). It is entered from `_on_simulated`, which a prediction replay also runs.
+
+**Props float** on the authority (`_float_props`, in `_liquid_tick`). Each gets buoyancy by the liquid's density over the volume submerged, drag from its `dampening`, and the bob damped critically at 2 sqrt(k). Critical damping, and applied whenever touching rather than scaled by depth: a crate the catalogue makes fifty times lighter than water first shot a metre out of the basin, and then bounced on lava half a metre high for ever. A prop's density is the catalogue's `density` meta where given (`PlaygroundSpawnables.DENSE`: boulder 2600, slab and pillar 2400, die 1200, because the catalogue's masses are tuned for a physics gun and make a 3 m boulder lighter than water) and its mass over its volume otherwise. A prop that has touched lava melts `MELT_SECONDS` later whether or not it bounced clear, because a timer reset by each bounce let a floating crate ride a lava lake.
+
+pgc_harbour's basin is real water now (3.4 m deep, its surface 0.6 m under the quay).
+
+The checks:
+- `headless_playground`'s *water: swimming and floating* (8): a player who falls in swims and floats with the head at the surface (-0.59 against -0.60), swims at 4.0 m/s; a crate and a barrel float and settle; a boulder sinks to the bed; no water leaves nobody swimming. *map materials*' pond check now expects a crate to float.
+- `headless_net`'s *swimming, predicted by a connected client* (4): walking down a slipway into the basin and swimming, 0 corrections in 320 ticks, ends 2.8 cm apart. **It cannot see the client's own entry**: armed with entry on the server only, it still passes, because the mode travels in the snapshot and this link is short. The client's entry is what keeps a real round trip from showing a player walking on the bed.
+
+**Release:** the client shell needs the new dot-player-controller (`DotFpsSwimMode`, `extra_modes`) and dot-physics before a playground pack using them is published.
+
+### Hibernation (2026-10-07)
+
+The module follows the server's hibernation with both map clocks: `vote.director.follow_hibernation(server)` and `game.maps.follow_hibernation(server)`. An empty server idles from boot (dot-server's `sv_hibernate_when_empty`, 1) and its clocks start again from the top when somebody joins. With it off, dot-vote's `empty_choice` (random) changes the map when the limit runs out on nobody. `on_no_votes` (keep, or random / rotation) decides a ballot nobody voted in. All of it is dot-server's, dot-vote's and dot-map's; this module only wires it, because it is not on DotGameModule, which does it itself. `dedicated`'s vote section asserts both connections.
 
 ## Maps are content, not projects
 
@@ -1246,11 +1264,11 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 850 checks, 45 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 858 checks, 46 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 347 checks, 41 sections
-godot --headless --path . res://examples/dedicated.tscn             # 243 checks, 27 sections
+godot --headless --path . res://examples/headless_net.tscn          # 351 checks, 42 sections
+godot --headless --path . res://examples/dedicated.tscn             # 244 checks, 27 sections
 ```
 
 **`dedicated` counts both now.** It had neither a section counter nor a CHECKS total until 2026-09-24, so a section a runtime error aborted part-way would have left "0 failed" and exit 0 with checks missing. Each section's last line is `_section_done()`; `SECTIONS` and `CHECKS` were armed one each way (exit 1). `headless_net` and `headless_playground` count both too, since a119ad1.
