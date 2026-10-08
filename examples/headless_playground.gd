@@ -21,7 +21,7 @@ const PlaygroundWeapons := preload("../game/playground_weapons.gd")
 const PlaygroundZee := preload("../game/playground_zee.gd")
 const PlaygroundProjectiles := preload("../game/playground_projectiles.gd")
 const PlaygroundEvents := preload("../game/net/playground_events.gd")
-const ToolPhysprop := preload("../game/tools/tool_physprop.gd")
+const ToolPhysprop := preload("../game/toolgun/tool_physprop.gd")
 const PlaygroundLimits := preload("../game/playground_limits.gd")
 const PlaygroundNpcNet := preload("../game/net/playground_npc_net.gd")
 
@@ -56,7 +56,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 811
+const CHECKS := 826
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -552,7 +552,7 @@ func _test_buttons_and_doors() -> void:
 	_check(door != null and door.frozen, "a door stands frozen where it is put")
 	var shut := (door.node as Node3D).global_transform
 
-	var wire := preload("res://game/tools/tool_wire.gd").new()
+	var wire := preload("res://game/toolgun/tool_wire.gd").new()
 	var gun := WireGun.new()
 	gun.game = playground
 	var first: DotResult = wire.primary(gun, {"prop": button})
@@ -6648,7 +6648,7 @@ func _test_a_maps_own_props() -> void:
 
 
 ## game-playground-maps' documents this suite surveys. See `_test_the_maps_are_surveyed`.
-const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry", "pgc_slopes", "pgc_town", "pgc_islands", "pgc_site", "pgc_warehouse", "pgc_canyon"]
+const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry", "pgc_slopes", "pgc_town", "pgc_islands", "pgc_site", "pgc_warehouse", "pgc_canyon", "pgc_harbour", "pgc_bowl", "pgc_obstacle"]
 
 
 ## A floor with one of everything on it: a 0.5 m slot between two walls, a platform 5 m

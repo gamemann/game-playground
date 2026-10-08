@@ -162,6 +162,26 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_canyon_floor", "from": Vector3(0.0, 1.7, 100.0), "at": Vector3(0.0, 12.0, 0.0)},
 			{"name": "pgc_canyon_jump", "from": Vector3(-40.0, 23.0, 60.0), "at": Vector3(15.0, 20.0, 60.0)},
 		]
+	if id == "pgc_harbour":
+		return [
+			{"name": "pgc_harbour", "from": Vector3(-60.0, 55.0, 95.0), "at": Vector3(10.0, -4.0, -25.0)},
+			{"name": "pgc_harbour_piers", "from": Vector3(-30.0, 1.7, 14.0), "at": Vector3(-50.0, -2.0, -30.0)},
+			{"name": "pgc_harbour_lighthouse", "from": Vector3(55.0, 14.0, -50.0), "at": Vector3(80.0, 10.0, -80.0)},
+			{"name": "pgc_harbour_gallery", "from": Vector3(84.5, 22.7, -75.5), "at": Vector3(20.0, -2.0, -20.0)},
+		]
+	if id == "pgc_bowl":
+		return [
+			{"name": "pgc_bowl", "from": Vector3(0.0, 60.0, 75.0), "at": Vector3(0.0, 0.0, -5.0)},
+			{"name": "pgc_bowl_rim", "from": Vector3(0.0, 16.7, 44.0), "at": Vector3(0.0, 2.0, 0.0)},
+			{"name": "pgc_bowl_floor", "from": Vector3(-12.0, 1.7, 12.0), "at": Vector3(20.0, 8.0, -25.0)},
+		]
+	if id == "pgc_obstacle":
+		return [
+			{"name": "pgc_obstacle", "from": Vector3(35.0, 35.0, 70.0), "at": Vector3(-20.0, 4.0, 5.0)},
+			{"name": "pgc_obstacle_start", "from": Vector3(4.0, 2.5, 66.0), "at": Vector3(0.0, 3.0, 30.0)},
+			{"name": "pgc_obstacle_gate", "from": Vector3(-26.5, 9.7, 1.0), "at": Vector3(-35.5, 9.0, -3.0)},
+			{"name": "pgc_obstacle_tower", "from": Vector3(-27.0, 16.0, 20.0), "at": Vector3(-50.0, 13.0, -3.0)},
+		]
 	if id == "pgc_slopes":
 		return [
 			{"name": "pgc_slopes", "from": Vector3(95.0, 55.0, 85.0), "at": Vector3(10.0, 5.0, -10.0)},

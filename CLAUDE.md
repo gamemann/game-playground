@@ -1227,7 +1227,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 811 checks, 43 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 826 checks, 43 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 339 checks, 39 sections
