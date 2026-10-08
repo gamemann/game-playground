@@ -1214,6 +1214,15 @@ The checks:
 
 **Release:** the client shell needs the new dot-player-controller (`DotFpsSwimMode`, `extra_modes`) and dot-physics before a playground pack using them is published.
 
+### Thin ice, slime, foliage (2026-10-07)
+
+Three more of dot-physics' surfaces:
+- **Thin ice** (breaks at 8) is a pane like glass. An impact on a floor-like pane is now tested at the feet as well as the chest: the first version asked only the chest, which is a metre above ice a player lands on.
+- **Slime** is a swimmable liquid that burns. `PlaygroundMaterials.is_swimmable` is liquid with a density at or under `SWIM_DENSITY` (1200), so water and slime, and not lava. Its hazard goes through the same `hazard_hurt`-or-spawn path as lava.
+- **Foliage** is not solid. `is_volume` (liquid or not solid) builds a box with no collider, so it is drawn, walked through and hidden in; foliage is recorded nowhere else.
+
+pgc_nature gained a frozen lake (deep water under thin ice, a diving board 3 m over it), a slime swamp with stepping stones, and bushes. `headless_playground`'s *thin ice, slime and foliage* (6): a walker stands on the ice and it holds; a drop off the board goes through into the water, swimming; slime sends a player to the spawn with the arena off; a bush is walked straight through. *glass breaks* now counts the glass panes by material, and the map has seven panes with the ice.
+
 ### Hibernation (2026-10-07)
 
 The module follows the server's hibernation with both map clocks: `vote.director.follow_hibernation(server)` and `game.maps.follow_hibernation(server)`. An empty server idles from boot (dot-server's `sv_hibernate_when_empty`, 1) and its clocks start again from the top when somebody joins. With it off, dot-vote's `empty_choice` (random) changes the map when the limit runs out on nobody. `on_no_votes` (keep, or random / rotation) decides a ballot nobody voted in. All of it is dot-server's, dot-vote's and dot-map's; this module only wires it, because it is not on DotGameModule, which does it itself. `dedicated`'s vote section asserts both connections.
@@ -1264,7 +1273,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 858 checks, 46 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 864 checks, 47 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 351 checks, 42 sections

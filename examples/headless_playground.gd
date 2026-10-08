@@ -57,13 +57,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 858
+const CHECKS := 864
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 46
+const SECTIONS := 47
 
 var _passed := 0
 var _failed := 0
@@ -159,6 +159,7 @@ func _run() -> void:
 	await _test_map_materials()
 	await _test_glass()
 	await _test_water()
+	await _test_ice_slime_foliage()
 	await _test_the_client_boots()
 
 	print("")
@@ -6718,8 +6719,9 @@ func _test_map_materials() -> void:
 	var settled: float = (floater.node as Node3D).global_position.y if floater != null and floater.is_alive() else INF
 	var pond_top := 0.0
 	for liquid: Dictionary in playground.liquids:
-		if liquid["material"] == &"water":
-			pond_top = (liquid["box"] as AABB).end.y
+		var box: AABB = liquid["box"]
+		if liquid["material"] == &"water" and box.has_point(Vector3(60.0, box.get_center().y, 50.0)):
+			pond_top = box.end.y
 	_check(absf(settled - (pond_top + 0.5)) < 0.3, "a crate dropped on the pond floats on it",
 		"y %.2f, surface %.2f" % [settled, pond_top])
 
@@ -6794,7 +6796,8 @@ func _test_glass() -> void:
 			if Playground._pane_bounds(node).get_center().distance_to(centre) < 1.0:
 				return index
 		return -1
-	_check(playground.panes.size() == 6, "the greenhouse's six glass boxes are breakable, and nothing else is", str(playground.panes.size()))
+	var glass_panes := playground.panes.values().filter(func(p: Dictionary) -> bool: return p["material"] == &"glass")
+	_check(glass_panes.size() == 6, "the greenhouse's six glass boxes are breakable", str(glass_panes.size()))
 	var west: int = pane_at.call(Vector3(-7.95, 1.75, 50.0))
 	var east: int = pane_at.call(Vector3(7.95, 1.75, 50.0))
 	var north: int = pane_at.call(Vector3(0.0, 1.75, 45.05))
@@ -6868,7 +6871,7 @@ func _test_glass() -> void:
 	playground.pane_broken.disconnect(on_broken)
 	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
 	var back: DotResult = await playground.change_map(&"pgc_nature")
-	_check(back.ok and playground.panes.size() == 6 and playground.broken_panes.is_empty(), "a map change puts every pane back")
+	_check(back.ok and playground.panes.size() == 7 and playground.broken_panes.is_empty(), "a map change puts every pane back (the glass and the lake's ice)")
 	var _lobby: DotResult = await playground.change_map(&"pg_lobby")
 	_done()
 
@@ -6925,6 +6928,55 @@ func _test_water() -> void:
 	var _lobby: DotResult = await playground.change_map(&"pg_lobby")
 	_check(player.swim.volumes.is_empty() and player.controller.state.mode != player.swim.mode_id,
 		"a map with no water leaves nobody swimming")
+	_done()
+
+
+## Nature's newer pieces: thin ice over a lake holds a walker and gives under a drop off the
+## diving board (and the player swims), slime sends a player to the spawn with the arena off,
+## and a bush is walked straight through.
+func _test_ice_slime_foliage() -> void:
+	_section("thin ice, slime and foliage")
+
+	var changed: DotResult = await playground.change_map(&"pgc_nature")
+	if not changed.ok:
+		_check(false, "pgc_nature loads", changed.error.message)
+		_done()
+		return
+	var player: PlaygroundPlayer = playground.players[&"bot"]
+	var ice := -1
+	for index: int in playground.panes.keys():
+		if (playground.panes[index] as Dictionary)["material"] == &"thin_ice":
+			ice = index
+	_check(ice >= 0, "the lake's ice is breakable")
+
+	var still := DotFpsCommand.new()
+	player.teleport(Vector3(4.0, 2.6, -80.0), 0.0)
+	await _drive(&"bot", still, 256)
+	_check(playground.panes.has(ice) and player.controller.state.position.y > 1.8, "a walker stands on it, and it holds",
+		"y %.2f" % player.controller.state.position.y)
+
+	# Off the end of the diving board: 3 m onto the ice.
+	player.teleport(Vector3(18.0, 5.1, -80.0), 0.0)
+	await _drive(&"bot", still, 200)
+	_check(not playground.panes.has(ice), "a drop off the diving board goes through it")
+	await _drive(&"bot", still, 200)
+	_check(player.controller.state.mode == player.swim.mode_id, "into the water under it, swimming",
+		"mode %d at y %.2f" % [player.controller.state.mode, player.controller.state.position.y])
+
+	var spawn: Vector3 = playground.current_map_node().fallback_spawn
+	player.teleport(Vector3(-95.0, 0.3, 14.0), 0.0)
+	await _drive(&"bot", still, 4)
+	_check(player.controller.state.position.distance_to(spawn) < 5.0, "slime puts a player back at the spawn, with the arena off")
+
+	player.teleport(Vector3(-38.0, 1.0, 30.0), -90.0)
+	var east := DotFpsCommand.new()
+	east.yaw = -90.0
+	await _drive(&"bot", east, 32)
+	east.move = Vector2(0.0, 1.0)
+	await _drive(&"bot", east, 256)
+	_check(player.controller.state.position.x > -28.0, "a bush is walked straight through", "x %.2f" % player.controller.state.position.x)
+
+	var _lobby: DotResult = await playground.change_map(&"pg_lobby")
 	_done()
 
 

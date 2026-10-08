@@ -36,6 +36,9 @@ const LOOKS := {
 	"mud": Color(0.33, 0.24, 0.16),
 	"rubber": Color(0.20, 0.20, 0.22),
 	"lava": Color(1.00, 0.42, 0.08),
+	"thin_ice": Color(0.78, 0.92, 1.00, 0.60),
+	"slime": Color(0.45, 0.85, 0.20, 0.65),
+	"foliage": Color(0.25, 0.50, 0.20, 0.80),
 }
 
 static var _physics: DotPhysicsSurfaceSet = null
@@ -67,6 +70,22 @@ static func surface(id: String) -> DotPhysicsSurface:
 static func is_liquid(id: String) -> bool:
 	var s := surface(id)
 	return s != null and s.liquid
+
+
+## Built with no collider at all: a liquid, or something not solid (foliage).
+static func is_volume(id: String) -> bool:
+	var s := surface(id)
+	return s != null and (s.liquid or not s.solid)
+
+
+## A liquid a person swims in rather than sinks to the bottom of or burns in: water, slime.
+## By density, because that is what decides it (dot-physics' lava is three times water's).
+const SWIM_DENSITY := 1200.0
+
+
+static func is_swimmable(id: String) -> bool:
+	var s := surface(id)
+	return s != null and s.liquid and s.density <= SWIM_DENSITY
 
 
 ## The colour a box of this material is drawn in, or [param fallback] for none.

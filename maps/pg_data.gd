@@ -35,7 +35,8 @@ const PlaygroundMaterials := preload("../game/playground_materials.gd")
 ## unless it names a colour, slides and bounces as that material, and is that material to a
 ## player walking on it. A LIQUID is built with no collider at all, as a see-through volume
 ## the map records ([method liquid_volumes]): something is IN water, not on it. A liquid
-## box may not be turned, because a volume is asked about as an axis-aligned box.
+## box may not be turned, because a volume is asked about as an axis-aligned box. Foliage is
+## not solid either, and not a liquid: drawn, walked through, hidden in, recorded nowhere.
 ##
 ## `props` and `wires` are optional (2026-10-07), so every older document still reads. A prop
 ## is a catalogue id, put down by the SERVER when the map loads ([method map_props]) and owned
@@ -229,9 +230,16 @@ static func build_into(parent: Node3D, d: Dictionary) -> Array:
 			colour.a = PlaygroundMaterials.look(material, Color.WHITE).a
 		var at := _vec(b["at"])
 		var size := _vec(b["size"])
-		if material != "" and PlaygroundMaterials.is_liquid(material):
-			parent.add_child(_liquid_mesh(at, size, colour, i))
-			liquids.append({"box": AABB(at - size * 0.5, size), "material": StringName(material), "index": i})
+		if material != "" and PlaygroundMaterials.is_volume(material):
+			var mesh := _liquid_mesh(at, size, colour, i)
+			if b.has("turn"):
+				var t: Array = b["turn"]
+				var axis := Vector3(float(t[0]), float(t[1]), float(t[2]))
+				if axis.length() > 0.0:
+					mesh.basis = Basis(axis.normalized(), deg_to_rad(float(t[3])))
+			parent.add_child(mesh)
+			if PlaygroundMaterials.is_liquid(material):
+				liquids.append({"box": AABB(at - size * 0.5, size), "material": StringName(material), "index": i})
 			continue
 		var basis := Basis.IDENTITY
 		if b.has("turn"):

@@ -806,11 +806,12 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		_doors[prop.instance_id] = {"open": false, "t": 0.0, "base": (prop.node as Node3D).global_transform}
 
 
-## The current map's water, as the boxes a player's swim mode is given.
+## The current map's swimmable liquids (water, slime), as the boxes a player's swim mode is
+## given. Lava is not here: a person does not swim in it.
 func water_boxes() -> Array[AABB]:
 	var out: Array[AABB] = []
 	for liquid: Dictionary in liquids:
-		if liquid["material"] == &"water":
+		if PlaygroundMaterials.is_swimmable(String(liquid["material"])):
 			out.append(liquid["box"] as AABB)
 	return out
 
@@ -1026,7 +1027,11 @@ func _pane_impacts() -> void:
 		for id: StringName in players.keys():
 			var player: PlaygroundPlayer = players[id]
 			var was: Vector3 = _last_speed.get(id, Vector3.ZERO)
-			if absf(was.dot(normal)) > PANE_IMPACT_SPEED and bounds.grow(0.7).has_point(player.controller.state.position + Vector3.UP * 0.9):
+			# The chest for a wall, the feet for a floor: a player landing on thin ice has their
+			# chest a metre above it, and the first version asked only the chest.
+			var feet := player.controller.state.position + Vector3.UP * 0.1
+			var near := bounds.grow(0.7)
+			if absf(was.dot(normal)) > PANE_IMPACT_SPEED and (near.has_point(feet + Vector3.UP * 0.8) or near.has_point(feet)):
 				hits.append([node, (panes[index] as Dictionary)["health"]])
 	for hit: Array in hits:
 		var _broke := hurt_pane(hit[0], float(hit[1]), &"")
