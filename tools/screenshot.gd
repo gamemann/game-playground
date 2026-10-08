@@ -123,12 +123,14 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_plots", "from": Vector3(0.0, 70.0, 95.0), "at": Vector3(0.0, 0.0, -5.0)},
 			{"name": "pgc_plots_deck", "from": Vector3(-66.0, 5.7, -66.0), "at": Vector3(0.0, 0.0, 0.0)},
 			{"name": "pgc_plots_depot", "from": Vector3(-2.0, 2.5, -6.0), "at": Vector3(7.0, 0.5, 0.0)},
+			{"name": "pgc_plots_pond", "from": Vector3(48.0, 6.0, 48.0), "at": Vector3(66.0, -1.5, 66.0)},
 		]
 	if id == "pgc_quarry":
 		return [
 			{"name": "pgc_quarry", "from": Vector3(55.0, 38.0, 85.0), "at": Vector3(0.0, -10.0, 0.0)},
 			{"name": "pgc_quarry_spawn", "from": Vector3(0.0, 1.7, 62.0), "at": Vector3(0.0, -10.0, 10.0)},
 			{"name": "pgc_quarry_hut", "from": Vector3(-26.0, -3.0, 6.0), "at": Vector3(-40.0, -5.0, 0.0)},
+			{"name": "pgc_quarry_sump", "from": Vector3(-2.0, -7.0, 2.0), "at": Vector3(18.0, -13.0, -18.0)},
 		]
 	if id == "pgc_town":
 		return [
@@ -136,18 +138,24 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_town_street", "from": Vector3(-3.0, 1.7, 75.0), "at": Vector3(-30.0, 2.0, 35.0)},
 			{"name": "pgc_town_door", "from": Vector3(-45.0, 1.8, 12.0), "at": Vector3(-45.0, 1.5, 22.0)},
 			{"name": "pgc_town_plaza", "from": Vector3(25.0, 6.0, 20.0), "at": Vector3(45.0, 0.0, 45.0)},
+			{"name": "pgc_town_windows", "from": Vector3(-24.0, 3.0, 40.0), "at": Vector3(-40.0, 2.0, 28.0)},
+			{"name": "pgc_town_inside", "from": Vector3(-52.0, 1.7, 31.0), "at": Vector3(-34.0, 1.7, 34.0)},
+			{"name": "pgc_town_fountain", "from": Vector3(55.0, 3.0, 33.0), "at": Vector3(45.0, 0.3, 45.0)},
 		]
 	if id == "pgc_islands":
 		return [
 			{"name": "pgc_islands", "from": Vector3(0.0, 85.0, 110.0), "at": Vector3(0.0, 10.0, 0.0)},
 			{"name": "pgc_islands_bridge", "from": Vector3(62.0, 9.7, 8.0), "at": Vector3(27.5, 13.0, 47.6)},
 			{"name": "pgc_islands_slide", "from": Vector3(22.0, 37.5, -56.0), "at": Vector3(52.0, 6.0, -6.0)},
+			{"name": "pgc_islands_lava", "from": Vector3(48.0, 14.0, 48.0), "at": Vector3(0.0, 0.0, 0.0)},
 		]
 	if id == "pgc_site":
 		return [
 			{"name": "pgc_site", "from": Vector3(70.0, 45.0, 80.0), "at": Vector3(-5.0, 5.0, -10.0)},
 			{"name": "pgc_site_ramps", "from": Vector3(12.0, 8.0, -12.0), "at": Vector3(-8.0, 6.0, -28.0)},
 			{"name": "pgc_site_top", "from": Vector3(-36.0, 15.2, -14.0), "at": Vector3(-10.0, 12.0, -28.0)},
+			{"name": "pgc_site_dig", "from": Vector3(40.0, 5.0, -33.0), "at": Vector3(40.0, -1.5, -52.0)},
+			{"name": "pgc_site_office", "from": Vector3(-14.0, 3.0, 50.0), "at": Vector3(-35.0, 1.2, 40.0)},
 		]
 	if id == "pgc_warehouse":
 		return [
@@ -155,12 +163,15 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_warehouse_dock", "from": Vector3(0.0, 3.0, 22.0), "at": Vector3(0.0, 2.0, 0.0)},
 			{"name": "pgc_warehouse_aisle", "from": Vector3(8.0, 2.9, -24.0), "at": Vector3(-25.0, 3.5, -24.0)},
 			{"name": "pgc_warehouse_catwalk", "from": Vector3(-22.0, 8.9, -42.0), "at": Vector3(10.0, 5.0, -30.0)},
+			{"name": "pgc_warehouse_cold", "from": Vector3(22.0, 3.2, -16.0), "at": Vector3(22.0, 1.4, -30.0)},
+			{"name": "pgc_warehouse_office", "from": Vector3(-17.0, 3.2, -9.5), "at": Vector3(-30.0, 2.2, -4.0)},
 		]
 	if id == "pgc_canyon":
 		return [
 			{"name": "pgc_canyon", "from": Vector3(-30.0, 60.0, 120.0), "at": Vector3(0.0, 5.0, 0.0)},
 			{"name": "pgc_canyon_floor", "from": Vector3(0.0, 1.7, 100.0), "at": Vector3(0.0, 12.0, 0.0)},
 			{"name": "pgc_canyon_jump", "from": Vector3(-40.0, 23.0, 60.0), "at": Vector3(15.0, 20.0, 60.0)},
+			{"name": "pgc_canyon_river", "from": Vector3(3.0, 3.0, -48.0), "at": Vector3(0.0, -1.5, -15.0)},
 		]
 	if id == "pgc_harbour":
 		return [
@@ -168,12 +179,14 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_harbour_piers", "from": Vector3(-30.0, 1.7, 14.0), "at": Vector3(-50.0, -2.0, -30.0)},
 			{"name": "pgc_harbour_lighthouse", "from": Vector3(55.0, 14.0, -50.0), "at": Vector3(80.0, 10.0, -80.0)},
 			{"name": "pgc_harbour_gallery", "from": Vector3(84.5, 22.7, -75.5), "at": Vector3(20.0, -2.0, -20.0)},
+			{"name": "pgc_harbour_office", "from": Vector3(-56.0, 2.5, 28.0), "at": Vector3(-70.0, 2.0, 40.0)},
 		]
 	if id == "pgc_bowl":
 		return [
 			{"name": "pgc_bowl", "from": Vector3(0.0, 60.0, 75.0), "at": Vector3(0.0, 0.0, -5.0)},
 			{"name": "pgc_bowl_rim", "from": Vector3(0.0, 16.7, 44.0), "at": Vector3(0.0, 2.0, 0.0)},
 			{"name": "pgc_bowl_floor", "from": Vector3(-12.0, 1.7, 12.0), "at": Vector3(20.0, 8.0, -25.0)},
+			{"name": "pgc_bowl_chute", "from": Vector3(-6.0, 3.0, 8.0), "at": Vector3(30.0, 8.0, 0.0)},
 		]
 	if id == "pgc_obstacle":
 		return [
@@ -181,6 +194,7 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_obstacle_start", "from": Vector3(4.0, 2.5, 66.0), "at": Vector3(0.0, 3.0, 30.0)},
 			{"name": "pgc_obstacle_gate", "from": Vector3(-26.5, 9.7, 1.0), "at": Vector3(-35.5, 9.0, -3.0)},
 			{"name": "pgc_obstacle_tower", "from": Vector3(-27.0, 16.0, 20.0), "at": Vector3(-50.0, 13.0, -3.0)},
+			{"name": "pgc_obstacle_pool", "from": Vector3(10.0, 5.0, 20.0), "at": Vector3(1.5, -0.5, 6.0)},
 		]
 	if id == "pgc_nature":
 		return [
@@ -197,6 +211,8 @@ func _shots_for(id: String) -> Array[Dictionary]:
 			{"name": "pgc_slopes", "from": Vector3(95.0, 55.0, 85.0), "at": Vector3(10.0, 5.0, -10.0)},
 			{"name": "pgc_slopes_deck", "from": Vector3(9.0, 26.0, -3.0), "at": Vector3(0.0, 20.0, -24.0)},
 			{"name": "pgc_slopes_halfpipe", "from": Vector3(55.0, 9.0, 40.0), "at": Vector3(55.0, 0.0, -10.0)},
+			{"name": "pgc_slopes_pond", "from": Vector3(-34.0, 5.0, 46.0), "at": Vector3(-50.0, -0.5, 28.0)},
+			{"name": "pgc_slopes_runout", "from": Vector3(22.0, 7.0, -66.0), "at": Vector3(0.0, 0.0, -82.0)},
 		]
 	if id == "pg_bhop_intro":
 		# Two routes, and the frames have to show they ARE two: the main run down x = 0
