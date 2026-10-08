@@ -940,6 +940,7 @@ func _process(_delta: float) -> void:
 		_present_tool_beam(eye, forward)
 
 	var _bodies := present_frame(net, playground)
+	_present_splashes()
 	_fit_selection_box()
 
 	# After the interpolation, so a remote player's marker is placed where this frame
@@ -1585,6 +1586,48 @@ func _secondary_up() -> void:
 ## An empty message is a refusal the player has already been told about through
 ## another route — `DotPropSpawner.refused`, which the HUD is listening to — and
 ## printing it again would put the same line on screen twice.
+## Instance id -> whether it was in a liquid last frame, for players and props on this end.
+var _wet: Dictionary = {}
+
+
+## A splash where a player or a prop crosses into a liquid, from this end's own copy of the
+## map's liquids (both ends build them from the document): nothing on the wire, and a mirror's
+## drawn position is what is checked, so a connected client hears what it sees.
+func _present_splashes() -> void:
+	if presentation == null or playground == null or playground.liquids.is_empty():
+		_wet.clear()
+		return
+	var now: Dictionary = {}
+	var bodies: Array[Node3D] = []
+	for id in playground.players:
+		bodies.append(playground.players[id] as Node3D)
+	for prop: DotPropInstance in playground.props.all_props():
+		if prop.node is Node3D:
+			bodies.append(prop.node as Node3D)
+	if bridge != null:
+		for behaviour: Variant in bridge.get("_prop_nets").values():
+			var mirror: Variant = (behaviour as Object).get("prop")
+			if mirror is Node3D and is_instance_valid(mirror):
+				bodies.append(mirror as Node3D)
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or not body.is_inside_tree():
+			continue
+		var at := body.global_position
+		var surface := NAN
+		for liquid: Dictionary in playground.liquids:
+			# Half a metre over the surface counts: a crate floats with its centre above the
+			# water, and asked of the box itself it never went in, so nothing ever splashed.
+			var box: AABB = liquid["box"]
+			if AABB(box.position, box.size + Vector3(0.0, 0.5, 0.0)).has_point(at):
+				surface = box.end.y
+				break
+		var key := body.get_instance_id()
+		now[key] = not is_nan(surface)
+		if not is_nan(surface) and _wet.has(key) and not bool(_wet[key]):
+			presentation.on_splash(Vector3(at.x, surface, at.z))
+	_wet = now
+
+
 ## The tool gun's edit mode picked [param node] (null: nothing), and these are its properties.
 ## They go into the Q menu as the edit mode's settings, so the next slider moved starts from
 ## what the prop is rather than from whatever the menu last held.

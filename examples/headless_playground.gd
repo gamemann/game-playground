@@ -57,7 +57,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 864
+const CHECKS := 865
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -7444,6 +7444,20 @@ func _test_the_client_boots() -> void:
 		client.player.zee_rig == null and client.zee_view == null and client.player.zee_world == null,
 		"and the physics gun takes it back out of their hands"
 	)
+
+	# Water splashes: a crate dropped into Nature's pond, heard on the client's own frames.
+	var _wet_map: DotResult = await client.playground.change_map(&"pgc_nature")
+	client.playground.props.limits.spawn_interval = 0.0
+	var before_splash := client.presentation.splashes
+	var _dropped := client.playground.props.spawn(&"crate", client.player.player_id, Vector3(60.0, 4.0, 50.0))
+	# Physics ticks, not frames: a headless frame is unthrottled, and ninety of them passed
+	# before the crate had fallen at all.
+	for _i in range(256):
+		await get_tree().physics_frame
+	_check(client.presentation.splashes > before_splash, "a crate dropped into the pond splashes",
+		"%d splashes" % (client.presentation.splashes - before_splash))
+	var _dry_map: DotResult = await client.playground.change_map(&"pg_lobby")
+	await get_tree().physics_frame
 
 	# The tool gun's edit mode, through the client's own buttons and menu.
 	var eye := client.player.eye_position()

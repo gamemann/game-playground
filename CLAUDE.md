@@ -1208,6 +1208,8 @@ The checks:
 
 pgc_harbour's basin is real water now (3.4 m deep, its surface 0.6 m under the quay).
 
+**A splash** is the client's own: `PlaygroundClient._present_splashes` watches players, props and (connected) prop mirrors against this end's copy of the map's liquids and plays `PlaygroundPresentation.on_splash` (a `splash` sound and a puff on the surface) when one crosses in. Nothing travels for it, because both ends build the liquids from the document. Half a metre over the surface counts as in, because a crate floats with its centre above the water and, asked of the box alone, never splashed. `headless_playground`'s client section drops a crate into pgc_nature's pond and counts it (waiting on physics ticks: ninety unthrottled headless frames passed before the crate had fallen).
+
 The checks:
 - `headless_playground`'s *water: swimming and floating* (8): a player who falls in swims and floats with the head at the surface (-0.59 against -0.60), swims at 4.0 m/s; a crate and a barrel float and settle; a boulder sinks to the bed; no water leaves nobody swimming. *map materials*' pond check now expects a crate to float.
 - `headless_net`'s *swimming, predicted by a connected client* (4): walking down a slipway into the basin and swimming, 0 corrections in 320 ticks, ends 2.8 cm apart. **It cannot see the client's own entry**: armed with entry on the server only, it still passes, because the mode travels in the snapshot and this link is short. The client's entry is what keeps a real round trip from showing a player walking on the bed.
@@ -1273,7 +1275,7 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_playground.tscn   # 864 checks, 47 sections
+godot --headless --path . res://examples/headless_playground.tscn   # 865 checks, 47 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
 godot --headless --path . res://examples/headless_net.tscn          # 351 checks, 42 sections

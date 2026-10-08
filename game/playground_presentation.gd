@@ -236,6 +236,20 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	land.priority = 30
 	c.add(land)
 
+	# Something going into a liquid: a person jumping in, a crate thrown in.
+	var splash := DotAudioDef.new()
+	splash.id = &"splash"
+	splash.path = "%s/splash.ogg" % SOUND_DIR
+	splash.kind = DotAudioDef.Kind.POSITIONAL_3D
+	splash.bus = &"SFX"
+	splash.max_distance = 50.0
+	splash.max_concurrent = 3
+	splash.cooldown_ms = 80
+	splash.priority = 35
+	splash.pitch_min = 0.55
+	splash.pitch_max = 0.75
+	c.add(splash)
+
 	# A pane of glass going: loud, far, and never more than two at once, because a blast
 	# through a greenhouse breaks a dozen panes in one tick.
 	var glass := DotAudioDef.new()
@@ -343,6 +357,7 @@ static func sound_recipes() -> Dictionary:
 		&"prop_spawn": DotAudioSynth.Voice.SPAWN,
 		&"prop_land": DotAudioSynth.Voice.IMPACT,
 		&"glass_break": DotAudioSynth.Voice.SHOT_TIGHT,
+		&"splash": DotAudioSynth.Voice.SHOT_HEAVY,
 		&"tool_grab": DotAudioSynth.Voice.CLICK,
 		&"tool_punt": DotAudioSynth.Voice.SHOT,
 		&"buy": DotAudioSynth.Voice.PICKUP,
@@ -684,6 +699,19 @@ func on_tool_beam(eye: Vector3, aim: Vector3, to: Vector3, key: int = 0) -> Node
 	beam = fx.spawn(&"tool_beam", at) as Node3D
 	_beams[key] = beam
 	return beam
+
+
+## How many splashes this has made. For the suites and `describe`.
+var splashes: int = 0
+
+
+## Something crossed into a liquid at [param at] (on the surface): the splash and a puff.
+func on_splash(at: Vector3) -> void:
+	splashes += 1
+	audio.play_at(&"splash", at)
+	var t := Transform3D.IDENTITY
+	t.origin = at
+	fx.spawn(&"prop_spawn", t)
 
 
 func on_pane_broken(at: Vector3) -> void:
