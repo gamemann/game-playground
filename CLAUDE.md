@@ -1230,7 +1230,7 @@ godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_playground.tscn   # 826 checks, 43 sections
 godot --headless --path . res://examples/headless_stack.tscn        #  40 checks
 godot --headless --path . res://examples/headless_presentation.tscn # 107 checks
-godot --headless --path . res://examples/headless_net.tscn          # 339 checks, 39 sections
+godot --headless --path . res://examples/headless_net.tscn          # 343 checks, 40 sections
 godot --headless --path . res://examples/dedicated.tscn             # 243 checks, 27 sections
 ```
 
@@ -1816,10 +1816,7 @@ Checks: `headless_playground`'s *editing a selected prop with the tool gun* (29)
 - **A screen for the bag, and a key that buys into it.** The wire, the server's rules and the client's copy are all here (`PlaygroundNetBridge.inventory_manager()`, `ask_buy`); `DotInvPanel` is the grid, and its `_can_drop_data` asks the same `validate` the server does. A pickup — pocketing a prop you own back into the bag — is the other missing producer, and wants a use verb this game does not have yet (see `F` above). Weapons are not items: they are not in the prop catalogue and `weapon_changed` already carries them.
 - **Saving a bag.** Bags outlive a reconnect and not a restart. The document is already the JSON a save would be.
 
-- **`Kind.HELD`, and the three `ask_*` with no caller.** `PlaygroundEvents.write_held` /
-  `read_held` are a complete encoder and decoder for "who is carrying which prop, and is
-  it frozen" that **nothing sends and nothing handles** — so a client draws its own held
-  prop and sees nobody else's on the end of their gun. `ask_restart`, `ask_checkpoint`
+- **`Kind.HELD` is sent now (2026-10-07); the three `ask_*` with no caller are not.** The server's `_on_held_changed` broadcasts who holds which prop (from `Playground.held_changed`, emitted by every physics gun's grab and release) and tells a joiner in `_admit`; a client keeps `held_props` and `holders()` resolves it to its own mirrors, and `PlaygroundClient.present_beams` draws a beam per holder (its own from in front of the camera, everybody else's from their eye; presentation beams are keyed per holder). Before, a connected player saw no beam at all, their own included. `headless_net`'s *who holds what on the physics gun reaches the client* (4, through held fire on the server's real tools; armed by dropping the broadcast, two fail); `tools/screenshot_net.sh --hold` renders another player carrying a crate. `ask_restart`, `ask_checkpoint`
   and `publish_loadout` are the same shape one level up: the bridge has them, the server
   handles them, and no key or menu reaches any of the three, so a networked client cannot
   restart a run, use a practice checkpoint, or publish what it is carrying. These are

@@ -6977,7 +6977,7 @@ func _test_the_client_boots() -> void:
 			client._holding = true
 			await get_tree().process_frame
 			await get_tree().process_frame
-			var beam: Node3D = client.presentation._beam
+			var beam: Node3D = client.presentation._beams.get(0)
 			var tip := beam.global_transform * Vector3(0, 0, -1) \
 				if beam != null and is_instance_valid(beam) else Vector3.INF
 			_check(

@@ -75,6 +75,10 @@ signal player_removed(id: StringName)
 ## Somebody switched creative mode on or off. See [method set_creative].
 signal creative_changed(id: StringName, on: bool)
 
+## A player's physics gun took hold of [param prop] or let go of it. What the net bridge
+## tells everybody, so a connected client can draw somebody else's beam.
+signal held_changed(id: StringName, prop: DotPropInstance, held: bool)
+
 ## Somebody walked over a weapon lying in the world. The bridge gives it to them on a
 ## server; the client equips it offline.
 signal weapon_picked_up(player_id: StringName, weapon_id: StringName)
@@ -1652,12 +1656,14 @@ func add_player(id: StringName, display_name: String) -> PlaygroundPlayer:
 	# be wrong for the rest of the prop's life — a carried crate colliding with the
 	# player carrying it, which shoves them backwards down a corridor.
 	player.phys_gun.grabbed.connect(
-		func(prop: DotPropInstance, _who: StringName) -> void:
+		func(prop: DotPropInstance, who: StringName) -> void:
 			reclassify_prop(prop.node, false, true)
+			held_changed.emit(who, prop, true)
 	)
 	player.phys_gun.released.connect(
-		func(prop: DotPropInstance, _who: StringName) -> void:
+		func(prop: DotPropInstance, who: StringName) -> void:
 			reclassify_prop(prop.node, prop.frozen, false)
+			held_changed.emit(who, prop, false)
 	)
 	player.phys_gun.freeze_changed.connect(
 		func(prop: DotPropInstance, frozen: bool) -> void:

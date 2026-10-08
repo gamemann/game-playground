@@ -2,6 +2,7 @@ extends Node
 
 const Playground := preload("../game/playground.gd")
 const PlaygroundClient := preload("../game/playground_client.gd")
+const PlaygroundPresentation := preload("../game/playground_presentation.gd")
 const PlaygroundConfig := preload("../game/playground_config.gd")
 const PlaygroundNetBridge := preload("../game/net/playground_net_bridge.gd")
 const PlaygroundPlayer := preload("../game/playground_player.gd")
@@ -96,6 +97,12 @@ const WALK_RUN := 90
 ## show the gun a client draws in somebody else's hands (`PlaygroundZee.show_held`).
 var _zee: StringName = &""
 
+## `--hold`: the other player carries a crate on the physics gun, holding fire on the SERVER's
+## tools as a connected player would, so the frames show the beam a client draws for somebody
+## else from what `Kind.HELD` told it (`PlaygroundClient.present_beams`).
+var _hold := false
+var _presentation: PlaygroundPresentation = null
+
 
 func _ready() -> void:
 	DotLog.set_level(DotLog.Level.ERROR)
@@ -118,6 +125,8 @@ func _run() -> void:
 			_walk = true
 		elif arg.begins_with("--zee="):
 			_zee = StringName("zee_" + arg.substr(6))
+		elif arg == "--hold":
+			_hold = true
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://screenshots"))
 	await _build()
@@ -342,6 +351,9 @@ func _drive_other() -> void:
 		_settle = 30
 		if _zee != &"":
 			_server_bridge._give_weapon(OTHER_SESSION, &"u%d" % OTHER_SESSION, _zee)
+		if _hold:
+			# A crate in front of her eye, for the press below to take hold of.
+			var _crate := _server_game.props.spawn(&"crate", bea.player_id, bea.eye_position() + bea.aim_direction() * 2.5)
 
 	var offset := bea.controller.state.position.x - _home.x
 	if offset > SWING:
@@ -352,7 +364,7 @@ func _drive_other() -> void:
 	var run := DotFpsCommand.new()
 	run.move = Vector2(0.0, 1.0)
 	run.yaw = _heading
-	if _zee != &"":
+	if _zee != &"" or (_hold and _settle < 26):
 		run.set_button(DotFpsCommand.BUTTON_USER_0, true)
 	(bea.get_node("Net") as PlaygroundPlayerNet).last_move = run
 
@@ -370,6 +382,16 @@ func _process(delta: float) -> void:
 		var _switch := mine.build_view_switch()
 
 	var _shown := PlaygroundClient.present_frame(_client_net if _interp else null, _client_game)
+
+	if _hold:
+		if _presentation == null:
+			_presentation = PlaygroundPresentation.new()
+			_presentation.name = "Presentation"
+			add_child(_presentation)
+			_presentation.setup()
+		var eye_at := _camera.global_position if _camera != null else Vector3.ZERO
+		_presentation.present(delta, eye_at, -_camera.global_transform.basis.z if _camera != null else Vector3.FORWARD)
+		var _beams := PlaygroundClient.present_beams(_client_bridge, _presentation, mine, eye_at, Vector3.FORWARD)
 
 	if mine != null:
 		# Where the real client draws its eye (`PlaygroundClient._process`).

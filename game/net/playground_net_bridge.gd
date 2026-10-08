@@ -174,6 +174,10 @@ var _prop_nets: Dictionary = {}
 ## the tool decides what a trigger DOES to somebody else's prop.
 var _tool_of: Dictionary = {}
 
+## Server: session id -> the net id of the prop that player's physics gun holds. Client: the
+## same, as the server last said. What a joiner is told and what a client draws beams from.
+var held_props: Dictionary = {}
+
 ## session_id -> the buttons that player's previous command carried, so a press can be
 ## told from a hold. A physics gun grabs on the press and holds every tick after it;
 ## grabbing every tick instead would re-target continuously and drag whatever the
@@ -278,6 +282,7 @@ func attach(p_game: Playground, p_net: DotNetManager, link_parent: Node) -> DotR
 		game.vehicles.ride.entered.connect(_on_ride_entered)
 		game.vehicles.ride.exited.connect(_on_ride_exited)
 		game.pickup.changed.connect(_on_pickup_changed)
+		game.held_changed.connect(_on_held_changed)
 		game.timers.player_started.connect(_on_run_changed)
 		game.timers.player_stopped.connect(_on_run_stopped)
 		game.run_filed.connect(_on_run_filed)
@@ -408,6 +413,7 @@ func remove_player(session_id: int) -> void:
 	_peer_of_player.erase(session_id)
 	_ready_peers.erase(peer_id)
 	_tool_of.erase(session_id)
+	held_props.erase(session_id)
 	_prev_buttons.erase(session_id)
 	_drop_toy(session_id)
 	_armed_of.erase(session_id)
@@ -680,6 +686,35 @@ static func _behaviour_for(def: DotPropDef) -> PlaygroundPropNet:
 func _mirror_node(net_id: int) -> Node3D:
 	var behaviour: PlaygroundPropNet = _prop_nets.get(net_id)
 	return behaviour.prop if behaviour != null else null
+
+
+## Somebody's physics gun took hold of a prop or let go of one: everybody is told, so every
+## client can draw the beam. Until 2026-10-07 `write_held`/`read_held` existed and nothing
+## sent or read them, so a connected player saw nobody else's beam and not their own either.
+func _on_held_changed(id: StringName, prop: DotPropInstance, held: bool) -> void:
+	if net == null or not net.is_server:
+		return
+	var session := session_of(id)
+	var net_id := net_id_of_node(prop.node) if held and prop != null and prop.node != null else 0
+	if net_id > 0:
+		held_props[session] = net_id
+	else:
+		held_props.erase(session)
+	_broadcast(PlaygroundEvents.Kind.HELD, PlaygroundEvents.write_held(session, net_id, prop.frozen if prop != null else false))
+
+
+## Client: every player holding something, as `[{player, prop}]` with this client's own
+## nodes (the player's mirror and the prop's), skipping any it has not built yet.
+func holders() -> Array:
+	var out: Array = []
+	if game == null:
+		return out
+	for session: int in held_props.keys():
+		var who: Variant = game.players.get(_player_key(session))
+		var prop := _mirror_node(int(held_props[session]))
+		if who != null and is_instance_valid(who) and prop != null and is_instance_valid(prop):
+			out.append({"player": who, "prop": prop})
+	return out
 
 
 ## The net id a vehicle's body replicates under, or 0.
@@ -1001,6 +1036,9 @@ func _admit(peer_id: int) -> void:
 		_tell(peer_id, PlaygroundEvents.Kind.WEAPON, PlaygroundEvents.write_weapon(
 			int(other), _tool_of[other]
 		))
+	# And what everybody is holding, for the same reason: HELD is sent when it changes.
+	for holder in held_props.keys():
+		_tell(peer_id, PlaygroundEvents.Kind.HELD, PlaygroundEvents.write_held(int(holder), int(held_props[holder]), false))
 
 	# The time left now, rather than at the clock's next change — which on a quiet map is
 	# never, and a joiner would count down nothing until it came.
@@ -1637,6 +1675,13 @@ func _on_event(message: DotNetMessage) -> void:
 				weapon_changed.emit(
 					int(held["player_id"]), held["weapon_id"] as StringName
 				)
+		PlaygroundEvents.Kind.HELD:
+			var holding := PlaygroundEvents.read_held(reader)
+			if bool(holding["ok"]):
+				if int(holding["net_id"]) > 0:
+					held_props[int(holding["player_id"])] = int(holding["net_id"])
+				else:
+					held_props.erase(int(holding["player_id"]))
 		PlaygroundEvents.Kind.TIMER:
 			_apply_timer(reader)
 		PlaygroundEvents.Kind.FINISH:

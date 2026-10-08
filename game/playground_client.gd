@@ -1712,7 +1712,29 @@ func _punt() -> void:
 ## [b]Offline only, like the grab and punt sounds.[/b] On a server the gun is the
 ## server's (`PlaygroundNetBridge._drive_tools`) and `_holding` is never set here, so a
 ## connected client draws no beam: nothing replicates what a player holds yet.
+## Connected, the server holds every prop and says who holds what (`Kind.HELD`): a beam for
+## each, [param mine]'s from in front of the camera at [param eye], everybody else's from their
+## own eye. Static so `tools/screenshot_net.gd` draws exactly this. Returns how many.
+static func present_beams(p_bridge: PlaygroundNetBridge, p_presentation: PlaygroundPresentation,
+		mine: Node, eye: Vector3, forward: Vector3) -> int:
+	var drawn := 0
+	for each: Dictionary in p_bridge.holders():
+		var who: Node = each["player"]
+		var to: Vector3 = (each["prop"] as Node3D).global_position
+		if who == mine:
+			var _mine := p_presentation.on_tool_beam(eye, forward, to, 1)
+		else:
+			var their_eye: Vector3 = who.call("eye_position")
+			var _theirs := p_presentation.on_tool_beam(their_eye, (to - their_eye).normalized(), to, who.get_instance_id())
+		drawn += 1
+	return drawn
+
+
 func _present_tool_beam(eye: Vector3, forward: Vector3) -> void:
+	if bridge != null and presentation != null:
+		var _drawn := present_beams(bridge, presentation, player, eye, forward)
+		return
+
 	if not _holding or tool != TOOL_PHYS or player == null or presentation == null:
 		return
 

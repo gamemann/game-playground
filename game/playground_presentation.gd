@@ -40,8 +40,9 @@ var fx: DotFxManager = null
 var console: DotConsoleController = null
 var console_panel: DotConsolePanel = null
 
-## The physics gun's beam while it is drawn. See [method on_tool_beam].
-var _beam: Node3D = null
+## The physics guns' beams while they are drawn, by whose (0 is this client's own offline
+## beam). See [method on_tool_beam].
+var _beams: Dictionary = {}
 
 ## The in-game chat box. See [method _build_chat].
 var chat_window: DotChatWindow = null
@@ -649,19 +650,24 @@ static func beam_between(from: Vector3, to: Vector3) -> Transform3D:
 ## number at every other frame rate. The 100 ms is still the ceiling: when it retires the
 ## node, the next frame spawns another, so a beam nobody updates is gone within it. Call
 ## it after [method present], which is where the retiring happens, and there is no gap.
-func on_tool_beam(eye: Vector3, aim: Vector3, to: Vector3) -> Node3D:
+##
+## [param key] says whose: a connected client draws one per player holding something, each
+## moved every frame on its own node, so two people building side by side are two beams.
+func on_tool_beam(eye: Vector3, aim: Vector3, to: Vector3, key: int = 0) -> Node3D:
 	if fx == null:
 		return null
 
 	var from := facing(eye, aim).translated_local(BEAM_OFFSET).origin
 	var at := beam_between(from, to)
+	var beam: Node3D = _beams.get(key)
 
-	if _beam != null and is_instance_valid(_beam) and not _beam.is_queued_for_deletion():
-		_beam.global_transform = at
-		return _beam
+	if beam != null and is_instance_valid(beam) and not beam.is_queued_for_deletion():
+		beam.global_transform = at
+		return beam
 
-	_beam = fx.spawn(&"tool_beam", at) as Node3D
-	return _beam
+	beam = fx.spawn(&"tool_beam", at) as Node3D
+	_beams[key] = beam
+	return beam
 
 
 func on_prop_landed(at: Vector3) -> void:

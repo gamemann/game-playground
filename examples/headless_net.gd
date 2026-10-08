@@ -57,13 +57,13 @@ const CLIENT_ENGINE_TICK_RATE := 60
 ## before and after, so the real store and the next run both start empty.
 const NET_PUNISHMENTS := "user://headless_net_punishments.json"
 
-const CHECKS := 339
+const CHECKS := 343
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 39
+const SECTIONS := 40
 
 var _passed := 0
 var _failed := 0
@@ -171,6 +171,7 @@ func _run() -> void:
 		await _test_builds_over_the_wire()
 		await _test_edit_over_the_wire()
 		await _test_map_props_over_the_wire()
+		await _test_held_over_the_wire()
 		await _test_leave()
 
 	_report()
@@ -938,6 +939,50 @@ func _test_map_props_over_the_wire() -> void:
 		if _client_game.maps.current != null and _client_game.maps.current.id == before:
 			break
 	await _exchange_steps(16)
+	_done()
+
+
+## Who holds what on the physics gun, told to every client (`Kind.HELD`), so a connected
+## client can draw the beams. Before 2026-10-07 the encoder and decoder existed and nothing
+## sent or read them: a connected player saw nobody's beam, their own included.
+func _test_held_over_the_wire() -> void:
+	_section("who holds what on the physics gun reaches the client")
+
+	var theirs := _server_player()
+	var crate := _server_game.props.spawn(&"crate", theirs.player_id, theirs.eye_position() + theirs.aim_direction() * 2.5)
+	if crate == null:
+		_check(false, "a crate in front of the player")
+		_done()
+		return
+	await _exchange_steps(4)
+	# Through the real path: the client holds fire with the physics gun out, and the server's
+	# `_drive_tools` grabs on the press and lets go when the button is up.
+	_client_bridge.ask_tool(&"phys")
+	await _exchange_steps(4)
+	var fire := DotFpsCommand.new()
+	fire.set_button(DotFpsCommand.BUTTON_USER_0, true)
+	for i in 12:
+		_exchange()
+		await _steps(1, fire)
+	var grabbed := crate.held_by == theirs.player_id
+
+	var session := SESSION
+	var server_net: PlaygroundPropNet = _server_bridge._prop_nets.get(crate.instance_id)
+	var net_id: int = server_net.identity.net_id if server_net != null and server_net.identity != null else -1
+	_check(grabbed and int(_client_bridge.held_props.get(session, 0)) == net_id,
+		"the client is told this player holds the crate, by its net id",
+		"%s, %s against %d" % [str(grabbed), str(_client_bridge.held_props), net_id])
+	var holders: Array = _client_bridge.holders()
+	_check(holders.size() == 1 and holders[0]["prop"] == _client_bridge.mirror_of(net_id)
+		and holders[0]["player"] == _client_game.players.get(theirs.player_id),
+		"and resolves it to its own copies of the player and the crate, for a beam", str(holders))
+
+	await _exchange_steps(8)
+	_check(crate.held_by == &"" and not _client_bridge.held_props.has(session) and _client_bridge.holders().is_empty(), "letting go of fire lets go, and that is told too")
+
+	var _gone := _server_game.props.remove(crate.instance_id)
+	await _exchange_steps(4)
+	_check(_client_bridge.mirror_of(net_id) == null, "and the crate goes", str(_client_bridge.mirror_of(net_id)))
 	_done()
 
 
