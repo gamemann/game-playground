@@ -549,7 +549,8 @@ func _simulate_tick(step: float) -> void:
 			sample.alive,
 			player.controller.state.yaw,
 			player.controller.state.pitch,
-			sample.buttons
+			sample.buttons,
+			player.replay_flags()
 		)
 
 
@@ -596,7 +597,8 @@ func tick_timers_only(tick: int) -> void:
 			sample.alive,
 			player.controller.state.yaw,
 			player.controller.state.pitch,
-			sample.buttons
+			sample.buttons,
+			player.replay_flags()
 		)
 
 
