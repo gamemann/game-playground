@@ -1,5 +1,6 @@
 extends CharacterBody3D
 
+const PlaygroundMaterials := preload("playground_materials.gd")
 const PlaygroundBeacon := preload("playground_beacon.gd")
 const PlaygroundCharacter := preload("playground_character.gd")
 
@@ -166,6 +167,9 @@ func _ready() -> void:
 	# to be rearranged when one arrives.
 	controller.drive = DotFpsController.Drive.EXTERNAL
 	controller.tunables = _tunables()
+	# What a map box is made of reaches the feet: ice, mud, sand, snow, rubber. Read off box
+	# metadata both ends build from one map document, so a client predicts it too.
+	controller.surfaces = PlaygroundMaterials.player_surfaces()
 	# Every player, both ends: an admin's noclip is a modifier whose index travels on the
 	# wire. See dot-player-controller's DotFpsAdminModifiers.
 	controller.admin_abilities = true

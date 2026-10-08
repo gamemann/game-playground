@@ -21,6 +21,7 @@ const PlaygroundVehicles := preload("playground_vehicles.gd")
 const PlaygroundWeaponDef := preload("weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("playground_weapons.gd")
 const ToolPhysprop := preload("toolgun/tool_physprop.gd")
+const PlaygroundMaterials := preload("playground_materials.gd")
 
 ## The playground: a sandbox with a surf map, a bhop map and a lobby, timed and
 ## ranked, with props you can spawn and a physics gun to move them with.
@@ -517,6 +518,7 @@ func _simulate_tick(step: float) -> void:
 
 	_expire_debris()
 	_swing_doors(step)
+	_liquid_tick(step)
 
 	# After the moves and before the timers, which is the same ordering rule: a rider's
 	# position for this tick is where the vehicle carried them, not where they were.
@@ -797,6 +799,50 @@ func _on_prop_spawned(prop: DotPropInstance) -> void:
 		DotPhysGun.set_frozen(prop, true)
 		reclassify_prop(prop.node, true, false)
 		_doors[prop.instance_id] = {"open": false, "t": 0.0, "base": (prop.node as Node3D).global_transform}
+
+
+## What the liquids do, on the authority: lava burns a player (through [member hazard_hurt],
+## or back to the spawn) and melts a prop that stays in it. Water's own behaviour, floating
+## and swimming, is not here.
+func _liquid_tick(step: float) -> void:
+	if not authoritative or liquids.is_empty():
+		return
+
+	var burning: Array = []
+	for liquid: Dictionary in liquids:
+		var s := PlaygroundMaterials.surface(String(liquid["material"]))
+		if s != null and s.hazard_damage > 0.0:
+			burning.append([liquid["box"] as AABB, s.hazard_damage])
+	if burning.is_empty():
+		return
+
+	for id: StringName in players.keys():
+		var player: PlaygroundPlayer = players[id]
+		if player == null or player.riding:
+			continue
+		var feet := player.controller.state.position + Vector3.UP * 0.1
+		for each: Array in burning:
+			if not (each[0] as AABB).has_point(feet):
+				continue
+			var hurt := hazard_hurt.is_valid() and bool(hazard_hurt.call(id, float(each[1]) * step))
+			if not hurt:
+				spawn_player(id)
+			break
+
+	var still: Dictionary = {}
+	for prop: DotPropInstance in props.all_props():
+		var node := prop.node as Node3D
+		if node == null or not prop.is_alive():
+			continue
+		for each: Array in burning:
+			if (each[0] as AABB).has_point(node.global_position):
+				still[prop.instance_id] = float(_melting.get(prop.instance_id, 0.0)) + step
+				break
+	_melting = still
+	for instance_id: int in still.keys():
+		if float(still[instance_id]) >= MELT_SECONDS:
+			_melting.erase(instance_id)
+			var _gone := props.remove(instance_id, DotPropSpawner.REASON_CLEANUP)
 
 
 ## Who a map's own props belong to. Not a player id (one is `u<n>`), so no player's limits,
@@ -1421,6 +1467,21 @@ func npc_shots_fired(entity: Node3D, outcome: DotWeaponOutcome) -> void:
 					(hit["point"] as Vector3) - (collider as Node3D).global_position
 				)
 
+
+## `func(victim: StringName, amount: float) -> bool`: hurts a player standing in a hazard
+## (lava) and says whether it did. The module sets it to the arena's `hurt` while the arena
+## is on; unset, or answering false, a hazard sends the player back to the spawn instead,
+## because a sandbox where nobody can be hurt still has to say "not in there".
+var hazard_hurt: Callable = Callable()
+
+## The current map's liquid volumes, `[{box: AABB, material, index}]`, from a document map.
+var liquids: Array = []
+
+## Prop instance id -> seconds it has been inside a burning liquid. See [method _liquid_tick].
+var _melting: Dictionary = {}
+
+## Seconds a prop lasts in lava before it is gone.
+const MELT_SECONDS := 1.0
 
 ## `func(attacker: StringName, victim: StringName, amount: float, distance: float)`: how an
 ## NPC's shot hurts a player. Set by the module to the arena's `hurt` while the arena is
@@ -2157,6 +2218,8 @@ func _on_map_changed(map: DotMapDef, loaded: Node) -> void:
 	# A map that is a document is told which one, for the same reason and in the same place.
 	if loaded != null and loaded.has_method("configure_doc"):
 		loaded.call("configure_doc", str(map.meta.get("doc", "")))
+	liquids = loaded.call("liquid_volumes") if loaded != null and loaded.has_method("liquid_volumes") else []
+	_melting.clear()
 
 	# Its props, once the boxes they stand on exist. The server's only: a client gets them
 	# through the prop path like anything else anybody spawned.

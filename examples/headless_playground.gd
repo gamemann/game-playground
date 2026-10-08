@@ -21,6 +21,7 @@ const PlaygroundWeapons := preload("../game/playground_weapons.gd")
 const PlaygroundZee := preload("../game/playground_zee.gd")
 const PlaygroundProjectiles := preload("../game/playground_projectiles.gd")
 const PlaygroundEvents := preload("../game/net/playground_events.gd")
+const PlaygroundMaterials := preload("../game/playground_materials.gd")
 const ToolPhysprop := preload("../game/toolgun/tool_physprop.gd")
 const PlaygroundLimits := preload("../game/playground_limits.gd")
 const PlaygroundNpcNet := preload("../game/net/playground_npc_net.gd")
@@ -56,13 +57,13 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 826
+const CHECKS := 839
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total above is the other half — see docs/testing.md.
-const SECTIONS := 43
+const SECTIONS := 44
 
 var _passed := 0
 var _failed := 0
@@ -155,6 +156,7 @@ func _run() -> void:
 	await _test_the_drop()
 	await _test_the_maps_are_surveyed()
 	await _test_a_maps_own_props()
+	await _test_map_materials()
 	await _test_the_client_boots()
 
 	print("")
@@ -6647,8 +6649,124 @@ func _test_a_maps_own_props() -> void:
 	_done()
 
 
+## What a map box is made of, on the real game (pgc_nature): ice keeps a player sliding,
+## mud slows them, rubber throws them higher, lava sends them back to the spawn and melts a
+## crate, and water is a volume with nothing to stand on. Measured, and printed.
+func _test_map_materials() -> void:
+	_section("map materials: ice, mud, rubber, lava, water")
+
+	var changed: DotResult = await playground.change_map(&"pgc_nature")
+	if not changed.ok:
+		_check(false, "pgc_nature loads", changed.error.message)
+		_done()
+		return
+	playground.props.limits.spawn_interval = 0.0
+	var bot: PlaygroundPlayer = playground.players.get(&"bot")
+	if bot == null:
+		bot = playground.add_player(&"bot", "Bot")
+
+	# --- A box knows what it is made of ------------------------------------------------
+	var ice_box: StaticBody3D = null
+	var stack: Array[Node] = [playground.current_map_node()]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		stack.append_array(n.get_children())
+		if n is StaticBody3D and PlaygroundMaterials.material_of(n) == &"ice":
+			ice_box = n
+	_check(ice_box != null and ice_box.get_meta(&"dot_fps_surface") == &"ice"
+		and ice_box.physics_material_override != null and ice_box.physics_material_override.friction < 0.1,
+		"an ice box is ice to a player's feet and to the solver")
+	_check(not playground.liquids.is_empty() and playground.liquids.any(func(l: Dictionary) -> bool: return l["material"] == &"water")
+		and playground.liquids.any(func(l: Dictionary) -> bool: return l["material"] == &"lava"),
+		"the map's water and lava are liquid volumes", str(playground.liquids.size()))
+
+	# --- Ice keeps its speed; grass takes it off ----------------------------------------
+	var grass_kept: float = await _coast(bot, Vector3(-30.0, 1.0, 15.0))
+	var ice_kept: float = await _coast(bot, Vector3(-55.0, 1.0, -41.0))
+	print("    speed kept after 24 ticks with no input: grass %.0f%%, ice %.0f%%" % [grass_kept * 100.0, ice_kept * 100.0])
+	_check(ice_kept > 0.6 and ice_kept > grass_kept * 2.0, "a player lets go on ice and keeps sliding; on grass they stop",
+		"grass %.2f, ice %.2f" % [grass_kept, ice_kept])
+
+	# --- Mud slows a run --------------------------------------------------------------
+	var grass_top: float = await _top_speed(bot, Vector3(-30.0, 1.0, 15.0))
+	var mud_top: float = await _top_speed(bot, Vector3(0.0, 1.0, -2.0))
+	print("    top speed: grass %.2f m/s, mud %.2f m/s" % [grass_top, mud_top])
+	_check(mud_top < grass_top * 0.8, "mud slows a running player", "grass %.2f, mud %.2f" % [grass_top, mud_top])
+
+	# --- Rubber throws higher -----------------------------------------------------------
+	var grass_jump: float = await _jump_height(bot, Vector3(-30.0, 1.0, 15.0))
+	var rubber_jump: float = await _jump_height(bot, Vector3(-15.0, 1.3, 30.0))
+	print("    jump height: grass %.2f m, rubber %.2f m" % [grass_jump, rubber_jump])
+	_check(rubber_jump > grass_jump * 1.4, "a jump off rubber goes higher", "grass %.2f, rubber %.2f" % [grass_jump, rubber_jump])
+
+	# --- Lava ---------------------------------------------------------------------------
+	var spawn: Vector3 = playground.current_map_node().fallback_spawn
+	bot.teleport(Vector3(-50.0, 0.3, 46.0), 0.0)
+	await _drive(&"bot", DotFpsCommand.new(), 4)
+	_check(bot.controller.state.position.distance_to(spawn) < 5.0, "walking into lava puts a player back at the spawn, with the arena off",
+		str(bot.controller.state.position))
+	# South of the rock bridge, which crosses the pit at z 50.
+	var crate := playground.props.spawn(&"crate", &"bot", Vector3(-46.0, 1.5, 45.0))
+	await _drive(&"bot", DotFpsCommand.new(), int(playground.tick_rate * 2.0))
+	_check(crate != null and not crate.is_alive(), "and a crate that falls in melts")
+
+	# --- Water is a volume, not a floor --------------------------------------------------
+	var floater := playground.props.spawn(&"crate", &"bot", Vector3(60.0, 3.0, 50.0))
+	await _drive(&"bot", DotFpsCommand.new(), int(playground.tick_rate * 1.5))
+	var settled: float = (floater.node as Node3D).global_position.y if floater != null and floater.is_alive() else INF
+	_check(settled < 1.0, "a crate dropped on the pond goes in it, to the bed", "y %.2f" % settled)
+
+	playground.props.clear_all(DotPropSpawner.REASON_ADMIN)
+	var _back: DotResult = await playground.change_map(&"pg_lobby")
+	_done()
+
+
+## Runs [param player] north (-Z) from [param at] for a second, lets go, and returns the
+## share of its speed it still has 24 ticks later.
+func _coast(player: PlaygroundPlayer, at: Vector3) -> float:
+	player.teleport(at, 0.0)
+	await _drive(player.player_id, DotFpsCommand.new(), 16)
+	var run := DotFpsCommand.new()
+	run.move = Vector2(0.0, 1.0)
+	await _drive(player.player_id, run, 128)
+	var before := Vector2(player.controller.state.velocity.x, player.controller.state.velocity.z).length()
+	await _drive(player.player_id, DotFpsCommand.new(), 24)
+	var after := Vector2(player.controller.state.velocity.x, player.controller.state.velocity.z).length()
+	return after / maxf(before, 0.001)
+
+
+func _top_speed(player: PlaygroundPlayer, at: Vector3) -> float:
+	player.teleport(at, 0.0)
+	await _drive(player.player_id, DotFpsCommand.new(), 16)
+	var run := DotFpsCommand.new()
+	run.move = Vector2(0.0, 1.0)
+	await _drive(player.player_id, run, 96)
+	return Vector2(player.controller.state.velocity.x, player.controller.state.velocity.z).length()
+
+
+func _jump_height(player: PlaygroundPlayer, at: Vector3) -> float:
+	player.teleport(at, 0.0)
+	# Long enough to land: a teleport puts a player in the air, and 24 ticks from a metre up
+	# is still falling, which the first version measured as a jump of nothing.
+	await _drive(player.player_id, DotFpsCommand.new(), 96)
+	var floor_y := player.controller.state.position.y
+	var top := floor_y
+	var airborne := 0
+	for i in 200:
+		# Held until it leaves the ground: one press is read on the tick the controller reads it.
+		var command := DotFpsCommand.new()
+		command.set_button(DotFpsCommand.BUTTON_JUMP, airborne == 0)
+		await _drive(player.player_id, command, 1)
+		top = maxf(top, player.controller.state.position.y)
+		if not player.controller.state.is_grounded():
+			airborne += 1
+		elif airborne > 2:
+			break
+	return top - floor_y
+
+
 ## game-playground-maps' documents this suite surveys. See `_test_the_maps_are_surveyed`.
-const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry", "pgc_slopes", "pgc_town", "pgc_islands", "pgc_site", "pgc_warehouse", "pgc_canyon", "pgc_harbour", "pgc_bowl", "pgc_obstacle"]
+const CUSTOM_MAPS := ["pgc_plots", "pgc_quarry", "pgc_slopes", "pgc_town", "pgc_islands", "pgc_site", "pgc_warehouse", "pgc_canyon", "pgc_harbour", "pgc_bowl", "pgc_obstacle", "pgc_nature"]
 
 
 ## A floor with one of everything on it: a 0.5 m slot between two walls, a platform 5 m

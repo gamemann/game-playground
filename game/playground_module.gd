@@ -539,6 +539,10 @@ func _build_extras() -> DotResult:
 	# makes the soldiers dangerous as well as the players.
 	game.arena_hurt = func(attacker: StringName, victim: StringName, amount: float, distance: float) -> void:
 		var _hurt := arena.hurt(attacker, victim, amount, distance)
+	# Lava through the arena too, and only while it is on: off, the game sends the player
+	# back to the spawn instead (see Playground.hazard_hurt).
+	game.hazard_hurt = func(victim: StringName, amount: float) -> bool:
+		return arena.enabled and arena.hurt(&"", victim, amount, 0.0) != null
 	arena.player_killed.connect(func(victim: StringName, killer: StringName) -> void:
 		shop.on_arena_kill(killer, victim)
 		var player: PlaygroundPlayer = game.players.get(victim, null)

@@ -1,6 +1,7 @@
 extends "../game/playground_map.gd"
 
 const PlaygroundGeometry := preload("../game/playground_geometry.gd")
+const PlaygroundMaterials := preload("../game/playground_materials.gd")
 
 ## A map that is a document: the one scene every custom sandbox map is built by.
 ##
@@ -20,13 +21,21 @@ const PlaygroundGeometry := preload("../game/playground_geometry.gd")
 ##  "map_kind": "sandbox", "tier": 1, "author": "...",
 ##  "spawn": [0, 1, 0], "spawn_yaw": 0,
 ##  "boxes": [{"at": [x, y, z], "size": [x, y, z], "colour": "floor" | "#rrggbb",
-##             "turn": [ax, ay, az, degrees]}],
+##             "turn": [ax, ay, az, degrees], "material": "ice"}],
 ##  "declared": [{"min": [x, y, z], "max": [x, y, z], "why": "..."}],
 ##  "props": [{"id": "door", "at": [x, y, z], "yaw": 90, "frozen": true,
 ##             "tint": "#rrggbb", "scale": 1.5,
 ##             "physics": {"gravity": true, "weight": 1, "friction": 0.2, "bounce": 0}}],
 ##  "wires": [{"from": 0, "out": "pressed", "to": 1, "in": "toggle"}]}
 ## [/codeblock]
+##
+## A box's `material` (optional, 2026-10-07) is one of dot-physics' standard surfaces
+## (`PlaygroundMaterials`): concrete, metal, wood, glass, dirt, grass, sand, snow, ice, rock,
+## mud, rubber, and the liquids water and lava. A solid one is drawn in its material's look
+## unless it names a colour, slides and bounces as that material, and is that material to a
+## player walking on it. A LIQUID is built with no collider at all, as a see-through volume
+## the map records ([method liquid_volumes]): something is IN water, not on it. A liquid
+## box may not be turned, because a volume is asked about as an axis-aligned box.
 ##
 ## `props` and `wires` are optional (2026-10-07), so every older document still reads. A prop
 ## is a catalogue id, put down by the SERVER when the map loads ([method map_props]) and owned
@@ -73,6 +82,7 @@ var doc: Dictionary = {}
 
 var _built := false
 var _declared: Array = []
+var _liquids: Array = []
 
 
 func _ready() -> void:
@@ -96,7 +106,7 @@ func configure_doc(path: String) -> DotResult:
 		return read
 
 	doc = read.value
-	build_into(self, doc)
+	_liquids = build_into(self, doc)
 	fallback_spawn = _vec(doc.get("spawn", [0, 1, 0]))
 	_declared = declared_of(doc)
 	return DotResult.success(self)
@@ -113,6 +123,12 @@ func spawn_yaw_for(_track: int) -> float:
 
 func survey_declared() -> Array:
 	return _declared
+
+
+## The liquids in this map: `[{box: AABB, material, index}]`, world space (a map's node is
+## at the origin). What Playground asks for lava and water.
+func liquid_volumes() -> Array:
+	return _liquids
 
 
 ## The props this map puts down when it loads. See the class note; spawned by [Playground].
@@ -169,6 +185,12 @@ static func validate(d: Dictionary) -> DotResult:
 			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d is out of the world." % [id, i])
 		if b.has("turn") and not (b["turn"] is Array and (b["turn"] as Array).size() == 4):
 			return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d's turn is [axis x, y, z, degrees]." % [id, i])
+		if b.has("material"):
+			var material := str(b["material"])
+			if not PlaygroundMaterials.is_known(material):
+				return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d is made of %s, which is not a material." % [id, i, material])
+			if PlaygroundMaterials.is_liquid(material) and b.has("turn"):
+				return DotResult.fail(DotError.CODE_INVALID, "Map %s: box %d is %s and turned; a liquid is an axis-aligned volume." % [id, i, material])
 	var props: Variant = d.get("props", [])
 	if not (props is Array) or (props as Array).size() > MAX_PROPS:
 		return DotResult.fail(DotError.CODE_INVALID, "Map %s: props is a list of at most %d." % [id, MAX_PROPS])
@@ -191,17 +213,51 @@ static func validate(d: Dictionary) -> DotResult:
 	return DotResult.success(d)
 
 
-## Builds a checked document's boxes under [param parent].
-static func build_into(parent: Node3D, d: Dictionary) -> void:
+## Builds a checked document's boxes under [param parent], and returns its liquid volumes:
+## `[{box: AABB, material: StringName, index: int}]`.
+static func build_into(parent: Node3D, d: Dictionary) -> Array:
 	PlaygroundGeometry.sun(parent)
-	for b: Dictionary in d.get("boxes", []):
+	var liquids: Array = []
+	var boxes: Array = d.get("boxes", [])
+	for i in boxes.size():
+		var b: Dictionary = boxes[i]
+		var material := str(b.get("material", ""))
+		var colour := colour_of(b.get("colour", "floor")) if b.has("colour") or material == "" \
+			else PlaygroundMaterials.look(material, PlaygroundGeometry.COLOUR_FLOOR)
+		if material != "" and b.has("colour") and PlaygroundMaterials.look(material, Color.WHITE).a < 0.999:
+			# A see-through material keeps its transparency in a mapper's own colour.
+			colour.a = PlaygroundMaterials.look(material, Color.WHITE).a
+		var at := _vec(b["at"])
+		var size := _vec(b["size"])
+		if material != "" and PlaygroundMaterials.is_liquid(material):
+			parent.add_child(_liquid_mesh(at, size, colour, i))
+			liquids.append({"box": AABB(at - size * 0.5, size), "material": StringName(material), "index": i})
+			continue
 		var basis := Basis.IDENTITY
 		if b.has("turn"):
 			var t: Array = b["turn"]
 			var axis := Vector3(float(t[0]), float(t[1]), float(t[2]))
 			if axis.length() > 0.0:
 				basis = Basis(axis.normalized(), deg_to_rad(float(t[3])))
-		PlaygroundGeometry.box(parent, _vec(b["at"]), _vec(b["size"]), colour_of(b.get("colour", "floor")), basis)
+		var body := PlaygroundGeometry.box(parent, at, size, colour, basis)
+		body.set_meta(&"pg_box", i)
+		if material != "":
+			PlaygroundMaterials.apply(body, material)
+	return liquids
+
+
+## A liquid's volume, drawn and nothing else: no body, so nothing stands on it and the
+## survey (which reads static bodies) sees the bed under it.
+static func _liquid_mesh(at: Vector3, size: Vector3, colour: Color, index: int) -> MeshInstance3D:
+	var mesh := MeshInstance3D.new()
+	mesh.name = "Liquid%d" % index
+	var box_mesh := BoxMesh.new()
+	box_mesh.size = size
+	mesh.mesh = box_mesh
+	mesh.position = at
+	mesh.material_override = PlaygroundGeometry._material(colour)
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mesh
 
 
 static func declared_of(d: Dictionary) -> Array:

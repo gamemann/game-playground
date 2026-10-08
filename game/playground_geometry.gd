@@ -96,6 +96,12 @@ static func _material(colour: Color) -> StandardMaterial3D:
 	material.uv1_triplanar = true
 	material.uv1_world_triplanar = true
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	# A colour that is not opaque is a see-through material: glass, water, ice. Drawn both
+	# sides, so a pane of glass is seen from inside a room too, and a water surface from
+	# under it.
+	if colour.a < 0.999:
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_materials[colour] = material
 	return material
 
