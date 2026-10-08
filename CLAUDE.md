@@ -800,8 +800,8 @@ the family and a second table would be the larger half unaudited.
 **The chat key is the session id, not the account uid.** dot-chat's `key_fn` and
 dot-moderation's `key_for_peer` are separate seams because they answer different questions:
 a punishment is against a person who will come back; a chat line is attributed to somebody
-standing here now. Two guests behind one device id share a uid, which game-simple-lobby
-found by running two clients in one process — with every count matching throughout.
+standing here now. Two guests behind one device id share a uid, which was found by running two clients in
+one process, with every count matching throughout.
 
 ### `PlaygroundServices` is a `DotGameServices` now (`[services-1]`, 2026-09-27)
 
@@ -1628,11 +1628,10 @@ off because the world IS the host's physics state.** Every prop somebody spawned
 contraption they froze, lives in one process's rigid bodies — so electing a new host hands
 everybody an empty room, silently, with every count still correct.
 
-Five games, five reasons, two answers:
+Four games, four reasons, two answers:
 
 | | migrates | why |
 | --- | --- | --- |
-| game-simple-lobby | yes | nothing is built, and a host leaving is somebody's evening |
 | game-hungario | yes | a continuous arena with no round to be in the middle of |
 | game-arena | no | the host holds the match clock, the score and every hitbox |
 | game-g2gfast | no | a time made of two machines' clocks is worse than no time |

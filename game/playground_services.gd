@@ -7,8 +7,8 @@ const PlaygroundPlayer := preload("playground_player.gd")
 ## Chat, moderation and voice, wired to this sandbox's people and this game's wire.
 ##
 ## [b]The same three addons the other games join, and the third set of proximity
-## answers.[/b] game-simple-lobby is a room you can see all of, so its voice is the whole
-## room; game-hungario is an arena, so its voice is proximity. A sandbox is both at once —
+## answers.[/b] game-hungario is an arena, so its voice is proximity. A sandbox is a room
+## and an arena at once —
 ## people build together in one corner and run the course in another — so **text has a
 ## near channel and voice is the whole server**, which is the arrangement every sandbox
 ## server has ever shipped with, and for the reason they all found: a builder shouting for

@@ -8,12 +8,11 @@ extends Node
 ## so electing a new host hands everybody a world with nothing in it. Not a stutter, not a
 ## re-sync: an empty room, silently, with every count still correct.
 ##
-## So `migrate_host` is **off**, and the log says why when a session opens. Five games in
-## this family take this addon and between them give five reasons for two answers:
+## So `migrate_host` is **off**, and the log says why when a session opens. Four games in
+## this family take this addon and between them give four reasons for two answers:
 ##
 ## | | migrates | why |
 ## | --- | --- | --- |
-## | game-simple-lobby | yes | nothing is built, and a host leaving is somebody's evening |
 ## | game-hungario | yes | a continuous arena with no round to be in the middle of |
 ## | game-arena | no | the host holds the match clock, the score and every hitbox |
 ## | game-g2gfast | no | a time made of two machines' clocks is worse than no time |

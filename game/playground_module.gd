@@ -66,8 +66,7 @@ var services: PlaygroundServices = null
 ## it from a path inside `load_module`, so there is no instance for a host to set a field on
 ## first. `examples/dedicated.tscn` points it at a directory of its own; before it could,
 ## every run wrote its test gag and the live tools' warnings to the real store, 352 records
-## by the time anybody counted. game-simple-lobby's `RoomModule.punishments_path` is the
-## same seam.
+## by the time anybody counted.
 static var punishments_path: String = PlaygroundServices.PUNISHMENTS_PATH
 
 ## Health, weapons that hurt, and a round. Off unless an operator turns it on.
@@ -1389,7 +1388,7 @@ func _cmd_top(ctx: DotCmdContext) -> void:
 		timer.style.id if timer != null and timer.style != null else &"normal"
 	)
 
-	var listed := game.timers.store.top(game.maps.current.id, track, style, 10)
+	var listed: DotResult = await game.timers.store.top(game.maps.current.id, track, style, 10)
 
 	if not listed.ok:
 		ctx.reply_error(listed)
