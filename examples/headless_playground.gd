@@ -57,7 +57,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 865
+const CHECKS := 866
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -6913,7 +6913,22 @@ func _test_water() -> void:
 	var crate := playground.props.spawn(&"crate", &"bot", Vector3(-40.0, 1.0, -70.0))
 	var barrel := playground.props.spawn(&"barrel", &"bot", Vector3(-35.0, 1.0, -70.0))
 	var boulder := playground.props.spawn(&"boulder", &"bot", Vector3(-25.0, 1.0, -70.0))
-	await _drive(&"bot", idle, 128 * 5)
+	# And a beach ball let go on the bed: the lightest thing in the catalogue, and the one
+	# a lift added after the damping launched out of the basin to y 2081.
+	var bed_y: float = boxes[0].position.y if not boxes.is_empty() else -4.0
+	var ball := playground.props.spawn(&"beach_ball", &"bot", Vector3(-30.0, bed_y + 0.6, -60.0))
+	var ball_top := -INF
+	for _i in range(40):
+		await _drive(&"bot", idle, 16)
+		ball_top = maxf(ball_top, (ball.node as Node3D).global_position.y)
+	# Measured at its bottom: 2 kg in a 2.4 m ball floats on the water, not in it.
+	var ball_half: float = PlaygroundProp.extent_of(ball.def).y * 0.5
+	var y_ball: float = (ball.node as Node3D).global_position.y - ball_half
+	ball_top -= ball_half
+	print("    a beach ball from the bed: bottom highest %.2f, after 5 s %.2f (surface %.2f)" % [ball_top, y_ball, surface])
+	_check(ball_top < surface + 1.0 and absf(y_ball - surface) < 0.3,
+		"a beach ball let go on the bed comes up and floats, and is not launched out",
+		"highest %.2f, now %.2f, surface %.2f" % [ball_top, y_ball, surface])
 	var y_crate: float = (crate.node as Node3D).global_position.y
 	var y_barrel: float = (barrel.node as Node3D).global_position.y
 	var y_boulder: float = (boulder.node as Node3D).global_position.y

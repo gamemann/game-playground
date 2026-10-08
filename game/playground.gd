@@ -1062,6 +1062,11 @@ static func _reach_of(body: Node3D) -> float:
 	return 0.5
 
 
+## The fastest a prop rises through a liquid under its own buoyancy, m/s. See
+## [method _float_props].
+const RISE_SPEED := 2.0
+
+
 ## Buoyancy and drag on every loose prop in a liquid, on the authority (props are not
 ## predicted). A body lighter than the liquid for its volume floats, sitting as deep as its
 ## density says; a heavier one sinks, slowed. Its density is the catalogue's `density` when
@@ -1093,11 +1098,8 @@ func _float_props(step: float) -> void:
 			# A dense body is heavier than its mass says: pull the difference down too, so a
 			# boulder whose catalogue mass makes it a balloon still sinks like rock.
 			var extra := maxf(density * volume - body.mass, 0.0) * gravity * submerged
-			body.apply_central_impulse(Vector3.UP * (lift - extra) * step)
 			# Drag, never more than the velocity it is taking off.
 			var drag := clampf(s.dampening * submerged * step, 0.0, 1.0)
-			body.apply_central_impulse(-body.linear_velocity * body.mass * drag)
-			body.angular_velocity *= 1.0 - drag
 			# And the bob damped critically. Buoyancy is a spring whose stiffness is the
 			# liquid's density over the body's: a crate the catalogue makes fifty times lighter
 			# than water is a very stiff one, and the first version shot crates a metre out of
@@ -1108,7 +1110,19 @@ func _float_props(step: float) -> void:
 			# entirely out of the liquid, and damping scaled by that depth let a crate bounce on
 			# lava half a metre high indefinitely.
 			var settle := clampf(critical * step, 0.0, 1.0)
-			body.apply_central_impulse(Vector3.DOWN * body.linear_velocity.y * body.mass * settle)
+			# The vertical velocity is worked out once, here, and set with one impulse. Applied
+			# as separate impulses the damping read the velocity BEFORE the lift landed, so a
+			# beach ball held at the bottom of a pool gained the whole of a sixty-g lift every
+			# tick, kept it, and left the surface at tens of metres a second (the harbour's
+			# balls reached y 2081). Under water a body rises at most at [constant RISE_SPEED]:
+			# drag sets a terminal speed in a real liquid, and this is that.
+			var vy := body.linear_velocity.y
+			var rise := (lift - extra) * step / maxf(body.mass, 0.001)
+			var vy_after := minf(vy * (1.0 - drag) * (1.0 - settle) + rise, maxf(vy, RISE_SPEED))
+			body.apply_central_impulse(Vector3.UP * (vy_after - vy) * body.mass)
+			var flat := Vector3(body.linear_velocity.x, 0.0, body.linear_velocity.z)
+			body.apply_central_impulse(-flat * body.mass * drag)
+			body.angular_velocity *= 1.0 - drag
 			break
 
 
