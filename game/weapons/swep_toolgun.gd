@@ -6,7 +6,7 @@ extends "playground_weapon.gd"
 ##
 ## [b]The gun does the parts every mode shares, once.[/b] It traces where the player is
 ## pointing, decides whether they may touch what they hit, and hands the mode a hit. A mode
-## (`game/tools/`) only says what its three buttons do. Fourteen modes that each traced and
+## (`game/toolgun/`) only says what its three buttons do. Fourteen modes that each traced and
 ## each checked ownership would be fourteen places for one of them to forget.
 ##
 ## [b]Ownership is the sandbox's own rule, not the physics gun's.[/b] The physics gun also
@@ -18,17 +18,22 @@ extends "playground_weapon.gd"
 ## [method set_mode]. On a server they arrive as a request and are clamped to each mode's
 ## schema before they are used.
 
-const ToolResize := preload("../tools/tool_resize.gd")
-const ToolColour := preload("../tools/tool_colour.gd")
-const ToolRemover := preload("../tools/tool_remover.gd")
-const ToolWeld := preload("../tools/tool_weld.gd")
-const ToolNocollide := preload("../tools/tool_nocollide.gd")
-const ToolRope := preload("../tools/tool_rope.gd")
-const ToolBalloon := preload("../tools/tool_balloon.gd")
-const ToolPhysprop := preload("../tools/tool_physprop.gd")
-const ToolNpcWeapon := preload("../tools/tool_npc_weapon.gd")
-const ToolWire := preload("../tools/tool_wire.gd")
-const ToolEdit := preload("../tools/tool_edit.gd")
+# [b]`game/toolgun/`, never `game/tools/`.[/b] dot-server-deploy's pack for this game excludes
+# directories named `tools` at ANY depth (it means the repository's dev scripts), and under
+# that name every mode below was left out of every delivered build: a tool gun with no modes,
+# then (once Playground preloaded one) a game that would not load. Found 2026-10-07 by
+# dot-server-deploy's examples/playground_client.tscn.
+const ToolResize := preload("../toolgun/tool_resize.gd")
+const ToolColour := preload("../toolgun/tool_colour.gd")
+const ToolRemover := preload("../toolgun/tool_remover.gd")
+const ToolWeld := preload("../toolgun/tool_weld.gd")
+const ToolNocollide := preload("../toolgun/tool_nocollide.gd")
+const ToolRope := preload("../toolgun/tool_rope.gd")
+const ToolBalloon := preload("../toolgun/tool_balloon.gd")
+const ToolPhysprop := preload("../toolgun/tool_physprop.gd")
+const ToolNpcWeapon := preload("../toolgun/tool_npc_weapon.gd")
+const ToolWire := preload("../toolgun/tool_wire.gd")
+const ToolEdit := preload("../toolgun/tool_edit.gd")
 const PlaygroundLimits := preload("../playground_limits.gd")
 
 ## Every mode, in the order the menu shows them.

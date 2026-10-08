@@ -20,7 +20,7 @@ const PlaygroundVehicle := preload("playground_vehicle.gd")
 const PlaygroundVehicles := preload("playground_vehicles.gd")
 const PlaygroundWeaponDef := preload("weapons/playground_weapon_def.gd")
 const PlaygroundWeapons := preload("playground_weapons.gd")
-const ToolPhysprop := preload("tools/tool_physprop.gd")
+const ToolPhysprop := preload("toolgun/tool_physprop.gd")
 
 ## The playground: a sandbox with a surf map, a bhop map and a lobby, timed and
 ## ranked, with props you can spawn and a physics gun to move them with.

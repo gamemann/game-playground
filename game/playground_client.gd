@@ -52,7 +52,7 @@ const LINK_SERVICE := &"dot_client_link"
 const TOOL_PHYS := &"phys"
 const TOOL_GRAV := &"grav"
 const TOOLGUN := &"toolgun"
-## The tool gun mode that edits a selected prop (`game/tools/tool_edit.gd`).
+## The tool gun mode that edits a selected prop (`game/toolgun/tool_edit.gd`).
 const EDIT_MODE := &"edit"
 
 ## How long Q may be held before releasing it closes the menu.

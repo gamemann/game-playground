@@ -24,7 +24,7 @@ extends RefCounted
 
 const CHANNEL := "playground.builds"
 
-const ToolPhysprop := preload("tools/tool_physprop.gd")
+const ToolPhysprop := preload("toolgun/tool_physprop.gd")
 
 const FORMAT := 1
 
