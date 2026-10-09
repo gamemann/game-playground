@@ -135,7 +135,7 @@ static func vote_rules() -> DotVoteRules:
 	rules.max_extends = 4
 	rules.rtv_enabled = true
 	rules.rtv_fraction = 0.6
-	rules.rtv_min_players = 2
+	rules.rtv_min_players = 1
 	# [b]Measured against elapsed time, which is the other bug dot-vote found.[/b]
 	# `DotVoteClock.running` used to mean "has a limit" rather than "has started", so a
 	# server with no time limit never accumulated elapsed time and rocking the vote was

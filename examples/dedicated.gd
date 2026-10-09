@@ -1424,8 +1424,7 @@ func _test_vote() -> void:
 		"and it is not the map that is playing"
 	)
 
-	# Rocking the vote with nobody playing. The threshold is a fraction of the head count
-	# and `rtv_min_players` is 2, so this is refused — which is the check: a refusal that
+	# Rocking the vote at the start of the map, inside `rtv_delay_sec`, so this is refused — which is the check: a refusal that
 	# ARRIVES is a rule that ran, and dot-vote shipped a version where rocking the vote
 	# was refused for ever on the deployment that depends on it.
 	var rocked := vote.director.rock_the_vote(&"u1")
