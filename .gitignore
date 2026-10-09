@@ -74,5 +74,6 @@ Thumbs.db
 /addons/zee_weapons
 
 # The custom sandbox maps are game-playground-maps, a repository and a pack of their own.
-# bootstrap-link: game-playground-maps/maps
+# "ci" asks dot-ci (v1.3.0+) to link them on the runner too: the suites load all of them.
+# bootstrap-link: game-playground-maps/maps ci
 /maps/custom
