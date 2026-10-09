@@ -50,6 +50,14 @@ const PlaygroundWaves := preload("../playground_waves.gd")
 const CHANNEL := "pg.net"
 const ACK_BYTES := 4
 
+## Commands in every input packet: this tick's and the four before it, so a lost packet
+## costs the server no tick unless the next four are lost too. Over WebSocket nothing is
+## ever lost; over ENet (the desktop client, since servers went dual-stack) one command a
+## packet was a tick the server ran on the previous command for every packet dropped.
+## game-arena measured it first: 80% of ticks with the right command at 20% loss with one
+## copy, 99-100% with three, and five closed the rest (2026-10-09).
+const INPUT_COPIES := 5
+
 ## The client has been told who it is. [param player_id] is the session id.
 signal hello_received(player_id: int)
 signal roster_changed(player_id: int)
@@ -931,7 +939,7 @@ func client_tick(tick: int, command: DotFpsCommand) -> void:
 	if link != null:
 		var payload := net.encode_ack()
 		var writer := DotNetWriter.new()
-		packet.write(writer)
+		DotNetInput.write_batch(writer, _input_copies(packet))
 		payload.append_array(writer.to_bytes())
 		link.send_input(payload)
 
@@ -959,6 +967,15 @@ func receive_snapshot(payload: PackedByteArray) -> DotResult:
 	return net.receive_snapshot(payload)
 
 
+## [param packet] and the commands before it from the local replay history, oldest first,
+## for one input packet. See [constant INPUT_COPIES].
+func _input_copies(packet: DotNetInput) -> Array:
+	var batch: Array = Array(net.local_inputs().recent(INPUT_COPIES, packet.tick - 1))
+	batch = batch.slice(maxi(0, batch.size() - (INPUT_COPIES - 1)))
+	batch.append(packet)
+	return batch
+
+
 func receive_input(peer_id: int, payload: PackedByteArray) -> DotResult:
 	if net == null or not net.is_server:
 		return DotResult.fail(DotError.CODE_FORBIDDEN, "Only the server takes input.")
@@ -969,9 +986,23 @@ func receive_input(peer_id: int, payload: PackedByteArray) -> DotResult:
 
 	net.receive_ack_payload(peer_id, payload.slice(0, ACK_BYTES))
 
-	var packet := PlaygroundNetCommand.new()
-	packet.read(DotNetReader.new(payload.slice(ACK_BYTES)))
-	return net.input_buffer_for(peer_id).push(packet)
+	# A batch: this tick's command and the ones before it (see [constant INPUT_COPIES]).
+	# Copies of ticks already simulated are skipped rather than pushed, or each would count
+	# as a late input; the packet's own tick is always pushed, so a late one still counts.
+	var batch := DotNetInput.read_batch(
+		DotNetReader.new(payload.slice(ACK_BYTES)),
+		func() -> DotNetInput: return PlaygroundNetCommand.new()
+	)
+	if batch.is_empty():
+		return DotResult.fail(DotError.CODE_PARSE, "Input packet carries no command.")
+	var buffer := net.input_buffer_for(peer_id)
+	var newest := batch[batch.size() - 1]
+	var pushed := DotResult.success(false)
+	for input in batch:
+		if input != newest and input.tick <= buffer.last_consumed_tick():
+			continue
+		pushed = buffer.push(input)
+	return pushed
 
 
 ## A voice frame off [method PlaygroundNetLink.send_voice], in whichever direction.
