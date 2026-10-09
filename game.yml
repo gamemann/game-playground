@@ -29,6 +29,12 @@ cvars:
   pg_map_seconds: "0"
 
 metadata:
+  # The client builds a custom map itself from its document, so a map pack the server names
+  # (dot-server-deploy's cfg/content.yml) has to be on every player's machine too: a host
+  # that reads this sends each one as a dependency. This game names no map pack itself; it
+  # ships its built-in maps, and the custom ones are game-playground-maps, which a server
+  # owner gets by default and can remove.
+  maps_on_client: true
   map_vote:
     trigger: rtv_only
     duration_sec: 0
