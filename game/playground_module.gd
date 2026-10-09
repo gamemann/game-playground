@@ -124,7 +124,7 @@ func _module_version() -> String:
 ## The custom maps delivered beside this game: every pack its descriptor names, read for a
 ## `maps/` directory where it is mounted (game-playground-maps is one). A client builds the
 ## map too, so such a pack is a `dependencies` entry and every client fetches it (game.yml's
-## `maps_on_client` asks the host to put the server owner's map packs there); the client
+## `maps_delivery: client` asks the host to put the server owner's map packs there); the client
 ## adds the same directories from what the server told it to fetch. Duck-typed through the
 ## manager, so a dot-server without the field simply offers the built-in maps.
 func _add_delivered_maps() -> void:
