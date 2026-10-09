@@ -57,7 +57,7 @@ const TICK := 1.0 / 128.0
 ## project is the thing dot-map exists to avoid.
 const PgLobby := preload("res://maps/pg_lobby.gd")
 
-const CHECKS := 866
+const CHECKS := 867
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -7224,16 +7224,31 @@ func _test_the_client_boots() -> void:
 		"Escape releases the pointer and opens nothing on the first press"
 	)
 
-	# With no pause menu the second press is where the old toggle captured again.
-	var kept_pause := client.pause
-	client.pause = null
+	# With no menu the second press is where the old toggle captured again.
+	var kept_menu: DotMenu = client.game_menu
+	client.game_menu = null
 	client._unhandled_input(escape)
-	client.pause = kept_pause
+	client.game_menu = kept_menu
 
 	_check(
 		client.mouse_capture_override == false,
 		"and a second Escape never captures it again, which a browser would refuse"
 	)
+
+	# With the menu, the second Escape opens it — dot-menu's, whose own Escape is off so
+	# this game keeps its two steps — and Escape closes it again.
+	client._unhandled_input(escape)
+	var opened := kept_menu != null and kept_menu.is_open()
+	# The menu swallows an Escape that lands within its grace of opening (a browser's own
+	# pointer-lock Escape arriving late must not flash it shut), and this one lands in the
+	# same millisecond, so the grace is off for this press.
+	var grace := kept_menu.config.escape_grace_ms if kept_menu != null else 0
+	if kept_menu != null:
+		kept_menu.config.escape_grace_ms = 0
+	var shut := kept_menu != null and kept_menu.handle_event(escape) and not kept_menu.is_open()
+	if kept_menu != null:
+		kept_menu.config.escape_grace_ms = grace
+	_check(opened and shut, "the second Escape opens the menu, and Escape closes it")
 
 	# From released, whatever the line above left, so this check stands on its own.
 	client.mouse_capture_override = false

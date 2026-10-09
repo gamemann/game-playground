@@ -123,9 +123,13 @@ signal leave_requested()
 
 var screens: DotScreenStack = null
 
-## The escape menu, and the settings screen behind it. See [method _build_pause].
-var pause: DotPauseScreen = null
-var settings_screen: DotSettingsScreen = null
+## The escape menu: dot-menu's, with the settings behind it, help, the server list and
+## Leave. See [method _build_pause]. Also holds the Tab scoreboard.
+var game_menu: DotMenu = null
+
+## What pushes the window, frame-rate and theme settings at the engine. The presentation
+## applies its own (volumes, view, effects) as it always did.
+var applier: DotMenuApplier = null
 var menu: PlaygroundSpawnMenu = null
 
 ## The server list, on the same stack as the spawn menu.
@@ -857,73 +861,98 @@ func _build_screens() -> void:
 	_build_pause()
 
 
-## The escape menu, which this client did not have.
+## The escape menu.
 ##
-## [b]It had a spawn menu and a server browser and no way to reach a setting.[/b] Escape
-## toggled the mouse capture and nothing else, so the only route to the volume was knowing
-## that a console existed and what to type into it -- which is not a route a player has.
+## [b]dot-menu's since 2026-10-09.[/b] It was dot-ui's pause screen (Resume, Settings,
+## Servers, Leave) over a generated settings form; it is the same menu every game here has
+## now, with this game's settings on its pages and the server list as a sidebar action.
+## The spawn menu (Q) and the server browser stay on this client's screen stack.
 ##
-## Both screens are dot-ui's rather than this game's own: four clients in this family had
-## written the same panel-title-buttons shape, and two copies of one thing is this tree's
-## most repeated mistake.
+## [b]Escape keeps its two steps here[/b]: the first releases the pointer, the second opens
+## the menu (see KEY_ESCAPE in `_unhandled_input`), so the menu is told not to open on
+## Escape itself. It still closes on Escape.
 func _build_pause() -> void:
-	pause = DotPauseScreen.new()
-	pause.name = "Pause"
+	var settings: DotSettingsManager = presentation.settings if presentation != null else null
 
-	var labels := PackedStringArray(["Resume", "Settings", "Servers", "Leave"])
-	var built := pause.build(labels)
+	game_menu = DotMenu.new()
+	game_menu.name = "GameMenu"
+	game_menu.settings = settings
+	var config := DotMenuConfig.new()
+	config.brand_name = "Playground"
+	config.show_help = false
+	var _layered := config.load_layered()
+	game_menu.config = config
+	game_menu.open_on_escape = false
+	game_menu.manage_pointer = false
+	add_child(game_menu)
+	var _set := game_menu.setup()
 
-	if not built.ok:
-		DotLog.result(CHANNEL, "the pause menu", built)
-		pause.free()
-		pause = null
-		return
+	var general := game_menu.page(&"general")
+	if general != null:
+		general.section("Playground") \
+			.add(DotMenuRow.toggle(&"hold_to_open_menu", "Hold Q for the spawn menu", "Off: Q opens and closes it.")) \
+			.add(DotMenuRow.toggle(&"prop_sounds", "Prop sounds", "Crates, barrels and everything else you knock about."))
+	game_menu.screen.actions.insert(0, {"id": &"servers", "text": "Servers"})
+	game_menu.screen.restyle(game_menu.kit)
 
-	DotLog.result(CHANNEL, "registering the pause menu", screens.register(pause))
-	pause.chosen.connect(_on_pause_chosen)
+	game_menu.action_requested.connect(_on_menu_action_chosen)
+	game_menu.overlays_changed.connect(func(open: bool) -> void:
+		# Back onto the view the instant it closes, as the screen stack does for its own.
+		_set_captured(not open))
 
-	var settings: DotSettingsManager = (
-		presentation.settings if presentation != null else null
-	)
+	if settings != null:
+		applier = DotMenuApplier.new()
+		applier.name = "Applier"
+		applier.settings = settings
+		add_child(applier)
+		var _applied := applier.setup()
 
-	if settings == null:
-		# Said out loud and greyed out rather than left to open an empty screen. A button
-		# that does nothing is worse than one that is visibly unavailable.
-		var button := pause.button(&"settings")
-		if button != null:
-			button.disabled = true
-		return
-
-	settings_screen = DotSettingsScreen.new()
-	settings_screen.name = "Settings"
-
-	var made := settings_screen.build(settings)
-
-	if not made.ok:
-		DotLog.result(CHANNEL, "the settings screen", made)
-		settings_screen.free()
-		settings_screen = null
-		return
-
-	DotLog.result(
-		CHANNEL, "registering the settings screen", screens.register(settings_screen)
-	)
+	_wire_board()
 
 
-func _on_pause_chosen(id: StringName) -> void:
+func _on_menu_action_chosen(id: StringName) -> void:
 	match id:
-		&"resume":
-			screens.pop(&"pause")
-		&"settings":
-			if settings_screen != null:
-				screens.push(&"settings")
 		&"servers":
+			game_menu.close()
 			screens.push(&"servers")
 		&"leave":
-			# Closed first, so a host with nowhere to send the player is not left showing
-			# a pause screen over a game that carried on behind it.
-			screens.pop(&"pause")
+			# Closed first, so a host with nowhere to send the player is not left showing a
+			# menu over a game that carried on behind it.
+			game_menu.close()
 			leave_requested.emit()
+
+
+## The Tab board: everybody in the sandbox, their score, how long they have been on and their
+## ping. Online the server's roster; offline, this world's players.
+func _wire_board() -> void:
+	var board := game_menu.scoreboard
+	board.title_text = "Playground"
+	board.columns = [
+		{"key": &"name", "title": "Player", "width": 3.0},
+		{"key": &"score", "title": "Score", "kind": DotMenuScoreboard.KIND_NUMBER},
+		{"key": &"seconds", "title": "Time", "kind": DotMenuScoreboard.KIND_DURATION},
+		{"key": &"ping", "title": "Ping", "kind": DotMenuScoreboard.KIND_PING},
+	]
+	if link != null and link.has_signal(&"scoreboard_received"):
+		board.feed_from(link)
+	else:
+		board.source = board_snapshot
+
+
+## The board offline. Public so a suite can read it.
+func board_snapshot() -> Dictionary:
+	var rows: Array = []
+	if playground != null:
+		for id in playground.players:
+			var who: Object = playground.players[id]
+			rows.append({"id": str(id), "name": str(who.get("display_name")) if who.get("display_name") != null else str(id),
+				"seconds": int((Time.get_ticks_msec() - _started_msec) / 1000) if who == player else -1,
+				"ping": -1, "you": who == player})
+	return {"server": {"name": "Playground", "game": "offline"}, "players": rows}
+
+
+## When this client started, for an offline board's "time".
+var _started_msec: int = Time.get_ticks_msec()
 
 
 func _process(_delta: float) -> void:
@@ -1055,7 +1084,7 @@ func _sync_hud() -> void:
 
 ## Whether a menu is up, in which case the mouse belongs to it.
 func _menu_is_open() -> bool:
-	return screens != null and screens.any_open()
+	return (screens != null and screens.any_open()) or (game_menu != null and game_menu.any_open())
 
 
 # --- Input -----------------------------------------------------------------
@@ -1188,6 +1217,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		_on_menu_key(key)
 		return
 
+	# The Tab board, held: shown while the key is down, released when it comes up.
+	if key.physical_keycode == KEY_TAB and not key.is_echo():
+		if game_menu != null:
+			if key.pressed:
+				game_menu.scoreboard.open()
+			else:
+				game_menu.scoreboard.close()
+		return
+
 	# R reloads while a gun is in hand, as it does in every shooter, and unfreezes
 	# everything otherwise. Held and read on both edges like a trigger. The tool gun counts
 	# as a gun here: its R is each tool's third button — reset a size, take paint off, cut
@@ -1219,7 +1257,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cycle_weapon()
 		KEY_T:
 			_cycle_track()
-		KEY_TAB:
+		KEY_N:
+			# Tab is the scoreboard, held, as in every game here; the style moved to N.
 			_cycle_style()
 		KEY_M:
 			_next_map()
@@ -1257,8 +1296,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					_set_captured(false)
 					if hud != null:
 						hud.notice("Click to play. Escape again for the menu.")
-				elif pause != null:
-					screens.push(&"pause")
+				elif game_menu != null:
+					game_menu.open()
 
 
 ## Q is the one key that still means something while the menu is open.

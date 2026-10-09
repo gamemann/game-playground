@@ -1652,7 +1652,7 @@ It now **releases the cursor on the first press and opens the menu on the second
 
 **And Escape never captures; a click does** (`[esc-1]`, 2026-09-24), which is game-g2gfast's contract (`G2GClient`'s KEY_ESCAPE: "one key that releases and one gesture that captures is the same contract on both"). The second press used to capture again when there was no pause menu — a toggle, which on the web silently does nothing every other press — and a released pointer had no way back but through the pause menu's Resume, because a click fired the gun instead. Now a click on the world with the pointer released and no screen up captures it and does nothing else, before the `player == null` guard so a click during loading is not lost; the HUD says "Click to play. Escape again for the menu." The two games still differ in one way on purpose: this one has a pause menu on the second Escape, which g2gfast has no screen for. `_set_captured` is the one write, and moves `mouse_capture_override` with it so `headless_playground`'s "the client boots" can see it: Escape releases and opens nothing, a second Escape with no pause menu leaves it released, a click takes it back (three checks; armed, the old toggle fails the second and a click that does not capture fails the third).
 
-Both screens are dot-ui's `DotPauseScreen` and `DotSettingsScreen` rather than this game's own, because four clients in the family had written the same panel-title-buttons shape and two copies of one thing is this tree's most repeated mistake. What is this game's own is the button list — Resume, Settings, Servers, Leave — and which document the settings screen edits.
+**The menu is dot-menu's `DotMenu` since 2026-10-09** (it was dot-ui's `DotPauseScreen` and `DotSettingsScreen`): pages of stock audio, video and interface rows declared into this game's own settings schema by `DotMenuStock.declare`, applied by `DotMenuApplier`, with `open_on_escape` and `manage_pointer` off so this client keeps the two-step and stays the one owner of the pointer. What is this game's own is the extra Servers action and what Leave means. `overlays_changed` puts the pointer back on the view when the menu closes. **Tab is the scoreboard now, held** (dot-menu's `DotMenuScoreboard`, fed by dot-server's roster while it is held), and the movement style moved from Tab to N.
 
 **A missing settings manager greys the button out** rather than opening an empty screen. A button that does nothing is worse than one that is visibly unavailable.
 
@@ -1660,7 +1660,7 @@ Both screens are dot-ui's `DotPauseScreen` and `DotSettingsScreen` rather than t
 
 ### And the menus are rendered now
 
-`tools/screenshot_menus.sh` renders the spawn menu, the pause screen and the settings screen. The spawn menu is the one worth the most: it is this project's own, it is the screen a player is in most often, and two of this game's interface bugs were in it — a `TabBar` that hid two of its three tabs behind scroll arrows, and an NPC silhouette that came out as a coloured bar. Both fixes hold; the picture shows three tabs, four category filters with counts and fourteen cards with icons.
+`tools/screenshot_menus.sh` renders the spawn menu, dot-menu's Escape menu (general, video and audio pages) and the Tab board. The spawn menu is the one worth the most: it is this project's own, it is the screen a player is in most often, and two of this game's interface bugs were in it — a `TabBar` that hid two of its three tabs behind scroll arrows, and an NPC silhouette that came out as a coloured bar. Both fixes hold; the picture shows three tabs, four category filters with counts and fourteen cards with icons.
 
 It found nothing new here, which is the result worth having: every bug the first frames of this pass turned up was in dot-ui or in another game, and this game's own screens came out right.
 
@@ -1887,10 +1887,7 @@ Checks: `headless_playground`'s *editing a selected prop with the tool gun* (29)
   not reproducible across machines, so the bridge replicates transforms rather than
   replaying inputs. The sandbox half is already shaped for that: the spawn menu emits
   rather than spawning, and the tools send intent.
-- **A scoreboard and a vote UI.** dot-ui has the screen stack; the spawn menu and the
-  server browser are built on it, and a scoreboard and a vote panel are the same shape and
-  are not written. The data behind both exists — `DotScoreboard` and
-  `DotVoteDirector.build_options` — which is what makes this an omission rather than a gap.
+- **A vote UI in the game itself.** The ballot is drawn by the client shell (below); the Tab scoreboard is dot-menu's since 2026-10-09.
 - **A wardrobe screen.** The avatar schema, the entitlement check and the storage are all
   here and a player cannot yet *choose*: `DotAvatarSchema.choices_for` is the call.
 - **Art.** `DotPropDef.icon_path` is read and nothing here sets it: the icons are drawn

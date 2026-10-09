@@ -22,6 +22,7 @@ const SETTLE := 3
 var _stack: DotScreenStack = null
 var _menu: PlaygroundSpawnMenu = null
 var _presentation: PlaygroundPresentation = null
+var _game_menu: DotMenu = null
 var _shots: Array[Dictionary] = []
 var _at := 0
 var _wait := SETTLE
@@ -53,15 +54,26 @@ func _initialize() -> void:
 	_stack.register(menu)
 	_menu = menu
 
-	var pause := DotPauseScreen.new()
-	pause.name = "Pause"
-	pause.build(PackedStringArray(["Resume", "Settings", "Servers", "Leave"]))
-	_stack.register(pause)
-
-	var settings := DotSettingsScreen.new()
-	settings.name = "Settings"
-	settings.build(_presentation.settings)
-	_stack.register(settings)
+	# The Escape menu the client builds (dot-menu's), over this game's own settings document,
+	# and its Tab board with a roster shaped like the one dot-server sends.
+	_game_menu = DotMenu.new()
+	_game_menu.name = "GameMenu"
+	_game_menu.settings = _presentation.settings
+	_game_menu.open_on_escape = false
+	_game_menu.manage_pointer = false
+	root.add_child(_game_menu)
+	var _set := _game_menu.setup()
+	_game_menu.scoreboard.source = func() -> Dictionary:
+		return {
+			"server": {"name": "Playground  |  build anything", "map": "pg_lobby", "players": 4, "max": 24},
+			"you": "2",
+			"players": [
+				{"id": "1", "name": "gamemann", "score": 42, "seconds": 1840, "ping": 23},
+				{"id": "2", "name": "builder_bo", "score": 17, "seconds": 610, "ping": 48},
+				{"id": "3", "name": "a_very_long_display_name", "score": 9, "seconds": 95, "ping": 112},
+				{"id": "4", "name": "newcomer", "score": 0, "seconds": 12, "ping": -1},
+			],
+		}
 
 	_shots = [
 		{"id": &"spawn_menu", "file": "menu_spawn.png"},
@@ -79,8 +91,10 @@ func _initialize() -> void:
 			{"name": "watchtower", "props": 41, "custom": false},
 			{"name": "go_kart", "props": 9, "custom": true},
 		]},
-		{"id": &"pause", "file": "menu_pause.png"},
-		{"id": &"settings", "file": "menu_settings.png"},
+		{"id": &"game_menu", "file": "menu_general.png", "page": &"general"},
+		{"id": &"game_menu", "file": "menu_video.png", "page": &"video"},
+		{"id": &"game_menu", "file": "menu_audio.png", "page": &"audio"},
+		{"id": &"board", "file": "menu_scoreboard.png"},
 	]
 
 
@@ -94,8 +108,17 @@ func _process(_delta: float) -> bool:
 
 	var shot: Dictionary = _shots[_at]
 
-	if _wait == SETTLE:
+	if _wait == SETTLE and StringName(shot["id"]) in [&"game_menu", &"board"]:
 		_stack.clear()
+		_game_menu.close_all()
+		if StringName(shot["id"]) == &"board":
+			_game_menu.scoreboard.open()
+		else:
+			_game_menu.open(StringName(shot["page"]))
+	elif _wait == SETTLE:
+		_stack.clear()
+		if _game_menu != null:
+			_game_menu.close_all()
 
 		var opened := _stack.push(StringName(shot["id"]))
 

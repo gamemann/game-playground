@@ -58,12 +58,13 @@ There are four maps:
 | **WASD** / **Space** / **Ctrl** | Move / jump (hold to keep hopping) / crouch |
 | **F5** | First or third person |
 | **T** | Switch track (the sandbox or one of the courses) |
-| **Tab** | Change movement style |
+| **Tab** (hold) | Scoreboard: who is on, their score, time connected and ping |
+| **N** | Change movement style |
 | **C** / **V** | Save a checkpoint / go back to it |
 | **X** / **B** | Pick a checkpoint / forget them all |
 | **Y** / **U** | Chat / chat with nearby players |
 | **M** | Next map |
-| **Esc** | Close the menu, or release the mouse |
+| **Esc** | Release the mouse; press again for the menu (settings, servers, leave) |
 
 ## Getting started
 You need [Godot 4.7](https://godotengine.org/download). The game is built from many Dot addons, each in its own repository, so the easiest way to get everything is [dot-bootstrap](https://github.com/modcommunity/dot-bootstrap). It clones every project and links the addons into each one:

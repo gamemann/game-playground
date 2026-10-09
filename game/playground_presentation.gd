@@ -158,6 +158,10 @@ static func schema() -> DotSettingsSchema:
 	s.add(DotSettingsDef.boolean(&"prop_sounds", true, &"sandbox").with_description(
 		"Whether other people's props make a noise when they land."
 	))
+	# The window, the frame rate, the theme and the frame-rate counter: dot-menu's stock
+	# settings, applied by the client's DotMenuApplier and its DotMenu. The keys above that
+	# are also stock (volumes, field of view, effects, shake) stay as declared here.
+	DotMenuStock.declare(s, [DotMenuStock.GROUP_VIDEO, DotMenuStock.GROUP_INTERFACE] as Array[StringName])
 	return s
 
 
